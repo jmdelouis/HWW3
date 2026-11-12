@@ -1,0 +1,32 @@
+#!/bin/bash
+#PBS -N hww3_natl_test
+#PBS -q mpi_2
+#PBS -l select=2:ncpus=28:mpiprocs=28:mem=115g
+#PBS -l walltime=01:00:00
+#PBS -j oe
+#PBS -o /home1/datawork/jmdeloui/HWW3/logs/natl_test.log
+# 12 h cold-start run of the North Atlantic grid with a homogeneous 15 m/s wind,
+# 56 MPI ranks (PDLIB, ParMETIS decomposition), then ww3_ounf to netCDF.
+set -e
+R=/home1/datawork/jmdeloui/HWW3
+NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174
+source /usr/share/Modules/3.2.10/init/bash
+module purge
+module load intel-comp/20 impi/2019.9.304
+export LD_LIBRARY_PATH=$R/opt/lib:$NC/lib:$LD_LIBRARY_PATH
+B=$R/opt/ww3/bin
+D=$R/runs/natl_test
+rm -rf $D; mkdir -p $D; cd $D
+for f in mod_def.ww3 mapsta.ww3 mask.ww3 ST4TABUHF2.bin; do ln -s $R/runs/natl/$f .; done
+cp $R/ww3/natl_test/ww3_shel.nml $R/ww3/natl_test/ww3_ounf.nml .
+NP=$(wc -l < $PBS_NODEFILE)
+echo "ranks: $NP  nodes: $(sort -u $PBS_NODEFILE | tr '\n' ' ')"
+t0=$(date +%s)
+mpirun -np $NP -machinefile $PBS_NODEFILE $B/ww3_shel > ww3_shel.out 2>&1
+t1=$(date +%s)
+echo "ww3_shel wall: $((t1-t0)) s"
+tail -30 ww3_shel.out
+$B/ww3_ounf > ww3_ounf.out 2>&1
+echo "ww3_ounf wall: $(( $(date +%s)-t1 )) s"
+tail -5 ww3_ounf.out
+ls -la

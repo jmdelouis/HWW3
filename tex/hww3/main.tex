@@ -250,7 +250,41 @@ turned negative by \texttt{UNST\%SF = -1}. \texttt{ww3\_grid}
 (PBS job 7893702, \SI{35}{s}) then reads 502\,690 sea points and 971 active
 boundary points and writes \texttt{mod\_def.ww3} (\SI{260}{MB}).
 
-\todo{forcing, run cost on Datarmor, validation against altimetry}
+\subsection{First run: homogeneous wind}
+Before the forcing is available, \texttt{ww3\_shel} is run for \SI{12}{h}
+from a cold start (1~January 2026, 00--12~UTC) with a homogeneous
+\SI{15}{m.s^{-1}} westerly wind, no current, water level or ice, and no
+boundary spectra (\texttt{ww3/natl\_test}, \texttt{scripts/natl\_test.pbs},
+PBS job 7893925). The run uses 56 MPI ranks on two Datarmor nodes, with the
+ParMETIS decomposition and the fully implicit scheme of
+Table~\ref{tab:natl} at $\Delta t = \SI{600}{s}$.
+
+The 72 time steps take \SI{1337}{s}, i.e.\ \SI{18.6}{s} per step and a
+speed-up of 32 over real time; the Jacobi--Gauss--Seidel solver stops after
+about 20 iterations per step, when 1.1\,\% of the nodes are not yet
+converged (threshold \texttt{JGS\_PMIN} = 3\,\%). Memory use is
+\SI{55}{GB} over the two nodes, the restart file is \SI{2.3}{GB} and
+\texttt{ww3\_ounf} writes the hourly fields in \SI{5}{s}. A full month
+(4464 steps) would therefore cost about \SI{23}{h} on 56 cores, or
+1300~core-hours.
+
+The wave field grows as expected (Fig.~\ref{fig:natl_test}): the median
+$H_s$ is \SI{1.0}{m} after \SI{3}{h}, \SI{1.85}{m} after \SI{6}{h} and
+\SI{2.75}{m} after \SI{12}{h}, with $T_{02}$ rising from 2.6 to
+\SI{4.8}{s}. $H_s$ stays lower on the lee side of the land masses (east of
+Britain, Shetland, the Americas) and at the open boundaries, where no
+spectra are imposed. The highest values (\SI{3.9}{m}) are on the
+Norwegian shelf near \ang{61}N, where the waves shoal. No NaN appears.
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=\textwidth]{fig/natl_test_hs.png}
+  \caption{$H_s$ after \SI{12}{h} of a homogeneous \SI{15}{m.s^{-1}}
+    westerly wind from rest (PBS job 7893925).}
+  \label{fig:natl_test}
+\end{figure}
+
+\todo{forcing, boundary spectra, monthly run, validation against altimetry}
 
 \appendix
 \section{Reproducing}
@@ -261,6 +295,8 @@ boundary points and writes \texttt{mod\_def.ww3} (\SI{260}{MB}).
   \texttt{qsub scripts/natl\_grid.pbs} on Datarmor, then
   \texttt{python scripts/plot\_levels.py grids/natl/plot/nodes.npz fig/natl\_levels.png} and
   \texttt{python scripts/plot\_cells\_tris.py grids/natl/plot/<zone>.npz fig/natl\_<zone>.png}.
+\item Figure~\ref{fig:natl_test}: \texttt{qsub scripts/natl\_test.pbs} on
+  Datarmor, then \texttt{python scripts/plot\_hs.py runs/natl\_test/ww3.202601.nc fig/natl\_test\_hs.png}.
 \end{itemize}
 
 \end{document}
