@@ -14,7 +14,7 @@
   "wet_fraction": 0.5,
   "keep_largest_component": true,
   "bathy": "../data/gebco/natl/meta.json",
-  "coast": { "source": "gshhg", "path": "../data/gshhg/gshhs_f.b", "levels": [1] },
+  "coast": { "source": "shapefile", "path": "/home/marc/data/GSHHS/gshhs_land.shp" },
   "output_dir": "../grids/natl",
   "ww3": {
     "nth": 36, "nk": 32, "freq1": 0.0373, "xfr": 1.1, "dir_offset": 0.0,

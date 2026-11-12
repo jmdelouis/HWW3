@@ -14,7 +14,9 @@ PDLIB scheme.
 1. **Refinement.** Start from HEALPix cells at `nside_min` covering the domain.
    A cell is split into its four NESTED children when it is closer to the coast
    than a rule's `max_dist_km` and is coarser than that rule's `nside`. The
-   coastline comes from GSHHG or from the zero contour of the bathymetry.
+   coastline comes from a shapefile (`"source": "shapefile"`, e.g. GSHHS
+   polylines), from a native GSHHG binary file (`"gshhg"`), or from the zero
+   contour of the bathymetry (`"bathy"`).
    There are at most 4 levels between `nside_min` and `nside_max`.
 2. **2:1 balance.** Leaves are split until any two leaves sharing an edge or a
    corner differ by at most one level.

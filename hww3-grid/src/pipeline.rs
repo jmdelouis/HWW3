@@ -45,43 +45,63 @@ pub struct Grid {
     pub obc: Vec<u32>,
 }
 
+/// Densify chains of (lon, lat) degrees into unit vectors on the HEALPix
+/// sphere, with a maximum angular step `step` between consecutive points.
+fn densify(chains: &[Vec<(f64, f64)>], earth: &Earth, step: f64) -> Vec<[f64; 3]> {
+    chains
+        .par_iter()
+        .flat_map_iter(|c| {
+            let v: Vec<[f64; 3]> = c
+                .iter()
+                .map(|&(lo, la)| lonlat_to_vec(lo.to_radians(), earth.to_authalic(la.to_radians())))
+                .collect();
+            let mut out = Vec::with_capacity(v.len());
+            for k in 0..v.len() {
+                let a = v[k];
+                out.push(a);
+                if k + 1 == v.len() {
+                    break;
+                }
+                let b = v[k + 1];
+                let n = (angle(&a, &b) / step).ceil() as usize;
+                for s in 1..n {
+                    let t = s as f64 / n as f64;
+                    out.push(normalize([
+                        a[0] * (1.0 - t) + b[0] * t,
+                        a[1] * (1.0 - t) + b[1] * t,
+                        a[2] * (1.0 - t) + b[2] * t,
+                    ]));
+                }
+            }
+            out
+        })
+        .collect()
+}
+
 fn coast_points(cfg: &Config, earth: &Earth, bathy: &Bathy) -> Result<Vec<[f64; 3]>> {
+    let d = &cfg.domain;
+    let m = 5.0;
+    let (x0, x1, y0, y1) = (d.lon_min - m, d.lon_max + m, d.lat_min - m, d.lat_max + m);
+    // densify to half the finest cell size
+    let step = 0.5 * (4.0 * std::f64::consts::PI / (12.0 * (cfg.nside_max as f64).powi(2))).sqrt();
     match &cfg.coast {
         CoastSource::Bathy => Ok(bathy.coast_points(earth)),
         CoastSource::Gshhg { path, levels } => {
-            let d = &cfg.domain;
-            let m = 5.0;
-            let polys = gshhg::read(path, levels, d.lon_min - m, d.lon_max + m, d.lat_min - m, d.lat_max + m)?;
-            // densify to half the finest cell size
-            let step = 0.5 * (4.0 * std::f64::consts::PI / (12.0 * (cfg.nside_max as f64).powi(2))).sqrt();
-            let pts: Vec<[f64; 3]> = polys
-                .par_iter()
-                .flat_map_iter(|p| {
-                    let v: Vec<[f64; 3]> = p
-                        .points
-                        .iter()
-                        .map(|&(lo, la)| lonlat_to_vec(lo.to_radians(), earth.to_authalic(la.to_radians())))
-                        .collect();
-                    let mut out = Vec::with_capacity(v.len());
-                    for k in 0..v.len() {
-                        let a = v[k];
-                        let b = v[(k + 1) % v.len()];
-                        out.push(a);
-                        let ang = angle(&a, &b);
-                        let n = (ang / step).ceil() as usize;
-                        for s in 1..n {
-                            let t = s as f64 / n as f64;
-                            out.push(normalize([
-                                a[0] * (1.0 - t) + b[0] * t,
-                                a[1] * (1.0 - t) + b[1] * t,
-                                a[2] * (1.0 - t) + b[2] * t,
-                            ]));
-                        }
+            let chains: Vec<Vec<(f64, f64)>> = gshhg::read(path, levels, x0, x1, y0, y1)?
+                .into_iter()
+                .map(|p| {
+                    let mut c = p.points;
+                    if let Some(&f) = c.first() {
+                        c.push(f); // close the polygon
                     }
-                    out
+                    c
                 })
                 .collect();
-            Ok(pts)
+            Ok(densify(&chains, earth, step))
+        }
+        CoastSource::Shapefile { path } => {
+            let chains = crate::shapefile::read(path, x0, x1, y0, y1)?;
+            Ok(densify(&chains, earth, step))
         }
     }
 }

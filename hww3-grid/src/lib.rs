@@ -16,6 +16,7 @@ pub mod geo;
 pub mod gshhg;
 pub mod mesh;
 pub mod pipeline;
+pub mod shapefile;
 pub mod tree;
 pub mod validate;
 pub mod ww3;

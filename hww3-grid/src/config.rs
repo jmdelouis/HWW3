@@ -78,6 +78,9 @@ pub enum CoastSource {
         #[serde(default = "default_levels")]
         levels: Vec<u8>,
     },
+    /// ESRI shapefile of coastline polylines or land polygons in geographic
+    /// WGS84 coordinates (e.g. gshhs_land.shp)
+    Shapefile { path: String },
     /// coastline = zero crossings of the bathymetry grid
     Bathy,
 }
@@ -155,8 +158,9 @@ impl Config {
         };
         cfg.bathy = fix(&cfg.bathy);
         cfg.output_dir = fix(&cfg.output_dir);
-        if let CoastSource::Gshhg { path, .. } = &mut cfg.coast {
-            *path = fix(path);
+        match &mut cfg.coast {
+            CoastSource::Gshhg { path, .. } | CoastSource::Shapefile { path } => *path = fix(path),
+            CoastSource::Bathy => {}
         }
         cfg.check()?;
         Ok(cfg)

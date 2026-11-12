@@ -51,8 +51,9 @@ We start from the cells at $\nside^{\min}$ whose centres lie in the domain,
 expanded by a margin. A cell of angular radius $r$ is split into its four
 children when its lower-bound distance to the coastline, $d-r$, is below the
 distance $D_k$ of a refinement rule $k$ whose target resolution $\nside^{(k)}$
-is finer than the cell. The coastline comes from GSHHG (full resolution,
-level~1). It is densified to half the finest cell size and thinned to one
+is finer than the cell. The coastline comes from the GSHHS land/ocean
+polylines (shapefile already available on Datarmor; the reader also accepts
+the native GSHHG binary format). It is densified to half the finest cell size and thinned to one
 point per cell at $4\,\nside^{\max}$. Nearest-coast queries use buckets of
 HEALPix cells at $\nside^{\max}/4$, searched by rings of neighbours. The
 number of levels is limited to $\log_2(\nside^{\max}/\nside^{\min})\le 4$.
