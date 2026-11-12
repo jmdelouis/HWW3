@@ -29,6 +29,11 @@ def load(d):
 def main():
     d, out = sys.argv[1], sys.argv[2]
     lon, lat, level, tri, obc, meta = load(d)
+    if len(sys.argv) == 7:
+        x0, x1, y0, y1 = (float(v) for v in sys.argv[3:7])
+        keep = ((lon[tri] >= x0 - 1) & (lon[tri] <= x1 + 1) & (lat[tri] >= y0 - 1) & (lat[tri] <= y1 + 1)).all(axis=1)
+        tri = tri[keep]
+        obc = obc[(lon[obc] >= x0) & (lon[obc] <= x1) & (lat[obc] >= y0) & (lat[obc] <= y1)]
     tl = level[tri].max(axis=1)
     levels = np.unique(level)
     cmap = plt.get_cmap("viridis", len(levels))
