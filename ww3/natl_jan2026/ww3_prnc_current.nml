@@ -1,0 +1,11 @@
+&FORCING_NML
+  FORCING%FIELD%CURRENTS = T
+  FORCING%GRID%LATLON    = T
+/
+&FILE_NML
+  FILE%FILENAME  = 'current.nc'
+  FILE%LONGITUDE = 'longitude'
+  FILE%LATITUDE  = 'latitude'
+  FILE%VAR(1)    = 'uo'
+  FILE%VAR(2)    = 'vo'
+/

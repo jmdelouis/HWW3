@@ -1,0 +1,36 @@
+#!/bin/bash
+#PBS -N hww3_cur_prep
+#PBS -q sequentiel
+#PBS -l mem=48g
+#PBS -l walltime=04:00:00
+#PBS -j oe
+#PBS -o /home1/datawork/jmdeloui/HWW3/logs/natl_jan2026_cur_prep.log
+# Copernicus Marine (Datarmor mirror) currents and sea level -> current.ww3, level.ww3;
+# wind and ice reused from runs/natl_jan2026.
+set -e
+R=/home1/datawork/jmdeloui/HWW3
+NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174
+source /usr/share/Modules/3.2.10/init/bash
+module purge
+module load intel-comp/20 impi/2019.9.304
+export LD_LIBRARY_PATH=$R/opt/lib:$NC/lib:$LD_LIBRARY_PATH
+export I_MPI_FABRICS=shm
+B=$R/opt/ww3/bin
+D=$R/runs/natl_jan2026_cur
+mkdir -p $D; cd $D
+for f in mod_def.ww3 mapsta.ww3 mask.ww3 ST4TABUHF2.bin; do ln -sf $R/runs/natl/$f .; done
+for f in wind.ww3 ice.ww3; do ln -sf $R/runs/natl_jan2026/$f .; done
+cp $R/ww3/natl_jan2026_cur/*.nml $R/ww3/natl_jan2026/ww3_prnc_current.nml $R/ww3/natl_jan2026/ww3_prnc_level.nml .
+if [ ! -s level.nc ]; then
+  t0=$(date +%s)
+  $R/venv/bin/python $R/scripts/prep_cmems.py 2026 1 .
+  echo "prep_cmems: $(( $(date +%s)-t0 )) s"
+fi
+for k in current level; do
+  t0=$(date +%s)
+  cp ww3_prnc_$k.nml ww3_prnc.nml
+  $B/ww3_prnc > ww3_prnc_$k.out 2>&1
+  echo "ww3_prnc $k: $(( $(date +%s)-t0 )) s"; tail -4 ww3_prnc_$k.out
+done
+rm -f ww3_prnc.nml
+ls -la

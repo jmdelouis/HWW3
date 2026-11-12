@@ -1,0 +1,29 @@
+#!/bin/bash
+#PBS -N hww3_cur_run
+#PBS -q mpi_4
+#PBS -l select=4:ncpus=28:mpiprocs=28:mem=115g
+#PBS -l walltime=30:00:00
+#PBS -j oe
+#PBS -o /home1/datawork/jmdeloui/HWW3/logs/natl_jan2026_cur_run.log
+# January 2026 North Atlantic run with currents and sea level, 112 MPI ranks, then ww3_ounf.
+set -e
+R=/home1/datawork/jmdeloui/HWW3
+NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174
+source /usr/share/Modules/3.2.10/init/bash
+module purge
+module load intel-comp/20 impi/2019.9.304
+export LD_LIBRARY_PATH=$R/opt/lib:$NC/lib:$LD_LIBRARY_PATH
+B=$R/opt/ww3/bin
+D=$R/runs/natl_jan2026_cur
+cd $D
+NP=$(wc -l < $PBS_NODEFILE)
+echo "ranks: $NP  nodes: $(sort -u $PBS_NODEFILE | tr '\n' ' ')"
+t0=$(date +%s)
+mpirun -np $NP -machinefile $PBS_NODEFILE $B/ww3_shel > ww3_shel.out 2>&1
+t1=$(date +%s)
+echo "ww3_shel wall: $((t1-t0)) s"
+grep -E "Elapsed|Initialization" ww3_shel.out
+$B/ww3_ounf > ww3_ounf.out 2>&1
+echo "ww3_ounf wall: $(( $(date +%s)-t1 )) s"
+tail -3 ww3_ounf.out
+ls -la

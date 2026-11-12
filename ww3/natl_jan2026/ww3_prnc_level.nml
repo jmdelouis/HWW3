@@ -1,0 +1,10 @@
+&FORCING_NML
+  FORCING%FIELD%WATER_LEVELS = T
+  FORCING%GRID%LATLON        = T
+/
+&FILE_NML
+  FILE%FILENAME  = 'level.nc'
+  FILE%LONGITUDE = 'longitude'
+  FILE%LATITUDE  = 'latitude'
+  FILE%VAR(1)    = 'zos'
+/
