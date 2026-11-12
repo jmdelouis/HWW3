@@ -265,3 +265,109 @@ pub fn orientation(a: &[f64; 3], b: &[f64; 3], c: &[f64; 3]) -> f64 {
     let m = normalize([a[0] + b[0] + c[0], a[1] + b[1] + c[1], a[2] + b[2] + c[2]]);
     dot(&n, &m)
 }
+
+/// Number of disjoint triangle fans around every vertex (0 for unused vertices).
+/// A valid WW3 mesh has at most one fan per vertex: two fans touching at a single
+/// vertex ("pinch" or bow-tie node) break the boundary walk of `w3triamd`.
+pub fn fan_counts(n: usize, tris: &[[u32; 3]]) -> Vec<u32> {
+    let mut vt: Vec<Vec<u32>> = vec![Vec::new(); n];
+    for (k, t) in tris.iter().enumerate() {
+        for &v in t {
+            vt[v as usize].push(k as u32);
+        }
+    }
+    vt.iter().enumerate().map(|(v, ts)| fans(v as u32, ts, tris).1).collect()
+}
+
+/// Fan label of each triangle around `v` (same order as `ts`) and number of fans.
+/// Two triangles around `v` are in the same fan when they share an edge through `v`.
+fn fans(v: u32, ts: &[u32], tris: &[[u32; 3]]) -> (Vec<u32>, u32) {
+    let m = ts.len();
+    let mut parent: Vec<usize> = (0..m).collect();
+    fn root(p: &mut [usize], mut i: usize) -> usize {
+        while p[i] != i {
+            p[i] = p[p[i]];
+            i = p[i];
+        }
+        i
+    }
+    let others = |k: u32| -> [u32; 2] {
+        let t = tris[k as usize];
+        let o: Vec<u32> = t.iter().cloned().filter(|&x| x != v).collect();
+        [o[0], o[1]]
+    };
+    let o: Vec<[u32; 2]> = ts.iter().map(|&k| others(k)).collect();
+    for a in 0..m {
+        for b in (a + 1)..m {
+            if o[a].iter().any(|x| o[b].contains(x)) {
+                let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+                if ra != rb {
+                    parent[ra] = rb;
+                }
+            }
+        }
+    }
+    let mut label = vec![u32::MAX; m];
+    let mut ids: Vec<usize> = Vec::new();
+    for a in 0..m {
+        let r = root(&mut parent, a);
+        let id = match ids.iter().position(|&x| x == r) {
+            Some(p) => p,
+            None => {
+                ids.push(r);
+                ids.len() - 1
+            }
+        };
+        label[a] = id as u32;
+    }
+    (label, ids.len() as u32)
+}
+
+/// Remove pinch nodes: at every vertex with several triangle fans, keep the largest
+/// fan and drop the triangles of the others; repeat until every vertex has at most one
+/// fan. Returns the number of triangles removed.
+pub fn remove_pinches(n: usize, tris: &mut Vec<[u32; 3]>) -> usize {
+    let mut removed = 0;
+    loop {
+        let mut vt: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for (k, t) in tris.iter().enumerate() {
+            for &v in t {
+                vt[v as usize].push(k as u32);
+            }
+        }
+        let mut drop = vec![false; tris.len()];
+        let mut any = false;
+        for (v, ts) in vt.iter().enumerate() {
+            let live: Vec<u32> = ts.iter().cloned().filter(|&k| !drop[k as usize]).collect();
+            if live.len() < 2 {
+                continue;
+            }
+            let (label, nf) = fans(v as u32, &live, tris);
+            if nf < 2 {
+                continue;
+            }
+            let mut size = vec![0usize; nf as usize];
+            for &l in &label {
+                size[l as usize] += 1;
+            }
+            let keep = (0..nf as usize).max_by_key(|&i| size[i]).unwrap() as u32;
+            for (a, &k) in live.iter().enumerate() {
+                if label[a] != keep {
+                    drop[k as usize] = true;
+                    any = true;
+                }
+            }
+        }
+        if !any {
+            return removed;
+        }
+        let before = tris.len();
+        let mut k = 0;
+        tris.retain(|_| {
+            let keep = !drop[k];
+            k += 1;
+            keep
+        });
+        removed += before - tris.len();
+    }
+}

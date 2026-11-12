@@ -1,7 +1,7 @@
 //! Topological and geometric checks of a triangle mesh on the sphere.
 
 use crate::geo::{angle, cross, normalize};
-use crate::mesh::orientation;
+use crate::mesh::{fan_counts, orientation};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -19,6 +19,8 @@ pub struct MeshReport {
     pub n_negative: usize,
     /// nodes not used by any triangle
     pub n_isolated_nodes: usize,
+    /// nodes where two or more triangle fans touch (rejected by WW3)
+    pub n_pinch_nodes: usize,
     /// V - E + F (1 for a disc, 1 - h for a disc with h holes)
     pub euler: i64,
     pub min_angle_deg: f64,
@@ -33,7 +35,10 @@ pub struct MeshReport {
 
 impl MeshReport {
     pub fn is_valid(&self) -> bool {
-        self.n_nonmanifold_edges == 0 && self.n_inconsistent_edges == 0 && self.n_negative == 0
+        self.n_nonmanifold_edges == 0
+            && self.n_inconsistent_edges == 0
+            && self.n_negative == 0
+            && self.n_pinch_nodes == 0
     }
 }
 
@@ -96,6 +101,7 @@ pub fn check(nodes: &[[f64; 3]], levels: &[u8], tris: &[[u32; 3]]) -> MeshReport
         }
     }
     r.n_isolated_nodes = used.iter().filter(|u| !**u).count();
+    r.n_pinch_nodes = fan_counts(nodes.len(), tris).iter().filter(|&&c| c > 1).count();
     let v = (nodes.len() - r.n_isolated_nodes) as i64;
     r.euler = v - r.n_edges as i64 + tris.len() as i64;
     r

@@ -23,12 +23,17 @@ pub fn write_msh(path: &Path, lon: &[f64], lat: &[f64], depth: &[f64], tris: &[[
     Ok(())
 }
 
-/// One 1-based node index per line.
+/// Open-boundary node list in the format read by WW3 `READMSHOBC` (w3triamd.F90):
+/// a comment-character line, comment lines, then `index ntag [tags] node` with
+/// ntag = 0 and 1-based node indices; a final comment line ends the list.
 pub fn write_obc(path: &Path, nodes: &[u32]) -> Result<()> {
     let mut w = BufWriter::new(File::create(path)?);
-    for n in nodes {
-        writeln!(w, "{}", n + 1)?;
+    writeln!(w, "$ Comments")?;
+    writeln!(w, "$ Open boundary points written by hww3-grid ({} nodes)", nodes.len())?;
+    for (i, n) in nodes.iter().enumerate() {
+        writeln!(w, "{} 0 {}", i + 1, n + 1)?;
     }
+    writeln!(w, "$ End of file")?;
     Ok(())
 }
 

@@ -27,6 +27,8 @@ pub struct Summary {
     pub n_balance_splits: usize,
     pub n_wet_leaves: usize,
     pub n_components: usize,
+    /// triangles dropped to remove pinch nodes
+    pub n_pinch_tris_removed: usize,
     pub n_nodes: usize,
     pub n_open_boundary: usize,
     /// node count per nside, from nside_min to nside_max
@@ -164,7 +166,9 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
         .collect();
     let n_wet = wet.iter().filter(|w| **w).count();
 
-    let tri = triangulate(&leaves, &centres, &wet, &outside);
+    let mut tri = triangulate(&leaves, &centres, &wet, &outside);
+    // WW3 needs a single triangle fan around every node
+    let n_pinch_tris_removed = crate::mesh::remove_pinches(n, &mut tri.tris);
     lap("triangulation", &mut t0);
 
     // connected components over triangle edges
@@ -248,6 +252,7 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
         n_balance_splits: tr.n_balance_splits,
         n_wet_leaves: n_wet,
         n_components,
+        n_pinch_tris_removed,
         n_nodes: grid.uniq.len(),
         n_open_boundary: grid.obc.len(),
         nodes_per_nside: per,

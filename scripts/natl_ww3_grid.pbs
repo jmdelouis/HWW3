@@ -1,0 +1,21 @@
+#!/bin/bash
+#PBS -N hww3_ww3grid
+#PBS -q sequentiel
+#PBS -l mem=16g
+#PBS -l walltime=00:30:00
+#PBS -j oe
+#PBS -o /home1/datawork/jmdeloui/HWW3/logs/natl_ww3_grid.log
+# Run ww3_grid on the North Atlantic HEALPix grid (creates mod_def.ww3).
+set -e
+R=/home1/datawork/jmdeloui/HWW3
+source /etc/profile.d/modules.sh 2>/dev/null || true
+module purge
+module load intel-comp/20 impi/2019.9.304
+export LD_LIBRARY_PATH=$R/opt/lib:/appli/netCDF/netcdf-4.8.1_impi-2017.2.174/lib:$LD_LIBRARY_PATH
+RUN=$R/runs/natl
+mkdir -p $RUN && cd $RUN
+for f in natl.msh natl.obc ww3_grid.nml namelists_natl.nml; do ln -sf $R/grids/natl/$f .; done
+/usr/bin/time -v $R/opt/ww3/bin/ww3_grid > ww3_grid.out 2>&1 || { tail -40 ww3_grid.out; exit 1; }
+grep -iE "nodes|triangle|boundary|error|warning|Number of|mod_def" ww3_grid.out | head -40
+tail -25 ww3_grid.out
+ls -la mod_def.ww3

@@ -118,3 +118,15 @@ fn ear_clip_square() {
     let t = hww3_grid::mesh::ear_clip(&pts);
     assert_eq!(t.len(), 3);
 }
+
+#[test]
+fn bow_tie_pinch_removed() {
+    use hww3_grid::mesh::{fan_counts, remove_pinches};
+    // two fans around vertex 0: {0,1,2},{0,2,3} and {0,4,5}
+    let mut tris = vec![[0u32, 1, 2], [0, 2, 3], [0, 4, 5]];
+    assert_eq!(fan_counts(6, &tris)[0], 2);
+    let removed = remove_pinches(6, &mut tris);
+    assert_eq!(removed, 1);
+    assert_eq!(tris, vec![[0, 1, 2], [0, 2, 3]]);
+    assert!(fan_counts(6, &tris).iter().all(|&c| c <= 1));
+}

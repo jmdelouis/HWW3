@@ -123,7 +123,7 @@ Quantity & Value \\
 nodes ($\nside$ 32/64/128/256/512) & 94 / 194 / 231 / 297 / 494 \\
 triangles & 2471 \\
 cells split by the 2:1 balance & 29 \\
-non-manifold / inconsistent edges, clockwise triangles & 0 / 0 / 0 \\
+non-manifold / inconsistent edges, clockwise triangles, pinch nodes & 0 / 0 / 0 / 0 \\
 Euler characteristic (one island) & 0 \\
 max level jump across an edge & 1 \\
 min / max angle & \ang{17.0} / \ang{143.7} \\
@@ -163,13 +163,24 @@ meet.}
 \end{itemize}
 
 \subsection{Grid statistics}
-The grid was built on Datarmor (PBS job 7893385, 8 cores) in
-\SI{375}{s} wall clock with a peak resident memory of \SI{5.8}{GB}, the
-GEBCO extraction (\(36\,240\times20\,640\) samples at 15\,arcsec) taking
-\SI{30}{s} more. Coastline: GSHHS full-resolution land polylines, densified
-to 883\,611 points. Table~\ref{tab:natl} summarises the mesh. The largest
-wet component is kept (582 components found); the Euler characteristic
-$-909$ corresponds to 910 islands. Open-boundary nodes (973) lie on the
+The grid was built on Datarmor (PBS job 7893701, 8 cores) in
+\SI{152}{s} wall clock (a first build, job 7893385, took \SI{375}{s} with a
+peak resident memory of \SI{5.8}{GB}); the GEBCO extraction
+(\(36\,240\times20\,640\) samples at 15\,arcsec) takes \SI{30}{s}.
+Coastline: GSHHS full-resolution land polylines, densified to 883\,611
+points. Table~\ref{tab:natl} summarises the mesh. The largest wet component
+is kept (902 components found); the Euler characteristic $-693$ corresponds
+to 694 islands.
+
+\paragraph{Pinch nodes.} WW3 walks the boundary around every node and
+stops (\texttt{w3triamd}: ``dramatic inconsistency'') when two triangle
+fans touch at a single node, a bow-tie that appears where water lies on two
+sides of a narrow spit. Such nodes pass the edge-based checks. The generator
+now keeps, at every such node, the largest fan and drops the triangles of
+the others, iterating to a fixed point: 671 triangles (0.07\,\%) were
+removed, and the validator counts pinch nodes (0 after the fix).
+
+Open-boundary nodes (971) lie on the
 equator, at \ang{80}N, on the \ang{45}E cut of the Barents Sea and on the
 \ang{100}W cut of the Canadian archipelago (Figure~\ref{fig:natl_levels}).
 
@@ -179,19 +190,19 @@ equator, at \ang{80}N, on the \ang{45}E cut of the Barents Sea and on the
 \toprule
 Quantity & Value \\
 \midrule
-nodes ($\nside$ 128/256/512/1024/2048) & 10\,160 / 6\,274 / 73\,088 / 135\,573 / 279\,830 \\
-nodes, total & 504\,925 \\
-triangles & 951\,741 \\
+nodes ($\nside$ 128/256/512/1024/2048) & 10\,160 / 6\,274 / 73\,088 / 135\,561 / 277\,607 \\
+nodes, total & 502\,690 \\
+triangles & 949\,199 \\
 leaves of the quadtree (wet) & 1\,168\,555 (573\,610) \\
 cells split by the 2:1 balance & 2\,455 \\
-non-manifold / inconsistent edges, clockwise triangles & 0 / 0 / 0 \\
-Euler characteristic & $-909$ \\
+non-manifold / inconsistent edges, clockwise triangles, pinch nodes & 0 / 0 / 0 / 0 \\
+Euler characteristic & $-693$ \\
 max level jump across an edge & 1 \\
 min / max angle & \ang{17.5} / \ang{139.7} \\
-triangles with an angle $<\ang{20}$ / $>\ang{120}$ & 3\,786 / 3\,118 \\
-open-boundary nodes & 973 \\
+triangles with an angle $<\ang{20}$ / $>\ang{120}$ & 3\,781 / 3\,070 \\
+open-boundary nodes & 971 \\
 \midrule
-time: refinement + balance / cell bathymetry / triangulation & 277 / 79 / \SI{11}{s} \\
+time: refinement + balance / cell bathymetry / triangulation & 70 / 23 / \SI{11}{s} \\
 \bottomrule
 \end{tabular}
 \caption{North Atlantic grid (\texttt{configs/natl\_datarmor.json}).}
@@ -220,7 +231,26 @@ two polar base faces.}
 \label{fig:natl_zoom}
 \end{figure}
 
-\todo{run cost on Datarmor, validation against altimetry}
+\subsection{WW3 build and grid preprocessing}
+WW3 \texttt{develop} (commit \texttt{dea641c}) is built on Datarmor with
+Intel Fortran 19.1.3 and Intel MPI 2019.9 (\texttt{scripts/build\_ww3.pbs},
+\SI{5.5}{min}), with the switches of \texttt{ww3/switch\_hww3}: PDLIB with
+METIS domain decomposition, ST4, DIST/MPI, currents and wind input, IC0/IS0
+(ice as an obstruction only). Two local dependencies are built because the
+system ones do not fit: netCDF-Fortran 4.6.1 (the system Fortran module was
+made by an old gfortran) on top of the system netCDF-C 4.8.1, and ParMETIS
+4.0.3 with METIS 5.1.0. Intel's preprocessor drops the quotes of
+\texttt{-DENDIANNESS='big\_endian'}, so \texttt{FILE\_ENDIAN} is set in
+\texttt{constants.F90} before compiling.
+
+The open-boundary file follows \texttt{READMSHOBC}: a comment line, then
+\texttt{index 0 node} lines, ended by a comment line; a bare node list is
+silently read as empty. Depths are written positive in the Gmsh file and
+turned negative by \texttt{UNST\%SF = -1}. \texttt{ww3\_grid}
+(PBS job 7893702, \SI{35}{s}) then reads 502\,690 sea points and 971 active
+boundary points and writes \texttt{mod\_def.ww3} (\SI{260}{MB}).
+
+\todo{forcing, run cost on Datarmor, validation against altimetry}
 
 \appendix
 \section{Reproducing}
