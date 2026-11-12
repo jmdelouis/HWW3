@@ -1,0 +1,10 @@
+&FORCING_NML
+  FORCING%FIELD%ICE_CONC = T
+  FORCING%GRID%LATLON    = T
+/
+&FILE_NML
+  FILE%FILENAME  = 'ice.nc'
+  FILE%LONGITUDE = 'longitude'
+  FILE%LATITUDE  = 'latitude'
+  FILE%VAR(1)    = 'siconc'
+/

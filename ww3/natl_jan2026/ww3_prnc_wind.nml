@@ -1,0 +1,11 @@
+&FORCING_NML
+  FORCING%FIELD%WINDS = T
+  FORCING%GRID%LATLON = T
+/
+&FILE_NML
+  FILE%FILENAME  = 'wind.nc'
+  FILE%LONGITUDE = 'longitude'
+  FILE%LATITUDE  = 'latitude'
+  FILE%VAR(1)    = 'u10'
+  FILE%VAR(2)    = 'v10'
+/

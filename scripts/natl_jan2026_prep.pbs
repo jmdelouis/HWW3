@@ -1,0 +1,35 @@
+#!/bin/bash
+#PBS -N hww3_jan_prep
+#PBS -q sequentiel
+#PBS -l mem=32g
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -o /home1/datawork/jmdeloui/HWW3/logs/natl_jan2026_prep.log
+# ERA5 -> wind.ww3 (hourly) and ice.ww3 (January mean) on the North Atlantic grid.
+set -e
+R=/home1/datawork/jmdeloui/HWW3
+NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174
+source /usr/share/Modules/3.2.10/init/bash
+module purge
+module load intel-comp/20 impi/2019.9.304
+export LD_LIBRARY_PATH=$R/opt/lib:$NC/lib:$LD_LIBRARY_PATH
+# ww3_prnc is an MPI build: on a single-core node Intel MPI needs shared memory only
+export I_MPI_FABRICS=shm
+B=$R/opt/ww3/bin
+D=$R/runs/natl_jan2026
+mkdir -p $D; cd $D
+for f in mod_def.ww3 mapsta.ww3 mask.ww3 ST4TABUHF2.bin; do ln -sf $R/runs/natl/$f .; done
+cp $R/ww3/natl_jan2026/*.nml .
+if [ ! -s ice.nc ]; then
+  t0=$(date +%s)
+  $R/venv/bin/python $R/scripts/prep_era5.py $R/forcing/era5 202601 .
+  echo "prep_era5: $(( $(date +%s)-t0 )) s"
+fi
+for k in wind ice; do
+  t0=$(date +%s)
+  cp ww3_prnc_$k.nml ww3_prnc.nml
+  $B/ww3_prnc > ww3_prnc_$k.out 2>&1
+  echo "ww3_prnc $k: $(( $(date +%s)-t0 )) s"; tail -4 ww3_prnc_$k.out
+done
+rm -f ww3_prnc.nml
+ls -la
