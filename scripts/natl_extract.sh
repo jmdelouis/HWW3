@@ -1,6 +1,6 @@
 #!/bin/bash
-# Plotting subsets of the North Atlantic grid (run from /work/jmdeloui/HWW3).
-PY=/work/jmdeloui/highway/venv/bin/python
+# Plotting subsets of the North Atlantic grid (run from the repo root).
+PY=${PYTHON:-/work/jmdeloui/highway/venv/bin/python}
 D=grids/natl
 mkdir -p $D/plot
 $PY scripts/extract_zoom.py $D $D/plot/nodes.npz --nodes

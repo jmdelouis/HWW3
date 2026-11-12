@@ -3,7 +3,7 @@
 usage: python prep_gebco.py GEBCO_2024.nc OUT_DIR lon_min lon_max lat_min lat_max [--margin 3] [--stride 1]
 
 The output grid is row-major with longitude fastest, latitude increasing,
-elevation in metres (positive up).
+elevation in metres (positive up). Only numpy and netCDF4 are required.
 """
 
 import argparse
@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 import numpy as np
-import xarray as xr
+from netCDF4 import Dataset
 
 
 def main():
@@ -26,22 +26,26 @@ def main():
     p.add_argument("--stride", type=int, default=1)
     a = p.parse_args()
 
-    ds = xr.open_dataset(a.gebco)
+    ds = Dataset(a.gebco)
+    ds.set_auto_mask(False)
+    lon_all = ds["lon"][:]
+    lat_all = ds["lat"][:]
     m = a.margin
-    sub = ds["elevation"].sel(
-        lon=slice(a.lon_min - m, a.lon_max + m), lat=slice(max(a.lat_min - m, -90), min(a.lat_max + m, 90))
-    )
-    if a.stride > 1:
-        sub = sub.isel(lon=slice(None, None, a.stride), lat=slice(None, None, a.stride))
-    lon = sub["lon"].values
-    lat = sub["lat"].values
+    i = np.nonzero((lon_all >= a.lon_min - m) & (lon_all <= a.lon_max + m))[0]
+    j = np.nonzero((lat_all >= max(a.lat_min - m, -90)) & (lat_all <= min(a.lat_max + m, 90)))[0]
+    s = a.stride
+    i0, i1 = int(i[0]), int(i[-1]) + 1
+    j0, j1 = int(j[0]), int(j[-1]) + 1
+    lon = lon_all[i0:i1:s]
+    lat = lat_all[j0:j1:s]
+    var = ds["elevation"]
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     # write band by band to limit memory
-    with open(out / "elev.f32", "wb") as f:
-        band = 1024
-        for j0 in range(0, lat.size, band):
-            z = sub.isel(lat=slice(j0, j0 + band)).values.astype("<f4")
+    with open(str(out / "elev.f32"), "wb") as f:
+        band = 1024 * s
+        for jb in range(j0, j1, band):
+            z = var[jb:min(jb + band, j1):s, i0:i1:s].astype("<f4")
             f.write(np.ascontiguousarray(z).tobytes())
     meta = {
         "nlon": int(lon.size),
@@ -52,7 +56,7 @@ def main():
         "dlat": float(lat[1] - lat[0]),
         "file": "elev.f32",
         "source": Path(a.gebco).name,
-        "stride": a.stride,
+        "stride": s,
     }
     (out / "meta.json").write_text(json.dumps(meta, indent=2))
     print(json.dumps(meta, indent=2))

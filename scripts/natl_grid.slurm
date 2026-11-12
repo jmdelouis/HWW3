@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH -J hww3_grid
 #SBATCH -p cpu
-#SBATCH -c 32
-#SBATCH --mem=100G
-#SBATCH -t 2:00:00
+#SBATCH -c 8
+#SBATCH --mem=32G
+#SBATCH -t 0:30:00
 #SBATCH -o logs/grid_%j.log
 # Build the North Atlantic HEALPix grid on Datarmor.
 # Run from /work/jmdeloui/HWW3: sbatch scripts/natl_grid.slurm

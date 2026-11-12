@@ -161,13 +161,76 @@ meet.}
 \item Open boundaries (southern boundary at the equator, eastern Barents
   Sea): spectra from an existing global run. \todo{source of the spectra}
 \end{itemize}
-\todo{grid statistics, run cost on Datarmor, validation against altimetry}
+
+\subsection{Grid statistics}
+The grid was built on Datarmor (PBS job 7893385, 8 cores) in
+\SI{375}{s} wall clock with a peak resident memory of \SI{5.8}{GB}, the
+GEBCO extraction (\(36\,240\times20\,640\) samples at 15\,arcsec) taking
+\SI{30}{s} more. Coastline: GSHHS full-resolution land polylines, densified
+to 883\,611 points. Table~\ref{tab:natl} summarises the mesh. The largest
+wet component is kept (582 components found); the Euler characteristic
+$-909$ corresponds to 910 islands. Open-boundary nodes (973) lie on the
+equator, at \ang{80}N, on the \ang{45}E cut of the Barents Sea and on the
+\ang{100}W cut of the Canadian archipelago (Figure~\ref{fig:natl_levels}).
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lr}
+\toprule
+Quantity & Value \\
+\midrule
+nodes ($\nside$ 128/256/512/1024/2048) & 10\,160 / 6\,274 / 73\,088 / 135\,573 / 279\,830 \\
+nodes, total & 504\,925 \\
+triangles & 951\,741 \\
+leaves of the quadtree (wet) & 1\,168\,555 (573\,610) \\
+cells split by the 2:1 balance & 2\,455 \\
+non-manifold / inconsistent edges, clockwise triangles & 0 / 0 / 0 \\
+Euler characteristic & $-909$ \\
+max level jump across an edge & 1 \\
+min / max angle & \ang{17.5} / \ang{139.7} \\
+triangles with an angle $<\ang{20}$ / $>\ang{120}$ & 3\,786 / 3\,118 \\
+open-boundary nodes & 973 \\
+\midrule
+time: refinement + balance / cell bathymetry / triangulation & 277 / 79 / \SI{11}{s} \\
+\bottomrule
+\end{tabular}
+\caption{North Atlantic grid (\texttt{configs/natl\_datarmor.json}).}
+\label{tab:natl}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_levels.png}
+\caption{North Atlantic grid nodes coloured by $\nside$; open-boundary nodes
+in red.}
+\label{fig:natl_levels}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.49\textwidth]{fig/natl_brittany.png}
+\includegraphics[width=0.49\textwidth]{fig/natl_iroise.png}\\
+\includegraphics[width=0.49\textwidth]{fig/natl_gibraltar.png}
+\includegraphics[width=0.49\textwidth]{fig/natl_openocean.png}
+\caption{HEALPix cells (blue) and WW3 triangles (red) around Brittany, the
+Iroise Sea, the Strait of Gibraltar and the Azores (open ocean down to
+$\nside=128$). Near \ang{0} longitude above \ang{41.8}N the cells are
+strongly sheared in longitude--latitude because they lie at the boundary of
+two polar base faces.}
+\label{fig:natl_zoom}
+\end{figure}
+
+\todo{run cost on Datarmor, validation against altimetry}
 
 \appendix
 \section{Reproducing}
 \begin{itemize}
 \item Table~\ref{tab:synth}: \texttt{cd hww3-grid \&\& cargo test --release island\_multiscale -- --nocapture}.
 \item Figure~\ref{fig:island}: \texttt{python scripts/plot\_mesh.py /tmp/hww3\_out\_island tex/hww3/fig/island\_mesh\_zoom.png 41 49 39 44.5}.
+\item Table~\ref{tab:natl}, Figures~\ref{fig:natl_levels}--\ref{fig:natl_zoom}:
+  \texttt{qsub scripts/natl\_grid.pbs} on Datarmor, then
+  \texttt{python scripts/plot\_levels.py grids/natl/plot/nodes.npz fig/natl\_levels.png} and
+  \texttt{python scripts/plot\_cells\_tris.py grids/natl/plot/<zone>.npz fig/natl\_<zone>.png}.
 \end{itemize}
 
 \end{document}
