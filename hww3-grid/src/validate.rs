@@ -1,15 +1,19 @@
 //! Topological and geometric checks of a triangle mesh on the sphere.
 
-use crate::geo::{angle, cross, normalize};
-use crate::mesh::{fan_counts, orientation};
+use crate::mesh::{fan_counts, orientation, tri_angles};
 use serde::Serialize;
 use std::collections::HashMap;
 
+/// Result of [`check`]: counts of topological defects and angle statistics.
 #[derive(Debug, Default, Serialize, Clone)]
 pub struct MeshReport {
+    /// number of nodes
     pub n_nodes: usize,
+    /// number of triangles
     pub n_triangles: usize,
+    /// number of distinct edges
     pub n_edges: usize,
+    /// edges used by a single triangle
     pub n_boundary_edges: usize,
     /// edges shared by more than two triangles
     pub n_nonmanifold_edges: usize,
@@ -23,35 +27,41 @@ pub struct MeshReport {
     pub n_pinch_nodes: usize,
     /// V - E + F (1 for a disc, 1 - h for a disc with h holes)
     pub euler: i64,
+    /// smallest angle of any triangle (degrees)
     pub min_angle_deg: f64,
+    /// largest angle of any triangle (degrees)
     pub max_angle_deg: f64,
+    /// triangles with an angle below 20 degrees
     pub n_angle_below_20: usize,
+    /// triangles with an angle above 120 degrees
     pub n_angle_above_120: usize,
-    /// histogram of minimum angles in 5 degree bins [0,5), [5,10) ... [55,60]
+    /// histogram of minimum angles in 5 degree bins \[0,5), \[5,10) ... \[55,60\]
     pub min_angle_hist: Vec<usize>,
     /// largest level difference across an edge
     pub max_level_jump: u8,
 }
 
 impl MeshReport {
+    /// True when the mesh can be read by WW3: no non-manifold or
+    /// inconsistent edge, no clockwise triangle and no pinch node. Angle
+    /// bounds are checked separately by [`MeshReport::angles_within`].
     pub fn is_valid(&self) -> bool {
         self.n_nonmanifold_edges == 0
             && self.n_inconsistent_edges == 0
             && self.n_negative == 0
             && self.n_pinch_nodes == 0
     }
+
+    /// True when every triangle angle lies in [`min_deg`, `max_deg`].
+    pub fn angles_within(&self, min_deg: f64, max_deg: f64) -> bool {
+        self.n_triangles == 0 || (self.min_angle_deg >= min_deg - 1e-9 && self.max_angle_deg <= max_deg + 1e-9)
+    }
 }
 
-fn tri_angles(a: &[f64; 3], b: &[f64; 3], c: &[f64; 3]) -> [f64; 3] {
-    // angle at vertex v between the great circles to the two others
-    let at = |v: &[f64; 3], p: &[f64; 3], q: &[f64; 3]| {
-        let t1 = normalize(cross(&cross(v, p), v));
-        let t2 = normalize(cross(&cross(v, q), v));
-        angle(&t1, &t2)
-    };
-    [at(a, b, c), at(b, c, a), at(c, a, b)]
-}
-
+/// Check a triangle mesh on the unit sphere.
+///
+/// `nodes` are unit vectors, `levels` the HEALPix depth of each node and
+/// `tris` counter-clockwise triangles of 0-based node indices.
 pub fn check(nodes: &[[f64; 3]], levels: &[u8], tris: &[[u32; 3]]) -> MeshReport {
     let mut r = MeshReport { n_nodes: nodes.len(), n_triangles: tris.len(), ..Default::default() };
     r.min_angle_deg = 180.0;

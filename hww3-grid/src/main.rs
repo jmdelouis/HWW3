@@ -1,3 +1,11 @@
+//! `hww3-grid` command-line program.
+//!
+//! - `hww3-grid <config.json>`: build and write the grid, print the summary
+//!   as JSON on stdout, exit with an error if the mesh is invalid or if a
+//!   triangle angle is outside the bounds of `quality` (when enforced);
+//! - `hww3-grid cells <grid_dir>`: write the HEALPix cell vertices of every
+//!   node (for plots).
+
 use anyhow::{bail, Result};
 use cdshealpix::nested;
 use hww3_grid::config::Config;
@@ -44,6 +52,16 @@ fn main() -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&summary)?);
     if !summary.mesh.is_valid() {
         bail!("mesh validation failed");
+    }
+    let q = &cfg.quality;
+    if q.enforce && !summary.mesh.angles_within(q.min_angle_deg, q.max_angle_deg) {
+        bail!(
+            "triangle angles {:.1}..{:.1} deg outside the accepted range {}..{} deg",
+            summary.mesh.min_angle_deg,
+            summary.mesh.max_angle_deg,
+            q.min_angle_deg,
+            q.max_angle_deg
+        );
     }
     Ok(())
 }

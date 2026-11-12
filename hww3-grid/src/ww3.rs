@@ -37,6 +37,9 @@ pub fn write_obc(path: &Path, nodes: &[u32]) -> Result<()> {
     Ok(())
 }
 
+/// `ww3_grid.nml` for the UNST grid: spectrum, time steps, grid and mesh
+/// files from [`Config::ww3`]. `UNST%SF = -1` turns the positive depths of the
+/// Gmsh file into the negative levels WW3 expects.
 pub fn write_grid_nml(path: &Path, cfg: &Config) -> Result<()> {
     let p: &Ww3Params = &cfg.ww3;
     let n = &cfg.name;
@@ -132,6 +135,7 @@ END OF NAMELISTS
     Ok(())
 }
 
+/// Write a slice as raw bytes in native (little-endian) order.
 pub fn write_raw<T: Copy>(path: &Path, data: &[T]) -> Result<()> {
     // little-endian platforms only (x86_64, aarch64)
     let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data)) };

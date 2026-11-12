@@ -1,0 +1,25 @@
+{
+  "name": "natl",
+  "domain": { "lon_min": -100.0, "lon_max": 45.0, "lat_min": 0.0, "lat_max": 80.0 },
+  "ellipsoid": "wgs84",
+  "nside_min": 128,
+  "nside_max": 2048,
+  "max_level_span": 4,
+  "refine": [
+    { "max_dist_km": 10.0, "nside": 2048 },
+    { "max_dist_km": 50.0, "nside": 1024 },
+    { "max_dist_km": 200.0, "nside": 512 }
+  ],
+  "min_depth_m": 5.0,
+  "wet_fraction": 0.5,
+  "keep_largest_component": true,
+  "bathy": "../data/gebco/natl/meta.json",
+  "coast": { "source": "shapefile", "path": "/home1/datahome/marc/data/GSHHS/gshhs_land.shp" },
+  "output_dir": "../grids/natl_v2",
+  "quality": { "min_angle_deg": 20.0, "max_angle_deg": 130.0, "flips": true, "max_level_jump": 1, "trim_boundary": true, "enforce": true },
+  "ww3": {
+    "nth": 36, "nk": 32, "freq1": 0.0373, "xfr": 1.1, "dir_offset": 0.0,
+    "dtmax": 600.0, "dtxy": 600.0, "dtkth": 300.0, "dtmin": 10.0,
+    "zlim": -0.1, "dmin": 2.0
+  }
+}

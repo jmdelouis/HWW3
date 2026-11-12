@@ -11,25 +11,36 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Description of a bathymetry grid (`meta.json`, written by
+/// `scripts/prep_gebco.py`).
 #[derive(Clone, Debug, Deserialize)]
 pub struct BathyMeta {
+    /// number of longitudes
     pub nlon: usize,
+    /// number of latitudes
     pub nlat: usize,
-    /// centre of the first sample, degrees
+    /// longitude of the centre of the first sample (degrees)
     pub lon0: f64,
+    /// latitude of the centre of the first sample (degrees)
     pub lat0: f64,
+    /// longitude step (degrees)
     pub dlon: f64,
+    /// latitude step (degrees, may be negative)
     pub dlat: f64,
     /// raw f32 file, relative to the meta file
     pub file: String,
 }
 
+/// Bathymetry grid in memory.
 pub struct Bathy {
+    /// grid description
     pub meta: BathyMeta,
+    /// elevation (m, positive up), `nlat * nlon`, longitude fastest
     pub z: Vec<f32>,
 }
 
 impl Bathy {
+    /// Read `meta.json` and the raw f32 file it points to.
     pub fn load(meta_path: &str) -> Result<Bathy> {
         let meta: BathyMeta = serde_json::from_str(&std::fs::read_to_string(meta_path)?)?;
         let base = Path::new(meta_path).parent().unwrap_or(Path::new("."));
@@ -44,9 +55,11 @@ impl Bathy {
         Ok(Bathy { meta, z })
     }
 
+    /// Longitude of column `i` (degrees).
     pub fn lon(&self, i: usize) -> f64 {
         self.meta.lon0 + i as f64 * self.meta.dlon
     }
+    /// Latitude of row `j` (degrees).
     pub fn lat(&self, j: usize) -> f64 {
         self.meta.lat0 + j as f64 * self.meta.dlat
     }
@@ -95,9 +108,12 @@ impl Bathy {
     }
 }
 
+/// Bathymetry statistics of one leaf.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct CellBathy {
+    /// number of bathymetry samples inside the cell
     pub n: u32,
+    /// number of wet samples (elevation < 0)
     pub n_wet: u32,
     /// mean elevation over all samples (m, positive up)
     pub mean_elev: f64,

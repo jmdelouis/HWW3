@@ -1,4 +1,4 @@
-//! Reader of the GSHHG native binary format (gshhs_[cflhi].b, version 2.x).
+//! Reader of the GSHHG native binary format (`gshhs_[cflhi].b`, version 2.x).
 //!
 //! Each polygon: a header of 11 big-endian i32
 //! (id, n, flag, west, east, south, north, area, area_full, container, ancestor)
@@ -8,7 +8,9 @@
 
 use anyhow::{bail, Result};
 
+/// One GSHHG polygon.
 pub struct Polygon {
+    /// GSHHG level (1 land, 2 lake, ...)
     pub level: u8,
     /// (lon, lat) in degrees, lon in (-180, 180]
     pub points: Vec<(f64, f64)>,

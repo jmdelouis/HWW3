@@ -8,6 +8,7 @@ use cdshealpix::nested;
 use rayon::prelude::*;
 use std::collections::HashSet;
 
+/// NESTED uniq index of cell `h` at depth `d` (`4 * 4^d + h`).
 #[inline]
 pub fn uniq(d: u8, h: u64) -> u64 {
     nested::to_uniq(d, h)
@@ -59,11 +60,15 @@ impl<'a> Refiner<'a> {
     }
 }
 
+/// Leaves of the refined and balanced tree.
 pub struct Tree {
+    /// depth of nside_min
     pub dmin: u8,
+    /// depth of nside_max
     pub dmax: u8,
     /// leaves sorted in NESTED (Morton) order at depth dmax
     pub leaves: Vec<(u8, u64)>,
+    /// leaves split by the 2:1 balance
     pub n_balance_splits: usize,
 }
 
@@ -72,6 +77,15 @@ pub fn morton(d: u8, h: u64, dmax: u8) -> u64 {
     h << (2 * (dmax - d) as u32)
 }
 
+/// Build the tree.
+///
+/// Roots are the cells of depth `dmin` whose centre lies in the domain plus a
+/// margin of three cell widths. A cell of depth `d` is split while
+/// `d < dmax` and a refinement rule requires a finer depth: the distance
+/// from the cell to the coast (distance from the centre to the nearest coast
+/// point minus the cell radius) is below the rule's `max_dist_km`. Then
+/// leaves are split until no leaf has a neighbour (edge or corner) more
+/// than one level finer (2:1 balance).
 pub fn build(cfg: &Config, earth: &Earth, coast: &CoastIndex) -> Tree {
     let dmin = cfg.dmin();
     let dmax = cfg.dmax();

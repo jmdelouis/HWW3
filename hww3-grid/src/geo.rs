@@ -8,15 +8,20 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Earth model.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Ellipsoid {
+    /// sphere of radius 6371 km; latitudes are not converted
     Sphere,
+    /// WGS84 ellipsoid; latitudes are converted to and from authalic latitudes
     Wgs84,
 }
 
+/// Latitude conversions and radius of the HEALPix sphere for an [`Ellipsoid`].
 #[derive(Clone, Copy, Debug)]
 pub struct Earth {
+    /// the earth model
     pub kind: Ellipsoid,
     /// first eccentricity squared
     e2: f64,
@@ -25,6 +30,8 @@ pub struct Earth {
 }
 
 impl Earth {
+    /// Earth for `kind`; for WGS84 the radius is the authalic radius
+    /// (6 371 007.18 m).
     pub fn new(kind: Ellipsoid) -> Self {
         match kind {
             Ellipsoid::Sphere => Earth { kind, e2: 0.0, radius: 6_371_000.0 },
@@ -81,35 +88,42 @@ impl Earth {
     }
 }
 
+/// Unit vector of (`lon`, `lat`) in radians.
 pub fn lonlat_to_vec(lon: f64, lat: f64) -> [f64; 3] {
     let (sl, cl) = lat.sin_cos();
     let (so, co) = lon.sin_cos();
     [cl * co, cl * so, sl]
 }
 
+/// (lon, lat) in radians of a unit vector, lon in (-pi, pi].
 pub fn vec_to_lonlat(v: &[f64; 3]) -> (f64, f64) {
     (v[1].atan2(v[0]), v[2].clamp(-1.0, 1.0).asin())
 }
 
+/// Dot product.
 #[inline]
 pub fn dot(a: &[f64; 3], b: &[f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
+/// Cross product.
 #[inline]
 pub fn cross(a: &[f64; 3], b: &[f64; 3]) -> [f64; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
+/// Difference `a - b`.
 #[inline]
 pub fn sub(a: &[f64; 3], b: &[f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
+/// Euclidean norm.
 pub fn norm(a: &[f64; 3]) -> f64 {
     dot(a, a).sqrt()
 }
 
+/// `a / |a|`.
 pub fn normalize(a: [f64; 3]) -> [f64; 3] {
     let n = norm(&a);
     [a[0] / n, a[1] / n, a[2] / n]

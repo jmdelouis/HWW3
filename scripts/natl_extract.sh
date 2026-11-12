@@ -1,7 +1,7 @@
 #!/bin/bash
 # Plotting subsets of the North Atlantic grid (run from the repo root).
 PY=${PYTHON:-/work/jmdeloui/highway/venv/bin/python}
-D=grids/natl
+D=${GRID:-grids/natl}
 mkdir -p $D/plot
 $PY scripts/extract_zoom.py $D $D/plot/nodes.npz --nodes
 $PY scripts/extract_zoom.py $D $D/plot/brittany.npz -6.5 -1.5 46.5 49.5

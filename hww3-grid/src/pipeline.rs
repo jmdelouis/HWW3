@@ -16,34 +16,76 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Instant;
 
+/// Statistics of a grid build, printed as JSON by the `hww3-grid` program
+/// and stored in `meta.json`.
 #[derive(Debug, Serialize, Clone)]
 pub struct Summary {
+    /// grid name
     pub name: String,
+    /// earth model used
     pub ellipsoid: String,
+    /// coarsest nside
     pub nside_min: u32,
+    /// finest nside
     pub nside_max: u32,
+    /// coastline points kept in the index (after thinning)
     pub n_coast_points: usize,
+    /// leaves of the refined and balanced tree (wet and dry)
     pub n_leaves: usize,
+    /// leaves split by the 2:1 balance
     pub n_balance_splits: usize,
+    /// wet leaves inside the domain
     pub n_wet_leaves: usize,
+    /// connected components of the triangulation before keeping the largest
     pub n_components: usize,
     /// triangles dropped to remove pinch nodes
     pub n_pinch_tris_removed: usize,
+    /// angle statistics of the triangulation before the quality step
+    pub quality_before: QualityBefore,
+    /// edge flips made by the Delaunay step
+    pub n_flips: usize,
+    /// bad boundary triangles removed (including pinch removal after trimming)
+    pub n_trimmed: usize,
+    /// nodes of the final mesh
     pub n_nodes: usize,
+    /// open-boundary nodes (wet nodes touching a cell outside the domain)
     pub n_open_boundary: usize,
     /// node count per nside, from nside_min to nside_max
     pub nodes_per_nside: Vec<(u32, usize)>,
+    /// validation of the final mesh
     pub mesh: MeshReport,
+    /// wall time of each step (s)
     pub timings_s: Vec<(String, f64)>,
 }
 
+/// Angle statistics of the raw triangulation (before flips and trimming).
+#[derive(Debug, Serialize, Clone)]
+pub struct QualityBefore {
+    /// smallest angle (degrees)
+    pub min_angle_deg: f64,
+    /// largest angle (degrees)
+    pub max_angle_deg: f64,
+    /// triangles with an angle below 20 degrees
+    pub n_angle_below_20: usize,
+    /// triangles with an angle above 120 degrees
+    pub n_angle_above_120: usize,
+}
+
+/// The final grid: one entry per node, nodes in NESTED (Morton) order.
 pub struct Grid {
+    /// HEALPix NESTED uniq index of each node (`4 * 4^depth + ipix`)
     pub uniq: Vec<u64>,
+    /// HEALPix depth of each node (`nside = 2^depth`)
     pub level: Vec<u8>,
+    /// longitude (degrees, geodetic, in (-180, 180])
     pub lon: Vec<f64>,
+    /// latitude (degrees, geodetic on the chosen ellipsoid)
     pub lat: Vec<f64>,
+    /// mean water depth over the wet samples of the cell (m, positive down)
     pub depth: Vec<f64>,
+    /// triangles, 0-based node indices, counter-clockwise
     pub tris: Vec<[u32; 3]>,
+    /// 0-based indices of the open-boundary nodes
     pub obc: Vec<u32>,
 }
 
@@ -116,6 +158,8 @@ fn find(p: &mut [u32], mut i: u32) -> u32 {
     i
 }
 
+/// Build the grid described by `cfg` (all steps listed in the crate
+/// documentation) and return it with its [`Summary`]. Nothing is written.
 pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
     let mut timings = Vec::new();
     let mut t0 = Instant::now();
@@ -170,6 +214,28 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
     // WW3 needs a single triangle fan around every node
     let n_pinch_tris_removed = crate::mesh::remove_pinches(n, &mut tri.tris);
     lap("triangulation", &mut t0);
+
+    // triangle quality: Delaunay flips, then bad boundary triangles
+    let q = &cfg.quality;
+    let leaf_levels: Vec<u8> = leaves.iter().map(|l| l.0).collect();
+    let before_quality = check(&centres, &leaf_levels, &tri.tris);
+    let n_flips = if q.flips {
+        crate::mesh::delaunay_flips(&centres, &leaf_levels, q.max_level_jump, &mut tri.tris)
+    } else {
+        0
+    };
+    let n_trimmed = if q.trim_boundary {
+        crate::mesh::trim_boundary(
+            n,
+            &centres,
+            q.min_angle_deg.to_radians(),
+            q.max_angle_deg.to_radians(),
+            &mut tri.tris,
+        )
+    } else {
+        0
+    };
+    lap("quality (flips + boundary trim)", &mut t0);
 
     // connected components over triangle edges
     let mut parent: Vec<u32> = (0..n as u32).collect();
@@ -253,6 +319,14 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
         n_wet_leaves: n_wet,
         n_components,
         n_pinch_tris_removed,
+        quality_before: QualityBefore {
+            min_angle_deg: before_quality.min_angle_deg,
+            max_angle_deg: before_quality.max_angle_deg,
+            n_angle_below_20: before_quality.n_angle_below_20,
+            n_angle_above_120: before_quality.n_angle_above_120,
+        },
+        n_flips,
+        n_trimmed,
         n_nodes: grid.uniq.len(),
         n_open_boundary: grid.obc.len(),
         nodes_per_nside: per,
@@ -262,6 +336,9 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
     Ok((grid, summary))
 }
 
+/// Write the grid to `cfg.output_dir`: `<name>.msh`, `<name>.obc`,
+/// `ww3_grid.nml`, `namelists_<name>.nml`, the raw arrays in `raw/` and
+/// `meta.json` (configuration, summary and description of the arrays).
 pub fn write(cfg: &Config, grid: &Grid, summary: &Summary) -> Result<()> {
     let out = Path::new(&cfg.output_dir);
     std::fs::create_dir_all(out)?;

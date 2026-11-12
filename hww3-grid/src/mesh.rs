@@ -49,16 +49,21 @@ fn boundary_points(d: u8, h: u64) -> Vec<[f64; 3]> {
     pts
 }
 
+/// Result of [`triangulate`].
 pub struct Triangulation {
     /// triangles as leaf indices, counter-clockwise seen from outside
     pub tris: Vec<[u32; 3]>,
     /// active leaves sharing a point with an `outside` leaf
     pub touches_outside: Vec<bool>,
+    /// number of distinct boundary points (corners and edge midpoints)
     pub n_points: usize,
 }
 
-/// `centres`: unit vectors of the leaf centres; `active`: wet leaves;
-/// `outside`: leaves outside the model domain (for open-boundary detection).
+/// Triangulate the active leaves.
+///
+/// `leaves` are (depth, ipix) of a 2:1 balanced tree, `centres` the unit
+/// vectors of their centres, `active` the wet leaves and `outside` the leaves
+/// outside the model domain (used to detect open-boundary nodes).
 pub fn triangulate(
     leaves: &[(u8, u64)],
     centres: &[[f64; 3]],
@@ -321,6 +326,130 @@ fn fans(v: u32, ts: &[u32], tris: &[[u32; 3]]) -> (Vec<u32>, u32) {
         label[a] = id as u32;
     }
     (label, ids.len() as u32)
+}
+
+/// The three angles (rad) of the spherical triangle (`a`, `b`, `c`), at `a`,
+/// `b` and `c`, measured between the great circles through each vertex.
+pub fn tri_angles(a: &[f64; 3], b: &[f64; 3], c: &[f64; 3]) -> [f64; 3] {
+    let at = |v: &[f64; 3], p: &[f64; 3], q: &[f64; 3]| {
+        let t1 = normalize(cross(&cross(v, p), v));
+        let t2 = normalize(cross(&cross(v, q), v));
+        crate::geo::angle(&t1, &t2)
+    };
+    [at(a, b, c), at(b, c, a), at(c, a, b)]
+}
+
+fn min_max_angle(nodes: &[[f64; 3]], t: &[u32; 3]) -> (f64, f64) {
+    let a = tri_angles(&nodes[t[0] as usize], &nodes[t[1] as usize], &nodes[t[2] as usize]);
+    (a[0].min(a[1]).min(a[2]), a[0].max(a[1]).max(a[2]))
+}
+
+/// Improve the triangle angles by edge flips (Lawson's algorithm on the
+/// sphere) without changing the nodes, the boundary or the topology.
+///
+/// An interior edge shared by triangles (u, v, w) and (v, u, x) is replaced
+/// by the edge (w, x) when the quadrilateral u-x-v-w is convex, the edge
+/// (w, x) does not exist yet, the level jump |level(w) - level(x)| is at most
+/// `max_level_jump`, and the smaller minimum angle of the two triangles
+/// increases. This is the max-min angle criterion, which converges to the
+/// Delaunay triangulation of the nodes constrained by the boundary. Passes
+/// are repeated until no edge flips (at most 100 passes). Returns the number
+/// of flips.
+pub fn delaunay_flips(nodes: &[[f64; 3]], levels: &[u8], max_level_jump: u8, tris: &mut [[u32; 3]]) -> usize {
+    let mut total = 0;
+    for _pass in 0..100 {
+        // directed edge -> (triangle, third vertex)
+        let mut dir: HashMap<(u32, u32), (u32, u32)> = HashMap::with_capacity(3 * tris.len());
+        for (k, t) in tris.iter().enumerate() {
+            for i in 0..3 {
+                dir.insert((t[i], t[(i + 1) % 3]), (k as u32, t[(i + 2) % 3]));
+            }
+        }
+        let mut touched = vec![false; tris.len()];
+        let mut flips = 0;
+        let edges: Vec<(u32, u32)> = dir.keys().copied().filter(|&(u, v)| u < v).collect();
+        for (u, v) in edges {
+            let (Some(&(k1, w)), Some(&(k2, x))) = (dir.get(&(u, v)), dir.get(&(v, u))) else {
+                continue; // boundary edge
+            };
+            if touched[k1 as usize] || touched[k2 as usize] || w == x {
+                continue;
+            }
+            if dir.contains_key(&(w, x)) || dir.contains_key(&(x, w)) {
+                continue;
+            }
+            if levels[w as usize].abs_diff(levels[x as usize]) > max_level_jump {
+                continue;
+            }
+            let (pu, pv, pw, px) =
+                (&nodes[u as usize], &nodes[v as usize], &nodes[w as usize], &nodes[x as usize]);
+            let n1 = [w, u, x];
+            let n2 = [x, v, w];
+            if orientation(pw, pu, px) <= 0.0 || orientation(px, pv, pw) <= 0.0 {
+                continue; // non-convex quadrilateral
+            }
+            let old = min_max_angle(nodes, &tris[k1 as usize]).0.min(min_max_angle(nodes, &tris[k2 as usize]).0);
+            let new = min_max_angle(nodes, &n1).0.min(min_max_angle(nodes, &n2).0);
+            if new <= old + 1e-9 {
+                continue;
+            }
+            tris[k1 as usize] = n1;
+            tris[k2 as usize] = n2;
+            touched[k1 as usize] = true;
+            touched[k2 as usize] = true;
+            // keep the directed-edge map consistent for the rest of the pass
+            dir.remove(&(u, v));
+            dir.remove(&(v, u));
+            for (k, t) in [(k1, n1), (k2, n2)] {
+                for i in 0..3 {
+                    dir.insert((t[i], t[(i + 1) % 3]), (k, t[(i + 2) % 3]));
+                }
+            }
+            flips += 1;
+        }
+        total += flips;
+        if flips == 0 {
+            break;
+        }
+    }
+    total
+}
+
+/// Remove boundary triangles whose minimum angle is below `min_angle` or
+/// whose maximum angle is above `max_angle` (radians). A triangle is on the
+/// boundary when one of its edges belongs to no other triangle. Removing a
+/// triangle exposes new boundary edges, so the test is repeated until no
+/// triangle is removed; pinch nodes created on the way are then removed with
+/// [`remove_pinches`]. Interior triangles are never removed, so the domain
+/// keeps no holes. Returns the number of triangles removed.
+pub fn trim_boundary(n: usize, nodes: &[[f64; 3]], min_angle: f64, max_angle: f64, tris: &mut Vec<[u32; 3]>) -> usize {
+    let before = tris.len();
+    loop {
+        let mut count: HashMap<(u32, u32), u8> = HashMap::with_capacity(3 * tris.len());
+        for t in tris.iter() {
+            for i in 0..3 {
+                let (a, b) = (t[i], t[(i + 1) % 3]);
+                *count.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+            }
+        }
+        let len0 = tris.len();
+        tris.retain(|t| {
+            let on_boundary = (0..3).any(|i| {
+                let (a, b) = (t[i], t[(i + 1) % 3]);
+                count[&(a.min(b), a.max(b))] == 1
+            });
+            if !on_boundary {
+                return true;
+            }
+            let (mn, mx) = min_max_angle(nodes, t);
+            mn >= min_angle && mx <= max_angle
+        });
+        let pinched = remove_pinches(n, tris);
+        if tris.len() == len0 && pinched == 0 {
+            break;
+        }
+    }
+    before - tris.len()
 }
 
 /// Remove pinch nodes: at every vertex with several triangle fans, keep the largest

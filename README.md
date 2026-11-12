@@ -30,12 +30,17 @@ PDLIB scheme.
    is triangulated by ear clipping. Two cells that share a boundary segment
    are joined by an edge that belongs only to the polygons at the two ends of
    that segment, so the mesh is conforming, including at coarse/fine
-   transitions.
-5. **Ellipsoid.** HEALPix is defined on the authalic sphere. With
+   transitions. Pinch (bow-tie) nodes, which WW3 rejects, are removed.
+5. **Triangle quality.** The nodes are fixed, so angles are improved by the
+   connectivity only: Delaunay (max-min angle) edge flips inside the mesh,
+   then removal of boundary triangles whose angles are outside
+   `quality.min_angle_deg`–`quality.max_angle_deg` (20°–130° by default).
+   With `quality.enforce`, the program fails if an angle is still out of range.
+6. **Ellipsoid.** HEALPix is defined on the authalic sphere. With
    `"ellipsoid": "wgs84"`, the default, input latitudes are converted to
    authalic latitudes before hashing, and node latitudes are converted back to
    geodetic latitudes for WW3. Use `"sphere"` to skip the conversion.
-6. **Outputs** (written to `output_dir`):
+7. **Outputs** (written to `output_dir`):
    - `<name>.msh`: Gmsh 2.2 file with depth positive down;
    - `<name>.obc`: open-boundary nodes;
    - `ww3_grid.nml` and `namelists_<name>.nml`;
@@ -44,8 +49,16 @@ PDLIB scheme.
    - `meta.json`: configuration plus mesh report.
 
 The mesh is checked automatically: no edge shared by more than two triangles,
-consistent counter-clockwise orientation, Euler characteristic, and angle
-statistics.
+consistent counter-clockwise orientation, no pinch node, Euler
+characteristic, angle statistics and level jump across edges.
+
+## Documentation
+
+- Sphinx site (`docs/`, built and published by the CI on GitHub Pages):
+  installation, configuration, algorithm, outputs, validation, WW3 setup and
+  a step-by-step [reproduction guide](docs/reproducing.md).
+- Rust API: `cd hww3-grid && cargo doc --no-deps --open`.
+- Internal note (LaTeX): `tex/hww3/main.tex`.
 
 ## Usage
 

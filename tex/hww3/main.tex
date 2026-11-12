@@ -180,6 +180,46 @@ now keeps, at every such node, the largest fan and drops the triangles of
 the others, iterating to a fixed point: 671 triangles (0.07\,\%) were
 removed, and the validator counts pinch nodes (0 after the fix).
 
+\paragraph{Triangle quality.} The nodes are fixed HEALPix centres, so the
+angles can only be improved through the connectivity. The generator now
+(i) flips interior edges with the max-min angle criterion (Lawson's
+algorithm on the sphere, which converges to the Delaunay triangulation of
+the nodes constrained by the boundary), keeping a level jump of at most 1
+across every edge, and (ii) removes boundary triangles whose angles are
+outside the accepted range, iterating and removing the pinch nodes this
+creates; interior triangles are never removed, so no hole appears. With
+\texttt{quality.enforce} the program fails if an angle is still out of
+range. On the North Atlantic (\texttt{configs/natl\_v2\_datarmor.json},
+PBS job 7894086, \SI{130}{s}, of which \SI{8}{s} for the quality step),
+14\,750 flips and 1\,275 removed boundary triangles bring the angles from
+\ang{14.1}--\ang{139.7} (raw triangulation) to \ang{20.7}--\ang{127.7}
+(Table~\ref{tab:quality}). Three interior triangles keep an angle between
+\ang{120} and \ang{127.7}: no flip improves them (non-convex quadrilateral
+or no gain), and allowing a level jump of 2 across flipped edges gives the
+same mesh. Lowering them further would require moving nodes away from the
+pixel centres; the default range is therefore \ang{20}--\ang{130}.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lrr}
+\toprule
+ & v1 (no quality step) & v2 (flips + trim) \\
+\midrule
+nodes / triangles & 502\,690 / 949\,199 & 502\,408 / 947\,850 \\
+nodes at $\nside=2048$ & 277\,607 & 277\,325 \\
+edge flips / boundary triangles removed & -- & 14\,750 / 1\,275 \\
+min / max angle & \ang{17.5} / \ang{139.7} & \ang{20.7} / \ang{127.7} \\
+triangles $<\ang{20}$ / $>\ang{120}$ & 3\,781 / 3\,070 & 0 / 3 \\
+Euler characteristic & $-693$ & $-682$ \\
+defects (non-manifold, inconsistent, clockwise, pinch) & 0 & 0 \\
+open-boundary nodes / max level jump & 971 / 1 & 971 / 1 \\
+\bottomrule
+\end{tabular}
+\caption{Effect of the triangle-quality step on the North Atlantic grid.
+The January 2026 runs below use v1.}
+\label{tab:quality}
+\end{table}
+
 Open-boundary nodes (971) lie on the
 equator, at \ang{80}N, on the \ang{45}E cut of the Barents Sea and on the
 \ang{100}W cut of the Canadian archipelago (Figure~\ref{fig:natl_levels}).
@@ -284,11 +324,40 @@ Norwegian shelf near \ang{61}N, where the waves shoal. No NaN appears.
   \label{fig:natl_test}
 \end{figure}
 
-\todo{forcing, boundary spectra, monthly run, validation against altimetry}
+\subsection{January 2026: forcing and runs}
+\paragraph{Forcing.} ERA5 hourly \SI{10}{m} wind and sea-ice cover
+(\ang{2}S--\ang{82}N, \ang{102}W--\ang{47}E, \ang{0.25}) are downloaded with
+\texttt{cdsapi} in \SI{7}{min} (\texttt{scripts/get\_era5.py}) and rewritten
+for \texttt{ww3\_prnc} (\texttt{scripts/prep\_era5.py}: ascending latitudes,
+CF time, \texttt{\_FillValue}); the ice is the January mean, repeated at the
+first and last hour so that the obstruction is fixed. \texttt{ww3\_prnc}
+interpolates the wind on the nodes in \SI{72}{s} (\texttt{wind.ww3},
+\SI{3.0}{GB}; PBS job 7893994). Surface currents and sea level come from
+Copernicus Marine \texttt{GLOBAL\_ANALYSISFORECAST\_PHY\_001\_024} (hourly,
+1/12\textdegree), read from the Datarmor mirror
+(\texttt{/home/ref-ocean-model-public/\dots/cmems\_mod\_glo\_phy\_anfc\_0.083deg\_PT1H-m}),
+taking for each day the latest forecast run (\texttt{scripts/prep\_cmems.py},
+PBS job 7894068, \SI{14}{min}: \texttt{current.ww3} \SI{3.0}{GB},
+\texttt{level.ww3} \SI{1.5}{GB}). Two pitfalls: the serial WW3 tools are MPI
+builds and need \texttt{I\_MPI\_FABRICS=shm} on a one-core node, and
+\texttt{ww3\_prnc} stops if a field has no \texttt{\_FillValue}.
+
+\paragraph{Runs.} Two runs cover 1~January 00~UTC to 31~January 23~UTC
+(last ERA5 hour) from rest on grid v1, with 112 MPI ranks on 4 nodes:
+wind and ice only (PBS job 7894000) and wind, ice, currents and sea level
+(PBS job 7894069). The first one runs at \SI{10.2}{s} per \SI{600}{s} step,
+i.e.\ about \SI{13}{h} for the month (1.8 times faster than on 56 ranks).
+No boundary spectra are imposed yet.
+
+\todo{results of the January runs, boundary spectra, validation against altimetry}
 
 \appendix
 \section{Reproducing}
+The complete procedure (sources and data, grid, WW3 build, forcing, runs,
+figures) is described step by step in the Sphinx documentation,
+\texttt{docs/reproducing.md}, built by the CI with the Rust API reference.
 \begin{itemize}
+\item Table~\ref{tab:quality}: \texttt{qsub -v CFG=configs/natl\_v2\_datarmor.json,GRID=grids/natl\_v2 scripts/natl\_grid.pbs}.
 \item Table~\ref{tab:synth}: \texttt{cd hww3-grid \&\& cargo test --release island\_multiscale -- --nocapture}.
 \item Figure~\ref{fig:island}: \texttt{python scripts/plot\_mesh.py /tmp/hww3\_out\_island tex/hww3/fig/island\_mesh\_zoom.png 41 49 39 44.5}.
 \item Table~\ref{tab:natl}, Figures~\ref{fig:natl_levels}--\ref{fig:natl_zoom}:

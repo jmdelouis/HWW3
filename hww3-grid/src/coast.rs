@@ -4,11 +4,17 @@ use crate::geo::{angle, vec_to_lonlat};
 use cdshealpix::nested;
 use std::collections::{HashMap, HashSet};
 
+/// Coastline points bucketed by HEALPix cell, for nearest-distance queries.
+///
+/// The query visits the bucket containing the point, then rings of
+/// neighbouring buckets, and stops when the ring is farther than the best
+/// distance found or than the search radius.
 pub struct CoastIndex {
     depth: u8,
     buckets: HashMap<u64, Vec<[f64; 3]>>,
     /// lower bound of the angular width of a bucket cell
     width: f64,
+    /// number of points kept after thinning
     pub n_points: usize,
 }
 

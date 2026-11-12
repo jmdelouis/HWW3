@@ -1,6 +1,6 @@
 //! End-to-end tests on synthetic bathymetries.
 
-use hww3_grid::config::{CoastSource, Config, Domain, Rule, Ww3Params};
+use hww3_grid::config::{CoastSource, Config, Domain, Quality, Rule, Ww3Params};
 use hww3_grid::geo::Ellipsoid;
 use hww3_grid::pipeline;
 use std::path::PathBuf;
@@ -53,6 +53,7 @@ fn config(name: &str, bathy: &PathBuf, domain: Domain, nmin: u32, nmax: u32, rul
         coast: CoastSource::Bathy,
         output_dir: std::env::temp_dir().join(format!("hww3_out_{name}")).to_string_lossy().into(),
         ww3: Ww3Params::default(),
+        quality: Quality::default(),
     }
 }
 
@@ -108,6 +109,10 @@ fn island_multiscale() {
     for (nside, count) in &s.nodes_per_nside {
         assert!(*count > 0, "no node at nside {nside}");
     }
+    // the quality step brings every angle within the default bounds
+    assert!(s.quality_before.n_angle_below_20 + s.quality_before.n_angle_above_120 > 0);
+    assert!(s.n_flips > 0);
+    assert!(s.mesh.angles_within(cfg.quality.min_angle_deg, cfg.quality.max_angle_deg));
     pipeline::write(&cfg, &grid, &s).unwrap();
 }
 
@@ -117,6 +122,47 @@ fn ear_clip_square() {
     let pts = [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0], [0.7, -0.7]];
     let t = hww3_grid::mesh::ear_clip(&pts);
     assert_eq!(t.len(), 3);
+}
+
+fn unit(lon: f64, lat: f64) -> [f64; 3] {
+    hww3_grid::geo::lonlat_to_vec(lon.to_radians(), lat.to_radians())
+}
+
+/// A flat quadrilateral split along its long diagonal is flipped to the
+/// short diagonal, which raises the smallest angle.
+#[test]
+fn delaunay_flip_short_diagonal() {
+    use hww3_grid::mesh::{delaunay_flips, tri_angles};
+    // u(0) and v(1) far apart along the equator, w(2) and x(3) close above/below
+    let nodes = [unit(-1.0, 0.0), unit(1.0, 0.0), unit(0.0, 0.2), unit(0.0, -0.2)];
+    let levels = [0u8; 4];
+    // (u, v, w) and (v, u, x), both counter-clockwise
+    let mut tris = vec![[0u32, 1, 2], [1, 0, 3]];
+    let min_angle = |t: &[[u32; 3]]| {
+        t.iter()
+            .flat_map(|t| tri_angles(&nodes[t[0] as usize], &nodes[t[1] as usize], &nodes[t[2] as usize]))
+            .fold(f64::MAX, f64::min)
+    };
+    let before = min_angle(&tris);
+    assert_eq!(delaunay_flips(&nodes, &levels, 1, &mut tris), 1);
+    let after = min_angle(&tris);
+    assert!(after > before, "{before} -> {after}");
+    // the new edge is (w, x)
+    assert!(tris.iter().all(|t| t.contains(&2) && t.contains(&3)));
+    // a second call does nothing
+    assert_eq!(delaunay_flips(&nodes, &levels, 1, &mut tris), 0);
+}
+
+/// A sliver triangle on the boundary is removed; good triangles are kept.
+#[test]
+fn trim_boundary_sliver() {
+    use hww3_grid::mesh::trim_boundary;
+    // a good triangle (0,1,2) and a sliver (1,3,2) glued along edge (1,2)
+    let nodes = [unit(0.0, 0.0), unit(1.0, 0.0), unit(0.5, 0.8), unit(4.0, 0.45)];
+    let mut tris = vec![[0u32, 1, 2], [1, 3, 2]];
+    let n = trim_boundary(4, &nodes, 20f64.to_radians(), 120f64.to_radians(), &mut tris);
+    assert_eq!(n, 1);
+    assert_eq!(tris, vec![[0, 1, 2]]);
 }
 
 #[test]
