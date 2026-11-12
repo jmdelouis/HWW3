@@ -1,0 +1,14 @@
+target/
+data/
+grids/
+runs/
+logs/
+__pycache__/
+*.pyc
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.out
+*.toc
+*.synctex.gz
