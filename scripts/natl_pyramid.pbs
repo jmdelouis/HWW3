@@ -1,0 +1,15 @@
+#!/bin/bash
+#PBS -N hww3_pyr
+#PBS -q sequentiel
+#PBS -l select=1:ncpus=1:mem=64g
+#PBS -l walltime=04:00:00
+# HEALPix Zarr V3 pyramid of a January 2026 run.
+#   qsub -v RUN=natl_jan2026,GRID=grids/natl,OUT=runs/natl_jan2026/hs.zarr,ARGS="--ntime 24" scripts/natl_pyramid.pbs
+# Needs the zarr-3 venv: /appli/anaconda/latest/bin/python -m venv zvenv &&
+#   zvenv/bin/pip install --only-binary=:all: zarr s3fs netCDF4 healpy
+cd $PBS_O_WORKDIR
+RUN=${RUN:-natl_jan2026}
+GRID=${GRID:-grids/natl}
+OUT=${OUT:-runs/$RUN/pyramid.zarr}
+zvenv/bin/python scripts/hs_pyramid.py runs/$RUN/ww3.202601.nc $GRID/plot/nodes.npz $OUT $ARGS
+du -sh $OUT 2>/dev/null; find $OUT -type f 2>/dev/null | wc -l

@@ -75,3 +75,44 @@ is split 2×2 per level); at a coarser level, the values of the fine nodes
 are averaged. Every level is then a complete regular HEALPix map of the
 domain, the repeated values compress well, and gridlook displays any level
 without interpolation.
+
+`scripts/hs_pyramid.py` writes it (`scripts/natl_pyramid.pbs` on Datarmor):
+
+```bash
+qsub -v RUN=natl_jan2026,GRID=grids/natl,OUT=runs/natl_jan2026/hs-l11-l7.zarr scripts/natl_pyramid.pbs
+zvenv/bin/python scripts/upload_s3.py runs/natl_jan2026/hs-l11-l7.zarr \
+  s3://grid4earth/public/trials/jmdelouis-2026-11-12-hww3/natl_jan2026/hs-l11-l7.zarr
+```
+
+The first command runs on a compute node (zarr 3 needs Python ≥ 3.11:
+`/appli/anaconda/latest/bin/python -m venv zvenv && zvenv/bin/pip install
+--only-binary=:all: zarr s3fs netCDF4 healpy`); the upload runs on a login
+node, since the compute nodes have no internet access, with the `grid4earth`
+AWS profile.
+
+Layout (GRID4EARTH production layout, as in `convert_highway`):
+
+- root group: `multiscales` (zarr-conventions v0.1, finest level first,
+  `resampling_method: mean`), `Conventions: CF-1.13`, provenance;
+- one group per depth (`11`, `10`, …, `7`) with the `dggs` attribute
+  (HEALPix, nested, WGS84 ellipsoid), a CF `crs` grid mapping, `cell_ids`
+  (uint64, ascending nested order), `time` (hours since 2000-01-01) and the
+  fields (`hs`, …) as `(time, cells)` float32;
+- `cells` covers every cell of the depth-3 pixels the domain touches
+  (contiguous identifiers); cells without data hold NaN and chunks holding
+  only NaN are not written;
+- chunks of one time step and at most 16,384 cells, shards of 24 time steps
+  and one depth-3 pixel, zstd level 5.
+
+Cell identifiers are computed from authalic latitudes, because the generator
+places HEALPix on the WGS84 ellipsoid; the script checks that every node is
+its pixel centre.
+
+January 2026, run `natl_jan2026` (Hs, hourly, depths 7–11): 4,991,755 data
+cells at nside 2048, 20,991 at nside 128; 9 min on one core, 2.5 GB in
+19,551 objects (1.6 times the raw node field, 1.5 GB), uploaded in 7.5 min.
+View it in the gridlook preview (zoom-driven level choice, time slider):
+
+<https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_jan2026/hs-l11-l7.zarr>
+
+It is a trial under `public/trials/` and can be removed at any time.

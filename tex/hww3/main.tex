@@ -426,8 +426,23 @@ altimeter $H_s$ along the tracks.}
 \label{fig:val_maps}
 \end{figure}
 
+\subsection{HEALPix pyramid output}
+Because every node is a HEALPix pixel, the hourly $H_s$ of the run is
+written as a Zarr V3 pyramid (\texttt{scripts/hs\_pyramid.py}), one level
+per depth from 7 to 11: at a depth finer than a node its value is copied to
+all its descendants, at a coarser depth a pixel is the mean of its four
+children that hold data. The finest level is thus the model field cell by
+cell and each coarser level its exact area average. The store follows the
+GRID4EARTH production layout (\texttt{multiscales} and \texttt{dggs}
+conventions, nested \texttt{cell\_ids} on the WGS84 ellipsoid, sharded zstd
+chunks). For January (744 hours) it holds 4\,991\,755 cells at
+$\nside=2048$ and 20\,991 at 128, costs \SI{9}{min} on one core and
+\SI{2.5}{GB} (1.6 times the raw node field), and is read without
+credentials by the gridlook preview, which picks the level from the zoom:
+\url{https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_jan2026/hs-l11-l7.zarr}.
+
 \todo{run with currents and sea level (7894069), boundary spectra from a
-global run, \texttt{BETAMAX} for ERA5, Zarr pyramid output}
+global run, \texttt{BETAMAX} for ERA5}
 
 \appendix
 \section{Reproducing}
