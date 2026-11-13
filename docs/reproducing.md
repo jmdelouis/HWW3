@@ -115,6 +115,20 @@ grid v2 (`grids/natl_v2`, step 3 with `configs/natl_v2_datarmor.json`); with
 v2, rerun `ww3_grid` and the `ww3_prnc` steps above in the v2 run directory,
 since the forcing files are interpolated on the nodes of one grid only.
 
+### Grid v2 run with BETAMAX for ERA5
+
+```bash
+J=$(qsub -v BETAMAX=1.75,RUN=natl_v2_jan2026_cur scripts/natl_v2_setup.pbs)   # 4 min
+qsub -W depend=afterok:$J -v RUN=natl_v2_jan2026_cur scripts/natl_v2_run.pbs
+```
+
+`natl_v2_setup.pbs` runs `ww3_grid` on `grids/natl_v2` with
+`&SIN4 BETAMAX = 1.75 /` appended to the generated namelists (the v1 runs
+used the default 1.43; check `betamax : 1.750` in `ww3_grid.out`), then
+`ww3_prnc` of wind, ice, currents and sea level on the v2 nodes from the
+netCDF files of the v1 runs (61, 1, 93 and 48 s). The run uses the
+currents-and-sea-level `ww3_shel.nml`.
+
 ### Altimeter validation
 
 ```bash

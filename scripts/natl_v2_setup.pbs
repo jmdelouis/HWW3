@@ -1,0 +1,46 @@
+#!/bin/bash
+#PBS -N hww3_v2_prep
+#PBS -q sequentiel
+#PBS -l mem=48g
+#PBS -l walltime=03:00:00
+#PBS -j oe
+#PBS -o /home1/datawork/jmdeloui/HWW3/logs/natl_v2_setup.log
+# Grid v2 run directory: ww3_grid (with ST4 BETAMAX) and ww3_prnc of the
+# January 2026 forcing (wind, ice, currents, sea level) on the v2 nodes.
+#   qsub -v BETAMAX=1.75,RUN=natl_v2_jan2026_cur scripts/natl_v2_setup.pbs
+# The netCDF forcing (wind.nc, ice.nc, current.nc, level.nc) is reused from
+# runs/natl_jan2026 and runs/natl_jan2026_cur (scripts/prep_era5.py,
+# scripts/prep_cmems.py): ww3_prnc interpolates it on the nodes of one grid.
+set -e
+R=/home1/datawork/jmdeloui/HWW3
+NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174
+source /usr/share/Modules/3.2.10/init/bash
+module purge
+module load intel-comp/20 impi/2019.9.304
+export LD_LIBRARY_PATH=$R/opt/lib:$NC/lib:$LD_LIBRARY_PATH
+export I_MPI_FABRICS=shm
+B=$R/opt/ww3/bin
+G=$R/grids/natl_v2
+BETAMAX=${BETAMAX:-1.75}
+RUN=${RUN:-natl_v2_jan2026_cur}
+D=$R/runs/$RUN
+mkdir -p $D; cd $D
+# ww3_grid: v2 mesh, generated namelists plus the ST4 wind-input growth parameter.
+for f in natl.msh natl.obc ww3_grid.nml; do ln -sf $G/$f .; done
+sed "s|^END OF NAMELISTS|\&SIN4 BETAMAX = $BETAMAX /\nEND OF NAMELISTS|" $G/namelists_natl.nml > namelists_natl.nml
+t0=$(date +%s)
+$B/ww3_grid > ww3_grid.out 2>&1 || { tail -40 ww3_grid.out; exit 1; }
+echo "ww3_grid: $(( $(date +%s)-t0 )) s"; grep -iE "BETAMAX|betamax" ww3_grid.out | head -3
+# Forcing on the v2 nodes.
+for f in wind.nc ice.nc; do ln -sf $R/runs/natl_jan2026/$f .; done
+for f in current.nc level.nc; do ln -sf $R/runs/natl_jan2026_cur/$f .; done
+cp $R/ww3/natl_jan2026/ww3_prnc_*.nml .
+for k in wind ice current level; do
+  t0=$(date +%s)
+  cp ww3_prnc_$k.nml ww3_prnc.nml
+  $B/ww3_prnc > ww3_prnc_$k.out 2>&1
+  echo "ww3_prnc $k: $(( $(date +%s)-t0 )) s"; tail -2 ww3_prnc_$k.out
+done
+rm -f ww3_prnc.nml
+cp $R/ww3/natl_jan2026_cur/ww3_shel.nml $R/ww3/natl_jan2026_cur/ww3_ounf.nml .
+ls -la
