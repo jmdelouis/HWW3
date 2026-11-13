@@ -54,10 +54,11 @@ characteristic, angle statistics and level jump across edges.
 
 ## Documentation
 
-- Sphinx site (`docs/`, built and published by the CI on GitHub Pages):
-  installation, configuration, algorithm, outputs, validation, WW3 setup and
+- Sphinx site (`docs/`, built and published by the CI on GitHub Pages,
+  https://jmdelouis.github.io/HWW3/): installation, configuration, algorithm, outputs, validation, WW3 setup and
   a step-by-step [reproduction guide](docs/reproducing.md).
-- Rust API: `cd hww3-grid && cargo doc --no-deps --open`.
+- Rust API: https://jmdelouis.github.io/HWW3/rust/hww3_grid/ (or
+  `cd hww3-grid && cargo doc --no-deps --open`).
 - Internal note (LaTeX): `tex/hww3/main.tex`, mirrored on Overleaf
   (https://www.overleaf.com/project/6af6a96c4ed66a0cad905cb6) with
   `scripts/sync_overleaf.sh`.
