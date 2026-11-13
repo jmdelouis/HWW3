@@ -145,6 +145,17 @@ used the default 1.43; check `betamax : 1.750` in `ww3_grid.out`), then
 netCDF files of the v1 runs (61, 1, 93 and 48 s). The run uses the
 currents-and-sea-level `ww3_shel.nml`.
 
+The same scripts run on grid v3 with `GRID`:
+
+```bash
+J=$(qsub -v BETAMAX=1.75,RUN=natl_v3_jan2026_cur,GRID=grids/natl_v3 -o logs/natl_v3_setup.log scripts/natl_v2_setup.pbs)
+qsub -W depend=afterok:$J -v RUN=natl_v3_jan2026_cur -o logs/natl_v3_run.log scripts/natl_v2_run.pbs
+```
+
+(PBS jobs 7901052 and 7901053; `ww3_grid` 44 s, 794,613 sea points,
+`ww3_prnc` 80, 1, 133 and 58 s). With the same forcing and `BETAMAX` as
+the v2 run, the difference between the two runs is the grid alone.
+
 ### Altimeter validation
 
 ```bash

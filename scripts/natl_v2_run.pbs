@@ -5,8 +5,9 @@
 #PBS -l walltime=30:00:00
 #PBS -j oe
 #PBS -o /home1/datawork/jmdeloui/HWW3/logs/natl_v2_run.log
-# January 2026 run on grid v2 (directory from natl_v2_setup.pbs), 112 MPI ranks, then ww3_ounf.
+# January 2026 run on grid v2 or v3 (directory from natl_v2_setup.pbs), 112 MPI ranks, then ww3_ounf.
 #   qsub -v RUN=natl_v2_jan2026_cur scripts/natl_v2_run.pbs
+#   qsub -v RUN=natl_v3_jan2026_cur -o logs/natl_v3_run.log scripts/natl_v2_run.pbs
 set -e
 R=/home1/datawork/jmdeloui/HWW3
 NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174

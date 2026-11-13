@@ -5,9 +5,10 @@
 #PBS -l walltime=03:00:00
 #PBS -j oe
 #PBS -o /home1/datawork/jmdeloui/HWW3/logs/natl_v2_setup.log
-# Grid v2 run directory: ww3_grid (with ST4 BETAMAX) and ww3_prnc of the
+# Run directory on grid v2 (or GRID): ww3_grid (with ST4 BETAMAX) and ww3_prnc of the
 # January 2026 forcing (wind, ice, currents, sea level) on the v2 nodes.
 #   qsub -v BETAMAX=1.75,RUN=natl_v2_jan2026_cur scripts/natl_v2_setup.pbs
+#   qsub -v BETAMAX=1.75,RUN=natl_v3_jan2026_cur,GRID=grids/natl_v3 -o logs/natl_v3_setup.log scripts/natl_v2_setup.pbs
 # The netCDF forcing (wind.nc, ice.nc, current.nc, level.nc) is reused from
 # runs/natl_jan2026 and runs/natl_jan2026_cur (scripts/prep_era5.py,
 # scripts/prep_cmems.py): ww3_prnc interpolates it on the nodes of one grid.
@@ -20,7 +21,7 @@ module load intel-comp/20 impi/2019.9.304
 export LD_LIBRARY_PATH=$R/opt/lib:$NC/lib:$LD_LIBRARY_PATH
 export I_MPI_FABRICS=shm
 B=$R/opt/ww3/bin
-G=$R/grids/natl_v2
+G=$R/${GRID:-grids/natl_v2}
 BETAMAX=${BETAMAX:-1.75}
 RUN=${RUN:-natl_v2_jan2026_cur}
 D=$R/runs/$RUN
