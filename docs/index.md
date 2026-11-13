@@ -1,8 +1,10 @@
 # HWW3: HEALPix unstructured grids for WAVEWATCH III
 
 HWW3 builds WAVEWATCH III (WW3) unstructured grids whose nodes are the
-centres of **multi-resolution HEALPix cells**. The grid is refined near the
-coast (from `nside_min` in the open ocean to `nside_max` at the shoreline),
+centres of **multi-resolution HEALPix cells**. The grid is refined from the
+bathymetry, with the depth and slope criteria of the classical wave-model
+grid generators (from `nside_min` over the deep ocean to `nside_max` in
+shallow water and over steep slopes),
 every node is a NESTED HEALPix pixel, and the WW3 output is therefore
 already a HEALPix map: it is written as a GRID4EARTH Zarr V3 pyramid and
 displayed in gridlook without interpolation.

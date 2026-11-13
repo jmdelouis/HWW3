@@ -2,14 +2,21 @@
 #PBS -N hww3_pyr
 #PBS -q sequentiel
 #PBS -l select=1:ncpus=1:mem=64g
-#PBS -l walltime=04:00:00
-# HEALPix Zarr V3 pyramid of a January 2026 run.
-#   qsub -v RUN=natl_jan2026,GRID=grids/natl,OUT=runs/natl_jan2026/hs.zarr,ARGS="--ntime 24" scripts/natl_pyramid.pbs
+#PBS -l walltime=12:00:00
+# HEALPix Zarr V3 pyramids of a grid and, if RUN is set, of a January 2026
+# run on it (all fields).
+#   qsub -v GRID=grids/natl_v3 scripts/natl_pyramid.pbs                 # grid only
+#   qsub -v RUN=natl_jan2026,GRID=grids/natl scripts/natl_pyramid.pbs
+#   qsub -v RUN=natl_jan2026,GRID=grids/natl,ARGS="--ntime 24" scripts/natl_pyramid.pbs   # test
+# Writes runs/$RUN/ww3-l11-l7.zarr and $GRID/grid-l11-l7.zarr.
 # Needs the zarr-3 venv: /appli/anaconda/latest/bin/python -m venv zvenv &&
 #   zvenv/bin/pip install --only-binary=:all: zarr s3fs netCDF4 healpy
 cd $PBS_O_WORKDIR
-RUN=${RUN:-natl_jan2026}
 GRID=${GRID:-grids/natl}
-OUT=${OUT:-runs/$RUN/pyramid.zarr}
-zvenv/bin/python scripts/hs_pyramid.py runs/$RUN/ww3.202601.nc $GRID/plot/nodes.npz $OUT $ARGS
+OUT=${OUT:-runs/$RUN/ww3-l11-l7.zarr}
+GOUT=${GOUT:-$GRID/grid-l11-l7.zarr}
+zvenv/bin/python scripts/grid_pyramid.py $GRID $GOUT || exit 1
+du -sh $GOUT
+[ -z "$RUN" ] && exit 0
+zvenv/bin/python scripts/ww3_pyramid.py runs/$RUN/ww3.202601.nc $GRID/plot/nodes.npz $OUT $ARGS
 du -sh $OUT 2>/dev/null; find $OUT -type f 2>/dev/null | wc -l

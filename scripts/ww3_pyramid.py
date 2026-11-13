@@ -1,13 +1,12 @@
 """Write WW3 fields on the HEALPix grid as a Zarr V3 multi-resolution pyramid.
 
 Usage:
-    python scripts/hs_pyramid.py RUN_NC NODES_NPZ OUT [--vars hs,t02]
-        [--levels 7-11] [--tstride 1] [--profile grid4earth]
-        [--endpoint https://s3.gra.io.cloud.ovh.net]
+    python scripts/ww3_pyramid.py RUN_NC NODES_NPZ OUT [--vars all|hs,t02,...]
+        [--levels 7-11] [--tstride 1] [--ntime N]
 
 RUN_NC     ww3_ounf output (fields on the nodes, ``time`` in days).
 NODES_NPZ  ``grids/<name>/plot/nodes.npz`` (lon, lat, level of every node).
-OUT        local directory or ``s3://bucket/prefix/name.zarr``.
+OUT        local directory (uploaded afterwards with ``scripts/upload_s3.py``).
 
 Every node of the grid is the centre of a NESTED HEALPix pixel of depth
 ``level`` (nside = 2**level). The pyramid holds one group per depth, from
@@ -16,31 +15,40 @@ the coarsest to the finest requested:
 * at a depth finer than a node's, the node value is copied to all its
   descendants (each pixel is cut 2x2 per level);
 * at a depth coarser than a node's, a pixel is the mean of its 4 children
-  that hold data (equal areas, so this is the area mean).
+  that hold data (equal areas, so this is the area mean). Directions are
+  averaged as unit vectors.
 
-So the finest level is the model field exactly, written cell by cell, and
-each coarser level is its exact area average. Pixels without any wet node
-are not stored.
+So the finest level is the model field exactly and each coarser level is
+its exact area average.
 
-Layout (GRID4EARTH production layout, as in ``convert_highway``)::
+Fields (``--vars all``): every scalar of the ww3_ounf file (``hs``, ``t02``,
+``fp``, ``dir``, ``wlv``, ``ice`` and the components ``uwnd``, ``vwnd``,
+``ucur``, ``vcur``), plus the speeds ``wspd`` and ``cspd`` computed from the
+components. Fields absent from the file are skipped.
+
+Layout: the zarr DGGS convention v1 (as written by ``xdggs``) and the zarr
+multiscales convention v0.1::
 
     OUT/                     root: multiscales, Conventions, provenance
-      11/  hs (time, cells), cell_ids (cells), crs, time    dggs attribute
+      11/  hs, t02, ... (time, cells), cell_ids (cells), time   dggs attribute
       10/  ...
       7/   ...
+
+There is no CF ``crs`` grid-mapping variable: readers that find one (easygems
+``healpix_nside``/``healpix_order``) take a sphere and ignore the ``dggs``
+ellipsoid, which moves every cell south by up to 0.13 degree.
 
 ``cells`` holds every cell of the depth-``SHARD_LEVEL`` pixels the domain
 touches, in ascending nested order (contiguous identifiers, so a chunk is a
 compact area); cells without data hold NaN and chunks with only NaN are not
 written. Arrays are sharded: a shard is ``TSHARD`` time steps of one
 depth-``SHARD_LEVEL`` pixel, a chunk one time step of at most
-``CHUNK_CELLS`` cells, compressed with zstd. Replicated values compress very
-well, so the finest level costs little more than the model field itself.
+``CHUNK_CELLS`` cells, compressed with zstd.
 
 The generator places HEALPix on the WGS84 ellipsoid (geodetic latitudes are
-converted to authalic latitudes, as ``healpix-geo`` does in the GRID4EARTH
-production), so the cell identifiers are computed from authalic latitudes
-and the WGS84 ellipsoid is declared in ``dggs`` and ``crs``.
+converted to authalic latitudes, as ``healpix-geo`` does), so the cell
+identifiers are computed from authalic latitudes and the WGS84 ellipsoid is
+declared in ``dggs``.
 """
 import argparse
 import datetime
@@ -48,7 +56,6 @@ import json
 import time as _time
 
 import healpy as hp
-import netCDF4
 import numpy as np
 import zarr
 
@@ -71,8 +78,15 @@ MULTISCALES_CONVENTION = {
     "description": "Multiscale layout of zarr datasets",
 }
 
-
 WGS84 = {"name": "WGS84", "semi_major_axis": 6378137.0, "inverse_flattening": 298.257223563}
+
+ALL_VARS = ["hs", "t02", "fp", "dir", "wspd", "uwnd", "vwnd", "cspd", "ucur", "vcur", "wlv", "ice"]
+DERIVED = {
+    "wspd": ("uwnd", "vwnd", {"long_name": "wind speed at 10 m", "standard_name": "wind_speed", "units": "m s-1"}),
+    "cspd": ("ucur", "vcur", {"long_name": "surface current speed",
+                              "standard_name": "sea_water_speed", "units": "m s-1"}),
+}
+ANGLES = {"dir"}
 
 
 def authalic_deg(lat_deg):
@@ -133,66 +147,105 @@ def dense_layout(cells, level):
     return all_cells, pos, per_shard
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("run_nc")
-    ap.add_argument("nodes_npz")
-    ap.add_argument("out")
-    ap.add_argument("--vars", default="hs")
-    ap.add_argument("--levels", default="7-11")
-    ap.add_argument("--tstride", type=int, default=1)
-    ap.add_argument("--ntime", type=int, default=0, help="first N steps only (test)")
-    ap.add_argument("--profile", default=None)
-    ap.add_argument("--endpoint", default="https://s3.gra.io.cloud.ovh.net")
-    a = ap.parse_args()
-    t0 = _time.time()
-    lmin, lmax = (int(x) for x in a.levels.split("-"))
-    names = a.vars.split(",")
+def nanmean_reduce(cur, starts):
+    """Mean over runs starting at ``starts`` (last axis), ignoring NaN."""
+    ok = np.isfinite(cur)
+    s = np.add.reduceat(np.where(ok, cur, 0.0), starts, axis=-1)
+    c = np.add.reduceat(ok.astype(np.float32), starts, axis=-1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return (s / c).astype(np.float32)
 
-    d = netCDF4.Dataset(a.run_nc)
-    lon = np.asarray(d["longitude"][:], float)
-    lat = np.asarray(d["latitude"][:], float)
-    nodes = np.load(a.nodes_npz)
-    assert np.allclose(nodes["lon"], lon, atol=1e-4) and np.allclose(nodes["lat"], lat, atol=1e-4)
-    level = nodes["level"].astype(np.int64)
-    if level.min() < lmin or level.max() > lmax:
-        print(f"note: node depths {level.min()}-{level.max()}, pyramid {lmin}-{lmax}")
-    tsel = np.arange(0, d["time"].size, a.tstride)
-    if a.ntime:
-        tsel = tsel[: a.ntime]
-    times = netCDF4.num2date(d["time"][tsel], d["time"].units)
-    hours = np.array([(t - datetime.datetime(2000, 1, 1)).total_seconds() / 3600 for t in
-                      [datetime.datetime(*tt.timetuple()[:6]) for tt in times]])
 
-    ipix = node_pixels(lon, lat, level)
-    fine_cells, fine_node = build_index(ipix, level, lmax)
-    print(f"{fine_cells.size} cells at depth {lmax} from {ipix.size} nodes ({_time.time() - t0:.0f} s)", flush=True)
+def nanmax_reduce(cur, starts):
+    """Max over runs starting at ``starts`` (last axis), ignoring NaN."""
+    return np.fmax.reduceat(cur, starts, axis=-1).astype(np.float32)
 
-    # Per depth: sorted data cells, and how to get them from the finer depth.
+
+def open_store(path):
+    return zarr.storage.LocalStore(path)
+
+
+def dggs_group(root, lv, all_cells, per_shard):
+    """Level group with the DGGS attribute and its ``cell_ids`` coordinate."""
+    g = root.create_group(str(lv))
+    g.attrs["zarr_conventions"] = [DGGS_CONVENTION]
+    g.attrs["dggs"] = {"name": "healpix", "refinement_level": lv, "indexing_scheme": "nested",
+                       "ellipsoid": dict(WGS84), "spatial_dimension": "cells",
+                       "coordinate": "cell_ids", "compression": "none"}
+    ids = g.create_array("cell_ids", shape=(all_cells.size,), dtype="uint64", chunks=(per_shard,),
+                         compressors=[zarr.codecs.ZstdCodec(level=3)], fill_value=2 ** 64 - 1,
+                         dimension_names=["cells"],
+                         attributes={"standard_name": "healpix_index", "units": "1"})
+    ids[:] = all_cells.astype(np.uint64)
+    return g
+
+
+def multiscales(names, lmin, lmax, resampling):
+    """Root ``multiscales`` attribute: finest level first."""
+    return {"layout": [
+        {"asset": f"{lv}/{n}"} if lv == lmax else
+        {"asset": f"{lv}/{n}", "derived_from": f"{lmax}/{n}",
+         "transform": {"scale": [float(2 ** (lmax - lv))]}, "resampling_method": resampling.get(n, "mean")}
+        for lv in range(lmax, lmin - 1, -1) for n in names]}
+
+
+def level_indices(fine_cells, lmin, lmax):
+    """Per depth: sorted data cells and the run starts from the finer depth."""
     per_level = {lmax: {"cells": fine_cells}}
     cells = fine_cells
     for lv in range(lmax - 1, lmin - 1, -1):
         parents, starts = coarsen_index(cells)
         per_level[lv] = {"cells": parents, "starts": starts}
         cells = parents
+    return per_level
 
-    if a.out.startswith("s3://"):
-        store = zarr.storage.FsspecStore.from_url(
-            a.out, storage_options={"profile": a.profile, "client_kwargs": {"endpoint_url": a.endpoint}})
-    else:
-        store = zarr.storage.LocalStore(a.out)
+
+def main():
+    import netCDF4
+
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("run_nc")
+    ap.add_argument("nodes_npz")
+    ap.add_argument("out")
+    ap.add_argument("--vars", default="all")
+    ap.add_argument("--levels", default="7-11")
+    ap.add_argument("--tstride", type=int, default=1)
+    ap.add_argument("--ntime", type=int, default=0, help="first N steps only (test)")
+    a = ap.parse_args()
+    t0 = _time.time()
+    lmin, lmax = (int(x) for x in a.levels.split("-"))
+
+    d = netCDF4.Dataset(a.run_nc)
+    have = set(d.variables)
+    want = ALL_VARS if a.vars == "all" else a.vars.split(",")
+    names = [n for n in want if n in have or (n in DERIVED and set(DERIVED[n][:2]) <= have)]
+    print("fields:", ",".join(names), flush=True)
+    lon = np.asarray(d["longitude"][:], float)
+    lat = np.asarray(d["latitude"][:], float)
+    nodes = np.load(a.nodes_npz)
+    assert np.allclose(nodes["lon"], lon, atol=1e-4) and np.allclose(nodes["lat"], lat, atol=1e-4)
+    level = nodes["level"].astype(np.int64)
+    tsel = np.arange(0, d["time"].size, a.tstride)
+    if a.ntime:
+        tsel = tsel[: a.ntime]
+    times = netCDF4.num2date(d["time"][tsel], d["time"].units)
+    hours = np.array([(datetime.datetime(*t.timetuple()[:6]) - datetime.datetime(2000, 1, 1)).total_seconds()
+                      / 3600 for t in times])
+
+    ipix = node_pixels(lon, lat, level)
+    fine_cells, fine_node = build_index(ipix, level, lmax)
+    per_level = level_indices(fine_cells, lmin, lmax)
+    print(f"{fine_cells.size} cells at depth {lmax} from {ipix.size} nodes ({_time.time() - t0:.0f} s)", flush=True)
+
+    store = open_store(a.out)
     root = zarr.open_group(store, mode="w", zarr_format=3)
     root.attrs.update({
         "Conventions": "CF-1.13",
         "title": "WAVEWATCH III on a multi-resolution HEALPix grid, North Atlantic, January 2026",
         "source": f"WAVEWATCH III, {a.run_nc}",
-        "history": f"{datetime.datetime.now(datetime.timezone.utc):%Y-%m-%dT%H:%MZ} scripts/hs_pyramid.py (github.com/jmdelouis/HWW3)",
+        "history": f"{datetime.datetime.now(datetime.timezone.utc):%Y-%m-%dT%H:%MZ} scripts/ww3_pyramid.py (github.com/jmdelouis/HWW3)",
         "zarr_conventions": [MULTISCALES_CONVENTION, DGGS_CONVENTION],
-        "multiscales": {"layout": [
-            {"asset": f"{lv}/{n}"} if lv == lmax else
-            {"asset": f"{lv}/{n}", "derived_from": f"{lmax}/{n}",
-             "transform": {"scale": [float(2 ** (lmax - lv))]}, "resampling_method": "mean"}
-            for lv in range(lmax, lmin - 1, -1) for n in names]},
+        "multiscales": multiscales(names, lmin, lmax, {}),
     })
 
     zstd = zarr.codecs.ZstdCodec(level=5)
@@ -200,21 +253,7 @@ def main():
     for lv in range(lmax, lmin - 1, -1):
         all_cells, pos, per_shard = dense_layout(per_level[lv]["cells"], lv)
         dense[lv] = (all_cells.size, pos)
-        g = root.create_group(str(lv))
-        g.attrs["zarr_conventions"] = [DGGS_CONVENTION]
-        g.attrs["dggs"] = {"name": "healpix", "refinement_level": lv, "indexing_scheme": "nested",
-                           "ellipsoid": dict(WGS84), "spatial_dimension": "cells",
-                           "coordinate": "cell_ids", "compression": "none"}
-        g.create_array("crs", shape=(), dtype="int8", fill_value=0, attributes={
-            "grid_mapping_name": "healpix", "refinement_level": lv, "healpix_nside": 2 ** lv,
-            "indexing_scheme": "nested", "healpix_order": "nested",
-            "reference_ellipsoid_name": "WGS84", "semi_major_axis": WGS84["semi_major_axis"],
-            "inverse_flattening": WGS84["inverse_flattening"]})
-        ids = g.create_array("cell_ids", shape=(all_cells.size,), dtype="uint64", chunks=(per_shard,),
-                             compressors=[zarr.codecs.ZstdCodec(level=3)], fill_value=2 ** 64 - 1,
-                             dimension_names=["cells"],
-                             attributes={"standard_name": "healpix_index", "units": "1"})
-        ids[:] = all_cells.astype(np.uint64)
+        g = dggs_group(root, lv, all_cells, per_shard)
         tv = g.create_array("time", shape=(tsel.size,), dtype="float64", chunks=(tsel.size,),
                             dimension_names=["time"], fill_value=np.nan,
                             attributes={"standard_name": "time", "units": "hours since 2000-01-01 00:00:00",
@@ -222,10 +261,15 @@ def main():
         tv[:] = hours
         chunk = min(per_shard, CHUNK_CELLS)
         for n in names:
-            src = d[n]
-            attrs = {k: src.getncattr(k) for k in ("long_name", "standard_name", "units")
-                     if k in src.ncattrs()}
-            attrs.update({"grid_mapping": "crs", "coordinates": "cell_ids"})
+            if n in DERIVED:
+                attrs = dict(DERIVED[n][2])
+            else:
+                src = d[n]
+                attrs = {k: src.getncattr(k) for k in ("long_name", "standard_name", "units")
+                         if k in src.ncattrs()}
+            attrs["coordinates"] = "cell_ids"
+            if n in ANGLES:
+                attrs["cell_methods"] = "area: mean (unit vectors)"
             arrays[(lv, n)] = g.create_array(
                 n, shape=(tsel.size, all_cells.size), dtype="float32",
                 chunks=(1, chunk), shards=(min(TSHARD, tsel.size), per_shard),
@@ -233,21 +277,29 @@ def main():
                 attributes=attrs)
         print(f"depth {lv}: {per_level[lv]['cells'].size} data cells, {all_cells.size} stored", flush=True)
 
+    def read(n, bt):
+        if n in DERIVED:
+            u, v = (np.ma.filled(d[c][bt].astype(np.float32), np.nan) for c in DERIVED[n][:2])
+            return np.hypot(u, v)
+        return np.ma.filled(d[n][bt].astype(np.float32), np.nan)
+
     # Time blocks of one shard: build all depths in memory, write once.
     for b0 in range(0, tsel.size, TSHARD):
         bt = tsel[b0:b0 + TSHARD]
         for n in names:
-            v = d[n][bt]
-            v = np.ma.filled(v.astype(np.float32), np.nan)  # (nt, nnode)
-            cur = v[:, fine_node]
+            v = read(n, bt)[:, fine_node]  # (nt, fine cells)
+            if n in ANGLES:
+                r = np.radians(v)
+                comps = [np.cos(r), np.sin(r)]
             for lv in range(lmax, lmin - 1, -1):
-                if lv < lmax:
-                    st = per_level[lv]["starts"]
-                    ok = np.isfinite(cur)
-                    s = np.add.reduceat(np.where(ok, cur, 0.0), st, axis=1)
-                    c = np.add.reduceat(ok.astype(np.float32), st, axis=1)
-                    with np.errstate(invalid="ignore", divide="ignore"):
-                        cur = (s / c).astype(np.float32)
+                if n in ANGLES:
+                    if lv < lmax:
+                        comps = [nanmean_reduce(c, per_level[lv]["starts"]) for c in comps]
+                    cur = (np.degrees(np.arctan2(comps[1], comps[0])) % 360).astype(np.float32)
+                else:
+                    if lv < lmax:
+                        v = nanmean_reduce(v, per_level[lv]["starts"])
+                    cur = v
                 size, pos = dense[lv]
                 out = np.full((bt.size, size), np.nan, np.float32)
                 out[:, pos] = cur

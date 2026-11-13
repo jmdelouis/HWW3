@@ -6,6 +6,7 @@ use crate::config::{CoastSource, Config};
 use crate::geo::{angle, healpix_to_geodetic_deg, lonlat_to_vec, normalize, Earth};
 use crate::gshhg;
 use crate::mesh::triangulate;
+use crate::refine;
 use crate::tree;
 use crate::validate::{check, MeshReport};
 use crate::ww3;
@@ -28,8 +29,10 @@ pub struct Summary {
     pub nside_min: u32,
     /// finest nside
     pub nside_max: u32,
-    /// coastline points kept in the index (after thinning)
+    /// coastline points kept in the index (after thinning; 0 without distance rules)
     pub n_coast_points: usize,
+    /// cells split by the depth and slope criteria
+    pub n_bathy_splits: usize,
     /// leaves of the refined and balanced tree (wet and dry)
     pub n_leaves: usize,
     /// leaves split by the 2:1 balance
@@ -87,6 +90,10 @@ pub struct Grid {
     pub tris: Vec<[u32; 3]>,
     /// 0-based indices of the open-boundary nodes
     pub obc: Vec<u32>,
+    /// mean bathymetry slope |grad h| of the cell (with `refine_bathy`)
+    pub slope: Vec<f64>,
+    /// cell size required by the depth and slope criteria, km (with `refine_bathy`)
+    pub target_km: Vec<f64>,
 }
 
 /// Densify chains of (lon, lat) degrees into unit vectors on the HEALPix
@@ -174,16 +181,27 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
     let bathy = Bathy::load(&cfg.bathy)?;
     lap("load bathymetry", &mut t0);
 
-    let cpts = coast_points(cfg, &earth, &bathy)?;
-    let bucket_depth = dmax.saturating_sub(2).max(1);
-    let thin_depth = (dmax + 2).min(29);
-    let coast = CoastIndex::new(&cpts, bucket_depth, thin_depth);
-    drop(cpts);
-    lap("coast index", &mut t0);
+    let coast = if cfg.refine.is_empty() {
+        None
+    } else {
+        let cpts = coast_points(cfg, &earth, &bathy)?;
+        let bucket_depth = dmax.saturating_sub(2).max(1);
+        let thin_depth = (dmax + 2).min(29);
+        let c = CoastIndex::new(&cpts, bucket_depth, thin_depth);
+        lap("coast index", &mut t0);
+        Some(c)
+    };
+    let br = cfg.refine_bathy.as_ref().map(|p| refine::bathy_refinement(&bathy, &earth, p, dmin, dmax));
+    if let Some(b) = &br {
+        eprintln!("[hww3-grid] bathymetry blocks of {} samples, {} cells to split", b.block, b.splits.len());
+        lap("depth and slope criteria", &mut t0);
+    }
 
-    let tr = tree::build(cfg, &earth, &coast);
+    let tr = tree::build(cfg, &earth, coast.as_ref(), br.as_ref().map(|b| &b.splits));
     let leaves = tr.leaves;
     lap("refinement + 2:1 balance", &mut t0);
+    let n_bathy_splits = br.as_ref().map_or(0, |b| b.splits.len());
+    let leaf_diag = br.map(|b| refine::leaf_diagnostics(&leaves, &b.blocks, dmin, dmax));
 
     let cb = cell_bathy(&bathy, &earth, &leaves, dmin, dmax);
     drop(bathy);
@@ -278,6 +296,8 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
         depth: vec![],
         tris: vec![],
         obc: vec![],
+        slope: vec![],
+        target_km: vec![],
     };
     for i in 0..n {
         if keep[i] {
@@ -290,6 +310,10 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
             grid.depth.push(cb[i].mean_wet_depth.max(cfg.ww3.dmin));
             if tri.touches_outside[i] {
                 grid.obc.push(new_id[i]);
+            }
+            if let Some((s, t)) = &leaf_diag {
+                grid.slope.push(s[i]);
+                grid.target_km.push(t[i]);
             }
         }
     }
@@ -313,7 +337,8 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
         ellipsoid: format!("{:?}", cfg.ellipsoid),
         nside_min: cfg.nside_min,
         nside_max: cfg.nside_max,
-        n_coast_points: coast.n_points,
+        n_coast_points: coast.as_ref().map_or(0, |c| c.n_points),
+        n_bathy_splits: n_bathy_splits,
         n_leaves: n,
         n_balance_splits: tr.n_balance_splits,
         n_wet_leaves: n_wet,
@@ -357,6 +382,10 @@ pub fn write(cfg: &Config, grid: &Grid, summary: &Summary) -> Result<()> {
     let flat: Vec<u32> = grid.tris.iter().flatten().copied().collect();
     ww3::write_raw(&raw.join("tri.u32"), &flat)?;
     ww3::write_raw(&raw.join("obc.u32"), &grid.obc)?;
+    if !grid.slope.is_empty() {
+        ww3::write_raw(&raw.join("slope.f64"), &grid.slope)?;
+        ww3::write_raw(&raw.join("target_km.f64"), &grid.target_km)?;
+    }
     let meta = serde_json::json!({
         "config": cfg,
         "summary": summary,
@@ -367,7 +396,9 @@ pub fn write(cfg: &Config, grid: &Grid, summary: &Summary) -> Result<()> {
             "lat.f64": "latitude (deg, geodetic on the chosen ellipsoid)",
             "depth.f64": "mean water depth over wet samples (m, positive down)",
             "tri.u32": "triangles, 3 x 0-based node indices, counter-clockwise",
-            "obc.u32": "0-based open-boundary node indices"
+            "obc.u32": "0-based open-boundary node indices",
+            "slope.f64": "mean bathymetry slope |grad h| of the cell (with refine_bathy)",
+            "target_km.f64": "cell size required by the depth and slope criteria, km (with refine_bathy)"
         }
     });
     std::fs::write(out.join("meta.json"), serde_json::to_string_pretty(&meta)?)?;

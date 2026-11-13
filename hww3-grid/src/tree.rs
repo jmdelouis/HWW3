@@ -1,5 +1,6 @@
-//! Adaptive NESTED HEALPix quadtree: refinement by distance to the coast and
-//! 2:1 balance between neighbouring leaves (8-neighbourhood).
+//! Adaptive NESTED HEALPix quadtree: refinement from the bathymetry (depth
+//! and slope, see [`crate::refine`]) and optionally by distance to the coast,
+//! then 2:1 balance between neighbouring leaves (8-neighbourhood).
 
 use crate::coast::CoastIndex;
 use crate::config::{depth_of_nside, Config};
@@ -25,7 +26,9 @@ pub fn cell_radius(d: u8, h: u64) -> f64 {
 }
 
 struct Refiner<'a> {
-    coast: &'a CoastIndex,
+    coast: Option<&'a CoastIndex>,
+    /// cells that the bathymetry criteria require to split
+    splits: Option<&'a HashSet<u64>>,
     /// (max angular distance, depth), sorted by decreasing depth
     rules: Vec<(f64, u8)>,
     dmin: u8,
@@ -35,10 +38,14 @@ struct Refiner<'a> {
 
 impl<'a> Refiner<'a> {
     fn required_depth(&self, d: u8, h: u64) -> u8 {
+        let Some(coast) = self.coast else { return self.dmin };
+        if self.rules.is_empty() {
+            return self.dmin;
+        }
         let (lo, la) = nested::center(d, h);
         let c = lonlat_to_vec(lo, la);
         let r = cell_radius(d, h);
-        let dist = self.coast.nearest(&c, self.max_rule_ang + r) - r;
+        let dist = coast.nearest(&c, self.max_rule_ang + r) - r;
         let mut req = self.dmin;
         for (ang, depth) in &self.rules {
             if dist < *ang && *depth > req {
@@ -49,7 +56,9 @@ impl<'a> Refiner<'a> {
     }
 
     fn refine(&self, d: u8, h: u64, leaves: &mut Vec<(u8, u64)>, internal: &mut Vec<u64>) {
-        if d < self.dmax && self.required_depth(d, h) > d {
+        let split = d < self.dmax
+            && (self.splits.is_some_and(|s| s.contains(&uniq(d, h))) || self.required_depth(d, h) > d);
+        if split {
             internal.push(uniq(d, h));
             for k in 0..4 {
                 self.refine(d + 1, 4 * h + k, leaves, internal);
@@ -81,12 +90,14 @@ pub fn morton(d: u8, h: u64, dmax: u8) -> u64 {
 ///
 /// Roots are the cells of depth `dmin` whose centre lies in the domain plus a
 /// margin of three cell widths. A cell of depth `d` is split while
-/// `d < dmax` and a refinement rule requires a finer depth: the distance
-/// from the cell to the coast (distance from the centre to the nearest coast
-/// point minus the cell radius) is below the rule's `max_dist_km`. Then
+/// `d < dmax` and either the bathymetry criteria require it (`splits`, from
+/// [`crate::refine::bathy_refinement`]) or a distance rule requires a finer
+/// depth: the distance from the cell to the coast (distance from the centre
+/// to the nearest coast point minus the cell radius) is below the rule's
+/// `max_dist_km`. Then
 /// leaves are split until no leaf has a neighbour (edge or corner) more
 /// than one level finer (2:1 balance).
-pub fn build(cfg: &Config, earth: &Earth, coast: &CoastIndex) -> Tree {
+pub fn build(cfg: &Config, earth: &Earth, coast: Option<&CoastIndex>, splits: Option<&HashSet<u64>>) -> Tree {
     let dmin = cfg.dmin();
     let dmax = cfg.dmax();
     let mut rules: Vec<(f64, u8)> = cfg
@@ -96,7 +107,7 @@ pub fn build(cfg: &Config, earth: &Earth, coast: &CoastIndex) -> Tree {
         .collect();
     rules.sort_by(|a, b| b.1.cmp(&a.1));
     let max_rule_ang = rules.iter().map(|r| r.0).fold(0.0, f64::max);
-    let refiner = Refiner { coast, rules, dmin, dmax, max_rule_ang };
+    let refiner = Refiner { coast, splits, rules, dmin, dmax, max_rule_ang };
 
     // roots: cells of depth dmin whose centre lies in the domain + margin
     let omega = 4.0 * std::f64::consts::PI / (12.0 * 4f64.powi(dmin as i32));

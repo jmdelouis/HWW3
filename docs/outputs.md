@@ -25,6 +25,8 @@ Nodes are in NESTED (Morton) order.
 | `depth.f64` | float64 | mean wet depth of the cell (m, positive down), at least `ww3.dmin` |
 | `tri.u32` | uint32 | triangles, 3 × 0-based node indices, counter-clockwise |
 | `obc.u32` | uint32 | 0-based open-boundary node indices |
+| `slope.f64` | float64 | mean bathymetry slope of the cell (with `refine_bathy`) |
+| `target_km.f64` | float64 | cell size required by the size functions, km (with `refine_bathy`) |
 
 `hww3-grid cells <output_dir>` adds `raw/cell_lon.f64` and
 `raw/cell_lat.f64` (n × 4 cell vertices S, E, N, W) for plots.
@@ -72,32 +74,39 @@ multi-resolution HEALPix map. They are written as a Zarr V3 pyramid, one
 level per nside from `nside_min` to `nside_max`: at a level finer than a
 node, the node value is copied to all its descendants (each coarse pixel
 is split 2×2 per level); at a coarser level, the values of the fine nodes
-are averaged. Every level is then a complete regular HEALPix map of the
-domain, the repeated values compress well, and gridlook displays any level
-without interpolation.
+are averaged (directions as unit vectors). Every level is then a complete
+regular HEALPix map of the domain and the repeated values compress well.
 
-`scripts/hs_pyramid.py` writes it (`scripts/natl_pyramid.pbs` on Datarmor):
+`scripts/ww3_pyramid.py` writes every scalar output of `ww3_ounf` (`hs`,
+`t02`, `fp`, `dir`, `wlv`, `ice`, `uwnd`, `vwnd`, `ucur`, `vcur`) plus the
+speeds `wspd` and `cspd`; `scripts/grid_pyramid.py` writes the grid itself
+(`level`, `nside`, `cell_size`, `depth`, `slope`, `target_size`, one time
+step). `scripts/natl_pyramid.pbs` runs both on Datarmor:
 
 ```bash
-qsub -v RUN=natl_jan2026,GRID=grids/natl,OUT=runs/natl_jan2026/hs-l11-l7.zarr scripts/natl_pyramid.pbs
-zvenv/bin/python scripts/upload_s3.py runs/natl_jan2026/hs-l11-l7.zarr \
-  s3://grid4earth/public/trials/jmdelouis-2026-11-12-hww3/natl_jan2026/hs-l11-l7.zarr
+qsub -v GRID=grids/natl_v3 scripts/natl_pyramid.pbs                    # grid only, 20 s
+qsub -v RUN=natl_v2_jan2026_cur,GRID=grids/natl_v2 scripts/natl_pyramid.pbs
+zvenv/bin/python scripts/upload_s3.py grids/natl_v3/grid-l11-l7.zarr \
+  s3://grid4earth/public/trials/jmdelouis-2026-11-12-hww3/grid_natl_v3/grid-l11-l7.zarr
 ```
 
-The first command runs on a compute node (zarr 3 needs Python ≥ 3.11:
+The pyramids are built on a compute node (zarr 3 needs Python ≥ 3.11:
 `/appli/anaconda/latest/bin/python -m venv zvenv && zvenv/bin/pip install
 --only-binary=:all: zarr s3fs netCDF4 healpy`); the upload runs on a login
 node, since the compute nodes have no internet access, with the `grid4earth`
 AWS profile.
 
-Layout (GRID4EARTH production layout, as in `convert_highway`):
+Layout: the zarr DGGS convention v1, as written by `xdggs`, and the zarr
+multiscales convention v0.1:
 
-- root group: `multiscales` (zarr-conventions v0.1, finest level first,
-  `resampling_method: mean`), `Conventions: CF-1.13`, provenance;
+- root group: `multiscales` (finest level first, `resampling_method: mean`,
+  `max` for `level` and `nside`), `Conventions: CF-1.13`, provenance;
 - one group per depth (`11`, `10`, …, `7`) with the `dggs` attribute
-  (HEALPix, nested, WGS84 ellipsoid), a CF `crs` grid mapping, `cell_ids`
-  (uint64, ascending nested order), `time` (hours since 2000-01-01) and the
-  fields (`hs`, …) as `(time, cells)` float32;
+  (`name: healpix`, `refinement_level`, `indexing_scheme: nested`,
+  `ellipsoid: {name: WGS84, semi_major_axis, inverse_flattening}`,
+  `spatial_dimension: cells`, `coordinate: cell_ids`), `cell_ids` (uint64,
+  ascending nested order), `time` (hours since 2000-01-01) and the fields
+  as `(time, cells)` float32;
 - `cells` covers every cell of the depth-3 pixels the domain touches
   (contiguous identifiers); cells without data hold NaN and chunks holding
   only NaN are not written;
@@ -106,18 +115,23 @@ Layout (GRID4EARTH production layout, as in `convert_highway`):
 
 Cell identifiers are computed from authalic latitudes, because the generator
 places HEALPix on the WGS84 ellipsoid; the script checks that every node is
-its pixel centre.
+its pixel centre. There is no CF `crs` variable: the first stores had one
+with `healpix_nside`/`healpix_order` (easygems convention), which gridlook
+reads before `dggs` and then draws on a sphere, so every cell appeared up to
+0.13° (14 km) south of its place.
 
-January 2026, run `natl_jan2026` (Hs, hourly, depths 7–11): 4,991,755 data
-cells at nside 2048, 20,991 at nside 128; 9 min on one core, 2.5 GB in
-19,551 objects (1.6 times the raw node field, 1.5 GB), uploaded in 7.5 min.
-View it in the gridlook preview (zoom-driven level choice, time slider):
+January 2026, run `natl_jan2026` (Hs only, hourly, depths 7–11): 4,991,755
+data cells at nside 2048, 20,991 at nside 128; 9 min on one core, 2.5 GB.
+With the 12 fields, 24 hours take 225 s and 941 MB (about 29 GB for the
+month).
 
-<https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_jan2026/hs-l11-l7.zarr>
+Grids on S3 (trials, can be removed at any time):
 
-The run with currents and sea level is at the same path with
-`natl_jan2026_cur` (PBS job 7898390, 561 s, 2.5 GB, uploaded in 472 s):
+- <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v2/grid-l11-l7.zarr>
+- <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v3/grid-l11-l7.zarr>
 
-<https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_jan2026_cur/hs-l11-l7.zarr>
-
-They are trials under `public/trials/` and can be removed at any time.
+The gridlook preview (draft pull request d70-t/gridlook#235) reads their
+metadata, levels and time axis but does not draw `dggs`-only HEALPix stores
+yet, with or without an ellipsoid. The first Hs stores
+(`natl_jan2026/hs-l11-l7.zarr`, `natl_jan2026_cur/hs-l11-l7.zarr`) are
+displayed but shifted, as explained above.

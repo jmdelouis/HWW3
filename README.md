@@ -11,12 +11,14 @@ PDLIB scheme.
 
 ## How the grid is built (`hww3-grid`, Rust)
 
-1. **Refinement.** Start from HEALPix cells at `nside_min` covering the domain.
-   A cell is split into its four NESTED children when it is closer to the coast
-   than a rule's `max_dist_km` and is coarser than that rule's `nside`. The
-   coastline comes from a shapefile (`"source": "shapefile"`, e.g. GSHHS
-   polylines), from a native GSHHG binary file (`"gshhg"`), or from the zero
-   contour of the bathymetry (`"bathy"`).
+1. **Refinement from the bathymetry.** Start from HEALPix cells at `nside_min`
+   covering the domain. The required cell size comes from the mesh-size
+   functions of OceanMesh2D: `wl` cells per shallow-water M2 wavelength
+   (size ∝ sqrt(depth)), `slp` cells per topographic length scale
+   `2π h/|∇h|` (optionally on a low-passed bathymetry, `fl`, and only
+   shallower than 300 m here), then a grade limit `g` on the size growth.
+   A cell is split while it is larger than the size required at any point
+   inside it. Distance-to-coast rules (grids v1 and v2) remain an option.
    There are at most 4 levels between `nside_min` and `nside_max`.
 2. **2:1 balance.** Leaves are split until any two leaves sharing an edge or a
    corner differ by at most one level.

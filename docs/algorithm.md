@@ -1,34 +1,81 @@
 # Algorithm
 
-`hww3-grid` turns a coastline, a bathymetry and a few refinement rules into
+`hww3-grid` turns a bathymetry and two mesh-size criteria into
 a WW3 triangle mesh whose nodes are HEALPix cell centres. The steps below
 are those of `pipeline::build` in the Rust crate; each one is timed and
 reported in the JSON summary.
 
-## 1. Coastline index
+## 1. Required cell size from the bathymetry
 
-The coastline comes from an ESRI shapefile (GSHHS polylines or land
-polygons), a native GSHHG binary file, or the zero contour of the
-bathymetry. Polylines are cut to the domain plus 5°, converted to unit
-vectors on the HEALPix sphere and densified so that consecutive points are
-at most half a finest cell apart. Points are thinned to one per HEALPix cell
-of depth `dmax + 2` and bucketed on cells of depth `dmax - 2`. A
-nearest-point query visits rings of neighbouring buckets until the ring is
-farther than the best distance found.
+The cell size is set by the depth $h$ and the slope $|\nabla h|$, not by
+the distance to the coast, with the mesh-size functions of OceanMesh2D
+(Roberts et al., 2019, GMD 12, 1847; options `wl`, `slp`, `fl` and `g` of
+its `edgefx`), the reference generator of unstructured coastal and wave
+meshes:
+
+$$ \Delta(h, \nabla h) = \min\Big( \frac{T_{M2}}{\alpha_{wl}}\sqrt{g h},\;
+   \frac{2\pi h}{\alpha_{slp}\,|\nabla \tilde h|} \Big), $$
+
+* **wavelength** (`wl` $=\alpha_{wl}$): $\alpha_{wl}$ cells per
+  shallow-water M2 wavelength ($T_{M2}$ = 12.42 h), so the resolution follows
+  $\sqrt h$: finest in shallow water, coarsest over the abyssal plain
+  (OceanMesh2D suggests 25 to 100; `wave_time_s` sets $T_{M2}/\alpha_{wl}$
+  directly);
+* **slope** (`slp` $=\alpha_{slp}$): $\alpha_{slp}$ cells per topographic
+  length scale (OceanMesh2D suggests 10 to 30), optionally restricted to
+  $h <$ `slope_max_depth_m` (OceanMesh2D depth bands): deeper than about half
+  a wavelength, wind waves do not feel the bottom;
+* **filter** (`fl`): $\tilde h$ is $h$ low-pass filtered before the
+  gradient: `fl = 0` no filter (OceanMesh2D default), `fl > 0` a cut-off
+  wavelength of `fl` km, `fl < 0` the barotropic Rossby radius
+  $\sqrt{gh}/|f|$ divided by $|$`fl`$|$ ($\sqrt{\sqrt{gh}/2\beta}$ within 5° of
+  the equator, at most 10,000 km);
+* **grade** (`grade`): the size field is finally limited by
+  $\Delta(x_j) \le \Delta(x_i) + g\,|x_i - x_j|$ (OceanMesh2D default
+  $g = 0.2$), so fine areas are surrounded by a gradual transition.
+
+$h$ is floored at `min_depth_m` (1 m, as in OceanMesh2D).
+
+The bathymetry is averaged on blocks of `smooth_km` (by default half the
+finest cell size, so each finest cell holds about four blocks); this is the
+structured grid of spacing $h_0$ on which OceanMesh2D evaluates its size
+functions. Land samples count as `min_depth_m`, so coastal blocks are
+shallow and refined by the wavelength criterion. The low pass is a box mean
+of width one cut-off wavelength (summed-area table); $\nabla\tilde h$ is the
+centred difference between neighbouring blocks (metric
+$R\cos\varphi\,\delta\lambda$, $R\,\delta\varphi$). The grade limit is applied
+by forward and backward sweeps over the 8 neighbours of every block. A wet
+block then requires the coarsest depth $d$ whose cell size
+$R\sqrt{\pi/3}/2^d$ is at most $\Delta$, within $[d_{\min}, d_{\max}]$, and
+every cell that contains the block centre (hashed on the authalic sphere) at
+a depth below that one is marked for splitting.
+
+The cell sizes are 50.9, 25.5, 12.7, 6.4 and 3.2 km at nside 128 to 2048.
+Unlike OceanMesh2D, the sizes are quantised to powers of two and the 2:1
+balance lets neighbouring cells differ by a factor of 2; the grade limit
+widens the transition zones but cannot make a single jump smoother.
 
 ## 2. Refinement
 
 The roots are the cells of depth $d_{\min}$ (`nside_min = 2^{d_min}`) whose
-centre lies in the domain plus three cell widths. A cell of depth $d$ and
-angular radius $r$ (largest centre–vertex angle) is split into its four
-NESTED children when $d < d_{\max}$ and some rule $(D_k, n_k)$ satisfies
+centre lies in the domain plus three cell widths. A cell of depth $d$ is
+split into its four NESTED children when $d < d_{\max}$ and it was marked
+in step 1.
+
+Optionally (`refine` rules, empty by default), a cell of angular radius $r$
+(largest centre–vertex angle) is also split when some rule $(D_k, n_k)$
+satisfies
 
 $$ \operatorname{dist}(\text{centre}, \text{coast}) - r < D_k / R
 \quad\text{and}\quad \log_2 n_k > d, $$
 
 with $R$ the radius of the HEALPix sphere (authalic radius, 6371.007 km for
-WGS84). The distance is thus measured from the cell edge, so a cell that
-touches the coast band is refined.
+WGS84). The coastline then comes from an ESRI shapefile (GSHHS), a native
+GSHHG binary file or the zero contour of the bathymetry; it is densified to
+half a finest cell, thinned to one point per cell of depth `dmax + 2` and
+bucketed on cells of depth `dmax - 2` for nearest-point queries. The grids
+v1 and v2 used these distance rules (10, 50 and 200 km for nside 2048, 1024
+and 512); grid v3 and later use the bathymetry only.
 
 ## 3. 2:1 balance
 

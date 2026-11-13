@@ -44,8 +44,14 @@ pub struct Config {
     /// `nside_max` (default 4).
     #[serde(default = "default_max_span")]
     pub max_level_span: u32,
-    /// Refinement rules: a cell closer than `max_dist_km` to the coast is
-    /// refined up to `nside`. The finest applicable rule wins.
+    /// Refinement from the bathymetry (depth and slope criteria, see
+    /// [`crate::refine`]).
+    #[serde(default)]
+    pub refine_bathy: Option<BathyRefine>,
+    /// Optional refinement by distance to the coast: a cell closer than
+    /// `max_dist_km` to the coast is refined up to `nside`. The finest
+    /// applicable rule wins. Empty by default.
+    #[serde(default)]
     pub refine: Vec<Rule>,
     /// Cells whose mean wet depth is shallower than this (m) are dry
     /// (default 5).
@@ -60,7 +66,9 @@ pub struct Config {
     pub keep_largest_component: bool,
     /// Path of the bathymetry `meta.json` (see [`crate::bathy::BathyMeta`]).
     pub bathy: String,
-    /// Coastline used by the refinement.
+    /// Coastline used by the distance refinement `refine` (default: zero
+    /// crossings of the bathymetry; not read when `refine` is empty).
+    #[serde(default = "default_coast")]
     pub coast: CoastSource,
     /// Directory where the grid files are written.
     pub output_dir: String,
@@ -151,6 +159,47 @@ pub struct Rule {
     pub nside: u32,
 }
 
+/// Refinement from the bathymetry with the mesh-size functions of
+/// OceanMesh2D (see [`crate::refine`]): required cell size
+/// `min(T·sqrt(g h)/wl, 2π h/(slp·|∇h|))` with a low pass `fl` of the
+/// bathymetry before the gradient, then the grade limit `grade`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BathyRefine {
+    /// Cells per shallow-water M2 wavelength, `T_M2·sqrt(g h)/wl`
+    /// (OceanMesh2D `wl`); used when `wave_time_s` is 0.
+    #[serde(default)]
+    pub wl: f64,
+    /// `T/wl` in seconds, overriding `wl` when > 0: cell size
+    /// `wave_time_s·sqrt(g h)`.
+    #[serde(default)]
+    pub wave_time_s: f64,
+    /// Cells per topographic length scale `2π h/|∇h|` (OceanMesh2D `slp`);
+    /// 0 disables the slope criterion.
+    #[serde(default, alias = "slope_points")]
+    pub slp: f64,
+    /// Low pass of the bathymetry before the gradient (OceanMesh2D `fl`):
+    /// 0 none (default), > 0 wavelength in km, < 0 barotropic Rossby radius
+    /// divided by `|fl|`.
+    #[serde(default)]
+    pub fl: f64,
+    /// Maximum growth of the size field per unit distance (OceanMesh2D `g`,
+    /// whose default is 0.2); 0 disables the limit (default).
+    #[serde(default)]
+    pub grade: f64,
+    /// The slope criterion applies only shallower than this (m); 0 = at all
+    /// depths (default).
+    #[serde(default)]
+    pub slope_max_depth_m: f64,
+    /// Floor of the depth used by the size functions (m, default 1 as in
+    /// OceanMesh2D); land samples count as this depth.
+    #[serde(default = "default_one")]
+    pub min_depth_m: f64,
+    /// Size of the blocks on which the bathymetry is averaged before the
+    /// size functions (km; default 0 = half the finest cell size).
+    #[serde(default)]
+    pub smooth_km: f64,
+}
+
 /// Source of the coastline, selected by the `"source"` key.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "source", rename_all = "lowercase")]
@@ -229,6 +278,12 @@ fn default_max_span() -> u32 {
 fn default_min_depth() -> f64 {
     5.0
 }
+fn default_one() -> f64 {
+    1.0
+}
+fn default_coast() -> CoastSource {
+    CoastSource::Bathy
+}
 fn default_wet_fraction() -> f64 {
     0.5
 }
@@ -294,6 +349,11 @@ impl Config {
             let d = depth_of_nside(r.nside)?;
             if d < dmin || d > dmax {
                 bail!("refine rule nside {} outside [nside_min, nside_max]", r.nside);
+            }
+        }
+        if let Some(p) = &self.refine_bathy {
+            if !(p.wave_time_s > 0.0 || p.wl > 0.0) || p.slp < 0.0 || p.grade < 0.0 || !(p.min_depth_m > 0.0) {
+                bail!("refine_bathy: wl or wave_time_s must be > 0, min_depth_m > 0, slp and grade >= 0");
             }
         }
         let d = &self.domain;

@@ -1,0 +1,38 @@
+#!/bin/bash
+#PBS -N hww3_scan
+#PBS -q omp
+#PBS -l select=1:ncpus=8:mem=32g
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -o /home1/datawork/jmdeloui/HWW3/logs/grid_scan.log
+# Node counts of the OceanMesh2D-style refinement for a few parameter sets
+# wl:slp:fl:grade, from configs/natl_v3_datarmor.json
+# (grids/scan/<wl>_<slp>_<fl>_<grade>_summary.json).
+#   qsub -v SCAN="100:10:0:0.2 128:10:0:0.2" scripts/natl_grid_scan.pbs
+set -e
+cd /home1/datawork/jmdeloui/HWW3
+export RUSTUP_HOME=$HOME/stl-mpi/rustup CARGO_HOME=$HOME/stl-mpi/cargo
+export PATH=$CARGO_HOME/bin:$PATH
+export CARGO_TARGET_DIR=/home1/datawork/jmdeloui/HWW3/target_datarmor
+cargo build --release --manifest-path hww3-grid/Cargo.toml
+export RAYON_NUM_THREADS=8
+PY=${HWW3_PYTHON:-/appli/anaconda/versions/4.7.12/bin/python}
+mkdir -p grids/scan
+for p in ${SCAN:-100:10:0:0.2}; do
+  IFS=: read WL SLP FL GR <<< "$p"
+  K=${WL}_${SLP}_${FL}_${GR}
+  $PY - configs/natl_v3_datarmor.json grids/scan/cfg_$K.json $WL $SLP $FL $GR <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1]))
+r = c["refine_bathy"]
+r["wl"], r["slp"], r["fl"], r["grade"] = (float(x) for x in sys.argv[3:7])
+c["bathy"] = "../../data/gebco/natl/meta.json"
+c["output_dir"] = "scan_" + "_".join(sys.argv[3:7])
+json.dump(c, open(sys.argv[2], "w"), indent=2)
+PY
+  t0=$(date +%s)
+  $CARGO_TARGET_DIR/release/hww3-grid grids/scan/cfg_$K.json > grids/scan/${K}_summary.json
+  $PY -c "
+import json; s=json.load(open('grids/scan/${K}_summary.json'))
+m=s['mesh']; print('wl:slp:fl:grade=$p nodes', s['n_nodes'], s['nodes_per_nside'], 'nonmanifold', m['n_nonmanifold_edges'], 'inconsistent', m['n_inconsistent_edges'], 'pinch', m['n_pinch_nodes'], 'angles %.1f-%.1f' % (m['min_angle_deg'], m['max_angle_deg']), '$(( $(date +%s)-t0 )) s')"
+done

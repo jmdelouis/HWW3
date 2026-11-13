@@ -36,9 +36,25 @@ All tests must pass (see [Validation](validation.md)).
 ## 2. Bathymetry and grid
 
 ```bash
-qsub scripts/natl_grid.pbs                       # grid without angle control
-qsub -v CFG=configs/natl_v2_datarmor.json,GRID=grids/natl_v2 scripts/natl_grid.pbs
+qsub scripts/natl_grid.pbs                       # grid v1: coast distance, no angle control
+qsub -v CFG=configs/natl_v2_datarmor.json,GRID=grids/natl_v2 scripts/natl_grid.pbs   # v2: + angle control
+qsub -v CFG=configs/natl_v3_datarmor.json,GRID=grids/natl_v3 scripts/natl_grid.pbs   # v3: depth and slope
 ```
+
+Grid v3 (PBS job 7899977, 70 s on 8 cores, 7.0 GB) is refined from the
+bathymetry with the OceanMesh2D size functions (`wl` 100, `slp` 10 above
+300 m, Rossby-radius filter, grade 0.2): 794,613 nodes (8,917, 15,050,
+40,980, 119,503 and 610,163 at nside 128 to 2048), 1,341 open-boundary
+nodes, angles 20.0°–125.9°. Other parameter sets are compared with
+
+```bash
+qsub -v SCAN="128:10:0:0.2 100:10:0:0.2 100:10:-1:0.2 100:20:20:0.2" scripts/natl_grid_scan.pbs
+```
+
+(`wl:slp:fl:grade`; 1,104,782, 1,091,206, 794,613 and 967,167 nodes,
+job 7899758). The grid pyramid for gridlook (level, depth, slope, required
+size) is written by `qsub -v GRID=grids/natl_v3 scripts/natl_pyramid.pbs`
+(see [Outputs](outputs.md)).
 
 The script cuts GEBCO to the domain (`scripts/prep_gebco.py`, 30 s, only
 the first time), builds `hww3-grid` with Cargo (Rust under
@@ -133,6 +149,7 @@ currents-and-sea-level `ww3_shel.nml`.
 
 ```bash
 qsub -v RUN=natl_jan2026,GRID=grids/natl scripts/natl_validate.pbs   # 2 min
+qsub -v RUN=natl_jan2026,GRID=grids/natl scripts/natl_pyramid.pbs    # grid and run pyramids
 ```
 
 Writes `runs/natl_jan2026/val/natl_jan2026_{stats.json,scatter.png,maps.png}`.

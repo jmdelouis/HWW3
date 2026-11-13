@@ -25,8 +25,9 @@
 
 \begin{abstract}
 We build unstructured WAVEWATCH III (WW3) grids whose nodes are the centres of
-HEALPix cells of different resolutions: fine near the coast, coarse in the
-open ocean. The model code is unchanged. Because every node is a NESTED
+HEALPix cells of different resolutions, set by the depth and the bottom slope
+as in the usual wave-model mesh generators: fine in shallow water and over
+steep slopes, coarse over the deep ocean. The model code is unchanged. Because every node is a NESTED
 HEALPix pixel, the model state is a multi-resolution HEALPix map. It can be
 stored as GRID4EARTH Zarr datasets and compared with satellite products on
 the same grid without interpolation. This note describes the grid
@@ -48,15 +49,41 @@ while making the outputs native to discrete global grid systems.
 \section{Grid construction}
 \subsection{Refinement}
 We start from the cells at $\nside^{\min}$ whose centres lie in the domain,
-expanded by a margin. A cell of angular radius $r$ is split into its four
-children when its lower-bound distance to the coastline, $d-r$, is below the
-distance $D_k$ of a refinement rule $k$ whose target resolution $\nside^{(k)}$
-is finer than the cell. The coastline comes from the GSHHS land/ocean
-polylines (shapefile already available on Datarmor; the reader also accepts
-the native GSHHG binary format). It is densified to half the finest cell size and thinned to one
-point per cell at $4\,\nside^{\max}$. Nearest-coast queries use buckets of
-HEALPix cells at $\nside^{\max}/4$, searched by rings of neighbours. The
-number of levels is limited to $\log_2(\nside^{\max}/\nside^{\min})\le 4$.
+expanded by a margin. From grid v3 on, the required cell size comes from the
+bathymetry with the mesh-size functions of OceanMesh2D
+(Roberts et al., 2019, Geosci.\ Model Dev.\ 12, 1847; options \texttt{wl},
+\texttt{slp}, \texttt{fl} and \texttt{g} of its \texttt{edgefx}), the usual generator of unstructured coastal
+and wave meshes:
+\begin{equation}
+\Delta = \min\left(\frac{T_{M2}}{\alpha_{wl}}\sqrt{g h},\;
+\frac{2\pi h}{\alpha_{slp}\,|\nabla\tilde h|}\right),
+\end{equation}
+that is $\alpha_{wl}$ cells per shallow-water M2 wavelength ($T_{M2}=12.42$\,h,
+resolution following $\sqrt h$) and $\alpha_{slp}$ cells per topographic length
+scale, the latter only shallower than \SI{300}{m} (deeper, wind waves do not
+feel the bottom). $\tilde h$ is the depth low-pass filtered at the barotropic
+Rossby radius $\sqrt{gh}/|f|$ (\texttt{fl}~$=-1$), and the size field is then
+limited to a growth $g=0.2$ per unit distance. $h$ is floored at \SI{1}{m}.
+GEBCO is first averaged on blocks of half the finest cell (three samples,
+\SI{1.4}{km}), land counting as \SI{1}{m}, the filter is a box mean computed
+with a summed-area table, and the grade limit is applied by forward and
+backward sweeps over the blocks. A wet block requires the coarsest depth whose
+cell size $R\sqrt{\pi/3}/\nside$ (50.9 to \SI{3.2}{km} for $\nside=128$ to
+2048) is below $\Delta$, and every coarser cell containing it is split. Unlike
+OceanMesh2D, sizes are quantised to powers of two and neighbouring cells may
+differ by a factor of 2 (2:1 balance); the grade limit widens the
+transitions. Grids v1 and v2 used distance-to-coast rules instead (a cell is
+split when its lower-bound distance $d-r$ to the GSHHS coastline is below
+10, 50 or \SI{200}{km} for $\nside=2048$, 1024, 512), which remain an option
+of the generator. The number of levels is limited to
+$\log_2(\nside^{\max}/\nside^{\min})\le 4$.
+
+For the North Atlantic, $\alpha_{wl}=100$, $\alpha_{slp}=10$, Rossby filter
+and $g=0.2$ give 794\,613 nodes (8\,917, 15\,050, 40\,980, 119\,503 and
+610\,163 at $\nside=128$ to 2048) against 502\,408 for grid v2; without the
+filter 1\,091\,206, with $\alpha_{wl}=128$ 1\,104\,782, and with
+$\alpha_{slp}=20$ and a \SI{20}{km} filter 967\,167 (PBS job 7899758, about
+\SI{80}{s} each on 8 cores).
 
 \subsection{2:1 balance}
 Leaves are then split until any two leaves sharing an edge \emph{or a corner}
@@ -458,20 +485,35 @@ level) against L3 altimetry, 4--31 January 2026, same blocks.}
 \end{table}
 
 \subsection{HEALPix pyramid output}
-Because every node is a HEALPix pixel, the hourly $H_s$ of the run is
-written as a Zarr V3 pyramid (\texttt{scripts/hs\_pyramid.py}), one level
+Because every node is a HEALPix pixel, the hourly fields of the run are
+written as a Zarr V3 pyramid (\texttt{scripts/ww3\_pyramid.py}), one level
 per depth from 7 to 11: at a depth finer than a node its value is copied to
 all its descendants, at a coarser depth a pixel is the mean of its four
-children that hold data. The finest level is thus the model field cell by
-cell and each coarser level its exact area average. The store follows the
-GRID4EARTH production layout (\texttt{multiscales} and \texttt{dggs}
-conventions, nested \texttt{cell\_ids} on the WGS84 ellipsoid, sharded zstd
-chunks). For January (744 hours) it holds 4\,991\,755 cells at
-$\nside=2048$ and 20\,991 at 128, costs \SI{9}{min} on one core and
-\SI{2.5}{GB} (1.6 times the raw node field), and is read without
-credentials by the gridlook preview, which picks the level from the zoom:
-\url{https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_jan2026/hs-l11-l7.zarr}
-(run with currents: same path with \texttt{natl\_jan2026\_cur}).
+children that hold data (directions as unit vectors). The finest level is
+thus the model field cell by cell and each coarser level its exact area
+average. All scalar outputs are written ($H_s$, $T_{02}$, $f_p$, mean
+direction, wind and current components and speeds, sea level, ice). The
+store follows the zarr \texttt{dggs} convention v1 as written by
+\texttt{xdggs} (HEALPix, nested \texttt{cell\_ids} computed from authalic
+latitudes, WGS84 ellipsoid declared in the \texttt{dggs} attribute) and the
+\texttt{multiscales} convention, with sharded zstd chunks. For January (744
+hours) the $H_s$ field holds 4\,991\,755 cells at $\nside=2048$ and 20\,991
+at 128, costs \SI{9}{min} on one core and \SI{2.5}{GB}; a 24-hour test with
+the 12 fields takes \SI{225}{s} and \SI{941}{MB}.
+
+The first $H_s$ stores (runs 7894000 and 7894069) also carried a CF
+\texttt{crs} variable with \texttt{healpix\_nside} and
+\texttt{healpix\_order}. gridlook reads that (easygems) convention before
+\texttt{dggs} and then assumes a sphere: the authalic cell identifiers were
+drawn at geodetic latitudes, up to 0.13\textdegree{} (\SI{14}{km}) south of
+their place. The stores now hold the \texttt{dggs} convention only. The
+grid itself is also written as a pyramid (\texttt{scripts/grid\_pyramid.py}:
+level, cell size, depth, bathymetry slope and required size), for grids v2
+and v3, at
+\url{https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v3/grid-l11-l7.zarr}.
+The gridlook preview (draft pull request d70-t/gridlook\#235) reads their
+metadata, time axis and levels but does not draw \texttt{dggs}-only HEALPix
+stores yet, with or without an ellipsoid.
 
 A third run on grid v2 with \texttt{BETAMAX} raised from 1.43 to 1.75 and
 the same forcing as the currents run (PBS jobs 7899025 for

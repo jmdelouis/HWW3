@@ -1,6 +1,6 @@
 //! End-to-end tests on synthetic bathymetries.
 
-use hww3_grid::config::{CoastSource, Config, Domain, Quality, Rule, Ww3Params};
+use hww3_grid::config::{BathyRefine, CoastSource, Config, Domain, Quality, Rule, Ww3Params};
 use hww3_grid::geo::Ellipsoid;
 use hww3_grid::pipeline;
 use std::path::PathBuf;
@@ -45,6 +45,7 @@ fn config(name: &str, bathy: &PathBuf, domain: Domain, nmin: u32, nmax: u32, rul
         nside_min: nmin,
         nside_max: nmax,
         max_level_span: 4,
+        refine_bathy: None,
         refine: rules,
         min_depth_m: 5.0,
         wet_fraction: 0.5,
@@ -113,6 +114,62 @@ fn island_multiscale() {
     assert!(s.quality_before.n_angle_below_20 + s.quality_before.n_angle_above_120 > 0);
     assert!(s.n_flips > 0);
     assert!(s.mesh.angles_within(cfg.quality.min_angle_deg, cfg.quality.max_angle_deg));
+    pipeline::write(&cfg, &grid, &s).unwrap();
+}
+
+/// Same island refined from the bathymetry only (depth and slope criteria,
+/// no coastline): shallow cells are finer than deep ones, every level is
+/// used, transitions are 2:1 and the diagnostics are written per node.
+#[test]
+fn island_bathy_refinement() {
+    let (cx, cy) = (45.0f64, 41.81f64);
+    let b = write_bathy("island_bathy", 20.0, 70.0, 20.0, 65.0, 0.02, move |lon, lat| {
+        let dx = (lon - cx) * lat.to_radians().cos();
+        let dy = lat - cy;
+        let r = (dx * dx + dy * dy).sqrt();
+        if r < 2.0 {
+            (300.0 * (1.0 - r / 2.0)) as f32 + 1.0
+        } else {
+            (-4000.0 * ((r - 2.0) / 3.0).min(1.0) - 10.0) as f32
+        }
+    });
+    let d = Domain { lon_min: 30.0, lon_max: 60.0, lat_min: 30.0, lat_max: 55.0 };
+    let mut cfg = config("island_bathy", &b, d, 32, 512, vec![]);
+    // OceanMesh2D-style size functions: 40 cells per M2 wavelength (T/wl ≈ 1118 s),
+    // slp = 10 above 300 m, Rossby-radius low pass (fl = -1), grade 0.2
+    cfg.refine_bathy = Some(BathyRefine {
+        wl: 40.0,
+        wave_time_s: 0.0,
+        slp: 10.0,
+        fl: -1.0,
+        grade: 0.2,
+        slope_max_depth_m: 300.0,
+        min_depth_m: 5.0,
+        smooth_km: 0.0,
+    });
+    let (grid, s) = pipeline::build(&cfg).unwrap();
+    println!("{}", serde_json::to_string_pretty(&s).unwrap());
+    assert!(s.mesh.is_valid());
+    assert_eq!(s.mesh.euler, 0, "one island -> one hole");
+    assert_eq!(s.mesh.max_level_jump, 1);
+    assert_eq!(s.n_coast_points, 0);
+    assert!(s.n_bathy_splits > 0);
+    for (nside, count) in &s.nodes_per_nside {
+        assert!(*count > 0, "no node at nside {nside}");
+    }
+    // mean depth decreases from the coarsest to the finest level
+    let mean = |lv: u8| {
+        let v: Vec<f64> = (0..grid.level.len()).filter(|&i| grid.level[i] == lv).map(|i| grid.depth[i]).collect();
+        v.iter().sum::<f64>() / v.len() as f64
+    };
+    for lv in 5..9 {
+        assert!(mean(lv) >= mean(lv + 1), "depth {lv}: {} < {}", mean(lv), mean(lv + 1));
+    }
+    assert!(mean(5) > 3.0 * mean(9), "{} {}", mean(5), mean(9));
+    assert_eq!(grid.slope.len(), grid.uniq.len());
+    assert_eq!(grid.target_km.len(), grid.uniq.len());
+    let finite = grid.target_km.iter().filter(|t| t.is_finite()).count();
+    assert!(finite as f64 > 0.99 * grid.uniq.len() as f64, "{finite}");
     pipeline::write(&cfg, &grid, &s).unwrap();
 }
 

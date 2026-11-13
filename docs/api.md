@@ -12,6 +12,7 @@ warnings as errors).
 | `config` | JSON configuration (`Config`, `Quality`, `Ww3Params`) |
 | `pipeline` | `build` (all steps) and `write` (output files), `Summary`, `Grid` |
 | `coast`, `shapefile`, `gshhg` | coastline readers and nearest-point index |
+| `refine` | OceanMesh2D size functions from the bathymetry (`wl`, `slp`, `fl`, grade), cells to split |
 | `tree` | refinement and 2:1 balance |
 | `bathy` | bathymetry grid and cell statistics |
 | `mesh` | triangulation, ear clipping, pinch removal, Delaunay flips, boundary trimming |
