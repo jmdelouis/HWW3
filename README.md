@@ -58,7 +58,9 @@ characteristic, angle statistics and level jump across edges.
   installation, configuration, algorithm, outputs, validation, WW3 setup and
   a step-by-step [reproduction guide](docs/reproducing.md).
 - Rust API: `cd hww3-grid && cargo doc --no-deps --open`.
-- Internal note (LaTeX): `tex/hww3/main.tex`.
+- Internal note (LaTeX): `tex/hww3/main.tex`, mirrored on Overleaf
+  (https://www.overleaf.com/project/6af6a96c4ed66a0cad905cb6) with
+  `scripts/sync_overleaf.sh`.
 
 ## Usage
 

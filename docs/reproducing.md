@@ -109,6 +109,12 @@ hour), writes hourly fields (`HS T02 FP DIR WND ICE`, plus `CUR WLV`) and
 weekly restarts, then `ww3_ounf` converts them to `ww3.202601.nc`. Speed:
 about 10.2 s per 600 s step on 112 ranks, i.e. about 13 h for the month.
 
+The reference January runs (PBS jobs 7894000 and 7894069) use grid v1
+(`grids/natl`, built without the triangle-quality step). All later runs use
+grid v2 (`grids/natl_v2`, step 3 with `configs/natl_v2_datarmor.json`); with
+v2, rerun `ww3_grid` and the `ww3_prnc` steps above in the v2 run directory,
+since the forcing files are interpolated on the nodes of one grid only.
+
 ## 8. Note
 
 ```bash
@@ -117,3 +123,6 @@ cd tex/hww3 && latexmk -pdf main.tex
 
 `tex/hww3/main.tex` gathers the grid statistics, the figures, the WW3
 build, the run costs and the results; it is updated after every run.
+It is mirrored on Overleaf (project `6af6a96c4ed66a0cad905cb6`) by
+`scripts/sync_overleaf.sh`, which needs an Overleaf git token in the git
+credential store.
