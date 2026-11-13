@@ -115,4 +115,9 @@ View it in the gridlook preview (zoom-driven level choice, time slider):
 
 <https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_jan2026/hs-l11-l7.zarr>
 
-It is a trial under `public/trials/` and can be removed at any time.
+The run with currents and sea level is at the same path with
+`natl_jan2026_cur` (PBS job 7898390, 561 s, 2.5 GB, uploaded in 472 s):
+
+<https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_jan2026_cur/hs-l11-l7.zarr>
+
+They are trials under `public/trials/` and can be removed at any time.

@@ -426,6 +426,37 @@ altimeter $H_s$ along the tracks.}
 \label{fig:val_maps}
 \end{figure}
 
+\paragraph{Effect of currents and sea level.} The second run (PBS job
+7894069, same forcing plus Copernicus Marine hourly surface currents and
+sea level, \SI{41654}{s}, 2 \% slower) is validated in the same way (PBS
+job 7898389) on the same 331\,154 blocks (Table~\ref{tab:cur}). The
+currents lower the random error at every level (scatter index 0.139 to
+0.138, correlation 0.9724 to 0.9738), as expected from wave refraction by
+currents, but make the mean bias \SI{0.035}{m} more negative. WW3 forces
+the waves with the wind relative to the surface current, and in the
+North Atlantic the mean surface current mostly runs with the westerlies,
+which lowers the effective wind. This bias shift is of the order of the
+growth-parameter question above and should be settled together with it.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+subset & bias wind / +cur (m) & RMSE wind / +cur (m) & SI wind / +cur & $r$ wind / +cur \\
+\midrule
+all          & $-0.191$ / $-0.225$ & 0.450 / 0.462 & 0.139 / 0.138 & 0.9724 / 0.9738 \\
+$\nside=128$ & $-0.204$ / $-0.240$ & 0.473 / 0.486 & 0.133 / 0.132 & 0.9718 / 0.9730 \\
+$\nside=512$ & $-0.178$ / $-0.212$ & 0.427 / 0.437 & 0.146 / 0.145 & 0.9702 / 0.9717 \\
+$\nside=2048$& $-0.118$ / $-0.143$ & 0.329 / 0.337 & 0.169 / 0.168 & 0.9668 / 0.9679 \\
+North Sea    & $-0.308$ / $-0.347$ & 0.526 / 0.557 & 0.147 / 0.150 & 0.9780 / 0.9787 \\
+Mediterranean& $-0.202$ / $-0.225$ & 0.397 / 0.405 & 0.156 / 0.154 & 0.9672 / 0.9689 \\
+\bottomrule
+\end{tabular}
+\caption{Runs 7894000 (wind and ice) and 7894069 (plus currents and sea
+level) against L3 altimetry, 4--31 January 2026, same blocks.}
+\label{tab:cur}
+\end{table}
+
 \subsection{HEALPix pyramid output}
 Because every node is a HEALPix pixel, the hourly $H_s$ of the run is
 written as a Zarr V3 pyramid (\texttt{scripts/hs\_pyramid.py}), one level
@@ -439,10 +470,10 @@ chunks). For January (744 hours) it holds 4\,991\,755 cells at
 $\nside=2048$ and 20\,991 at 128, costs \SI{9}{min} on one core and
 \SI{2.5}{GB} (1.6 times the raw node field), and is read without
 credentials by the gridlook preview, which picks the level from the zoom:
-\url{https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_jan2026/hs-l11-l7.zarr}.
+\url{https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_jan2026/hs-l11-l7.zarr}
+(run with currents: same path with \texttt{natl\_jan2026\_cur}).
 
-\todo{run with currents and sea level (7894069), boundary spectra from a
-global run, \texttt{BETAMAX} for ERA5}
+\todo{boundary spectra from a global run, \texttt{BETAMAX} for ERA5, runs on grid v2}
 
 \appendix
 \section{Reproducing}

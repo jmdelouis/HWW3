@@ -120,6 +120,14 @@ the North-West Atlantic storms (ERA5 winds with default ST4 `BETAMAX`), not
 from the coarse cells: errors decrease with nside. The script also writes
 the statistics per mission and per day (`runs/<run>/val/<run>_stats.json`).
 
+Run `natl_jan2026_cur` (same forcing plus Copernicus Marine surface
+currents and sea level, PBS job 7894069, 41,654 s; validation job 7898389)
+on the same 331,154 blocks: bias −0.225 m, RMSE 0.462 m, SI 0.138,
+r 0.9738. Currents lower the scatter index and raise the correlation at
+every nside, but make the bias 0.035 m more negative (WW3 uses the wind
+relative to the current, and the mean current mostly runs with the
+westerlies). Statistics: `results/natl_jan2026_cur_val_stats.json`.
+
 ```{figure} _static/fig/natl_jan2026_scatter.png
 :width: 100%
 
