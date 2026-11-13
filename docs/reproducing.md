@@ -115,6 +115,17 @@ grid v2 (`grids/natl_v2`, step 3 with `configs/natl_v2_datarmor.json`); with
 v2, rerun `ww3_grid` and the `ww3_prnc` steps above in the v2 run directory,
 since the forcing files are interpolated on the nodes of one grid only.
 
+### Altimeter validation
+
+```bash
+qsub -v RUN=natl_jan2026,GRID=grids/natl scripts/natl_validate.pbs   # 2 min
+```
+
+Writes `runs/natl_jan2026/val/natl_jan2026_{stats.json,scatter.png,maps.png}`.
+Expected for the wind-and-ice run: 331,154 blocks, bias −0.19 m,
+RMSE 0.45 m, SI 0.14, r 0.972 (see Validation). Needs `scipy` and
+`matplotlib` in the venv (`pip install --only-binary=:all: scipy matplotlib`).
+
 ## 8. Note
 
 ```bash

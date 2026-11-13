@@ -345,13 +345,89 @@ builds and need \texttt{I\_MPI\_FABRICS=shm} on a one-core node, and
 \paragraph{Runs.} Two runs cover 1~January 00~UTC to 31~January 23~UTC
 (last ERA5 hour) from rest on grid v1, with 112 MPI ranks on 4 nodes:
 wind and ice only (PBS job 7894000) and wind, ice, currents and sea level
-(PBS job 7894069). The first one runs at \SI{10.2}{s} per \SI{600}{s} step,
-i.e.\ about \SI{13}{h} for the month (1.8 times faster than on 56 ranks).
-No boundary spectra are imposed yet. These two runs are kept on grid v1 as
-the reference January simulation; grid v2 (with the triangle-quality step,
+(PBS job 7894069). The wind-and-ice run took \SI{40754}{s} (\SI{11.3}{h},
+\SI{9.1}{s} per \SI{600}{s} step, 1270 core-hours) and \texttt{ww3\_ounf}
+wrote the 744 hourly fields (\SI{6.1}{GB}). No boundary spectra are imposed
+yet. These two runs are kept on grid v1 as the reference January
+simulation; grid v2 (with the triangle-quality step,
 Table~\ref{tab:quality}) is used for all later runs.
 
-\todo{results of the January runs, boundary spectra, validation against altimetry}
+\subsection{January 2026: validation against altimetry}
+The model $H_s$ is compared with the along-track L3 NRT significant wave
+height of the ten altimeters of CMEMS
+\texttt{WAVE\_GLO\_PHY\_SWH\_L3\_NRT\_014\_001} (AltiKa, CryoSat-2, CFOSAT,
+HY-2B, HY-2C, Jason-3, Sentinel-3A/B, Sentinel-6A, SWOT nadir; 4103 files,
+filtered and bias-corrected \texttt{VAVH}) with
+\texttt{scripts/validate\_altimetry.py} (PBS job 7897833, \SI{2}{min}).
+Each \SI{1}{Hz} sample is matched to the nearest wet, ice-free node if that
+node lies within 0.75 of its HEALPix pixel size
+($\sqrt{\pi/3}\,R/\nside$: \SI{51}{km} at $\nside=128$, \SI{3.2}{km} at
+2048), the model is interpolated linearly in time between hourly fields,
+the first three days (cold start) are skipped, and matched samples are
+averaged in blocks of 7 (about \SI{50}{km}). There is no interpolation in
+space: the model value is the value of the cell that contains the sample,
+which is how a HEALPix field is meant to be read.
+
+Over 4--31 January, 331\,154 blocks give a bias of \SI{-0.19}{m} for a mean
+observed $H_s$ of \SI{2.92}{m} ($-6.5$\,\%), an RMSE of \SI{0.45}{m}, a
+scatter index of 0.14 and a correlation of 0.972 (Table~\ref{tab:val},
+Fig.~\ref{fig:val_scatter}). The ten missions agree within
+\SI{0.08}{m} in bias. The error does not grow where the grid is coarse:
+bias and RMSE decrease from $\nside=128$ (open ocean, high seas) to 2048
+(coast, lower seas), and the scatter index stays between 0.13 and 0.17.
+The along-track differences (Fig.~\ref{fig:val_maps}) point to two causes
+of the negative bias, both outside the grid: (i) the southern open boundary
+at the equator, where no spectra are imposed, so that the swell coming
+from the South Atlantic is missing (differences below \SI{-1}{m} along
+\ang{0}--\ang{5}N); (ii) the North-West Atlantic winter storms
+(\ang{40}--\ang{65}N, \ang{30}--\ang{60}W), underestimated by
+ERA5 winds with the default ST4 growth parameter (\texttt{BETAMAX}=1.43,
+tuned for operational ECMWF winds; ERA5 usually needs about 1.6--1.75).
+The daily bias is \SI{-0.34}{m} on day 4 (swell still developing after the
+cold start), \SI{-0.13}{m} on days 8--11 and \SI{-0.25}{m} to
+\SI{-0.31}{m} during the storms of 26--31 January.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrrr}
+\toprule
+subset & $N$ & mean obs (m) & bias (m) & RMSE (m) & SI / $r$ \\
+\midrule
+all             & 331\,154 & 2.92 & $-0.19$ & 0.45 & 0.14 / 0.972 \\
+$\nside=128$    & 183\,701 & 3.20 & $-0.20$ & 0.47 & 0.13 / 0.972 \\
+$\nside=256$    &  31\,675 & 2.99 & $-0.20$ & 0.46 & 0.14 / 0.970 \\
+$\nside=512$    &  82\,837 & 2.65 & $-0.18$ & 0.43 & 0.15 / 0.970 \\
+$\nside=1024$   &  29\,615 & 2.05 & $-0.14$ & 0.36 & 0.16 / 0.968 \\
+$\nside=2048$   &   3\,326 & 1.82 & $-0.12$ & 0.33 & 0.17 / 0.967 \\
+North Sea       &   5\,567 & 2.90 & $-0.31$ & 0.53 & 0.15 / 0.978 \\
+Mediterranean   &  14\,539 & 2.19 & $-0.20$ & 0.40 & 0.16 / 0.967 \\
+\bottomrule
+\end{tabular}
+\caption{Run 7894000 (grid v1, ERA5 wind and ice) against L3 altimetry,
+4--31 January 2026, \SI{50}{km} blocks; level = $\nside$ of the matched
+node.}
+\label{tab:val}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_jan2026_scatter.png}
+\caption{Left: WW3 against altimeter $H_s$ (density, log scale). Right:
+bias and RMSE by $\nside$ of the matched node (number of blocks in
+brackets).}
+\label{fig:val_scatter}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_jan2026_maps.png}
+\caption{January 2026, run 7894000: mean and maximum $H_s$, and WW3 minus
+altimeter $H_s$ along the tracks.}
+\label{fig:val_maps}
+\end{figure}
+
+\todo{run with currents and sea level (7894069), boundary spectra from a
+global run, \texttt{BETAMAX} for ERA5, Zarr pyramid output}
 
 \appendix
 \section{Reproducing}

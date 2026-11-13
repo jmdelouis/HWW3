@@ -91,3 +91,43 @@ median $H_s$ 1.0 / 1.85 / 2.75 m after 3 / 6 / 12 h, no NaN.
 
 $H_s$ after 12 h of uniform wind from rest.
 ```
+
+## January 2026 against altimetry
+
+Run `natl_jan2026` (grid v1, ERA5 wind and ice, no boundary spectra, PBS job
+7894000: 40,754 s on 112 ranks) compared with the L3 NRT along-track $H_s$
+of ten altimeters (CMEMS `WAVE_GLO_PHY_SWH_L3_NRT_014_001`, Datarmor
+mirror) by `scripts/validate_altimetry.py`
+(`qsub -v RUN=natl_jan2026,GRID=grids/natl scripts/natl_validate.pbs`,
+2 min). Each 1 Hz sample takes the value of the nearest wet, ice-free node
+if it lies within 0.75 of that node's pixel size, linear in time; days 1–3
+(cold start) are skipped and samples are averaged in blocks of 7 (≈ 50 km).
+
+| subset | N | mean obs (m) | bias (m) | RMSE (m) | SI | r |
+|---|---|---|---|---|---|---|
+| all | 331,154 | 2.92 | −0.19 | 0.45 | 0.14 | 0.972 |
+| nside 128 | 183,701 | 3.20 | −0.20 | 0.47 | 0.13 | 0.972 |
+| nside 256 | 31,675 | 2.99 | −0.20 | 0.46 | 0.14 | 0.970 |
+| nside 512 | 82,837 | 2.65 | −0.18 | 0.43 | 0.15 | 0.970 |
+| nside 1024 | 29,615 | 2.05 | −0.14 | 0.36 | 0.16 | 0.968 |
+| nside 2048 | 3,326 | 1.82 | −0.12 | 0.33 | 0.17 | 0.967 |
+| North Sea | 5,567 | 2.90 | −0.31 | 0.53 | 0.15 | 0.978 |
+| Mediterranean | 14,539 | 2.19 | −0.20 | 0.40 | 0.16 | 0.967 |
+
+The ten missions agree within 0.08 m in bias. The negative bias comes from
+the missing South Atlantic swell at the equatorial open boundary and from
+the North-West Atlantic storms (ERA5 winds with default ST4 `BETAMAX`), not
+from the coarse cells: errors decrease with nside. The script also writes
+the statistics per mission and per day (`runs/<run>/val/<run>_stats.json`).
+
+```{figure} _static/fig/natl_jan2026_scatter.png
+:width: 100%
+
+WW3 against altimeter $H_s$, and bias / RMSE by nside of the matched node.
+```
+
+```{figure} _static/fig/natl_jan2026_maps.png
+:width: 100%
+
+Mean and maximum $H_s$ in January 2026, and WW3 − altimeter along tracks.
+```

@@ -1,0 +1,13 @@
+#!/bin/bash
+#PBS -N hww3_val
+#PBS -q sequentiel
+#PBS -l select=1:ncpus=1:mem=40g
+#PBS -l walltime=02:00:00
+# Altimeter validation of a January 2026 run.
+#   qsub -v RUN=natl_jan2026,GRID=grids/natl scripts/natl_validate.pbs
+cd $PBS_O_WORKDIR
+RUN=${RUN:-natl_jan2026}
+GRID=${GRID:-grids/natl}
+mkdir -p runs/$RUN/val
+$PBS_O_WORKDIR/venv/bin/python scripts/validate_altimetry.py \
+  runs/$RUN/ww3.202601.nc $GRID/plot/nodes.npz runs/$RUN/val/$RUN
