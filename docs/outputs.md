@@ -122,13 +122,16 @@ reads before `dggs` and then draws on a sphere, so every cell appeared up to
 
 January 2026, run `natl_jan2026` (Hs only, hourly, depths 7–11): 4,991,755
 data cells at nside 2048, 20,991 at nside 128; 9 min on one core, 2.5 GB.
-With the 12 fields, 24 hours take 225 s and 941 MB (about 29 GB for the
-month).
+With the 12 fields, 24 hours take 225 s and 941 MB. The full month of
+run `natl_v2_jan2026_cur` (12 fields, 744 hours, PBS job 7905049) takes
+7,112 s on one core and 29 GB, with 4,991,473 data cells at nside 2048.
 
-Grids on S3 (trials, can be removed at any time):
+Stores on S3 (trials, can be removed at any time):
 
 - <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v2/grid-l11-l7.zarr>
 - <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v3/grid-l11-l7.zarr>
+- <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v2_jan2026_cur/ww3-l11-l7.zarr>
+  (12 fields, January 2026, grid v2, `BETAMAX` 1.75)
 
 The gridlook preview (draft pull request d70-t/gridlook#235) reads their
 metadata, levels and time axis but does not draw `dggs`-only HEALPix stores

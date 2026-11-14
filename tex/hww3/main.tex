@@ -32,7 +32,10 @@ HEALPix pixel, the model state is a multi-resolution HEALPix map. It can be
 stored as GRID4EARTH Zarr datasets and compared with satellite products on
 the same grid without interpolation. This note describes the grid
 construction, how it is validated, and a first North Atlantic simulation for
-January 2026. \todo{results}
+January 2026: with ERA5 winds, ice, Copernicus currents and sea level and
+the ST4 growth parameter \texttt{BETAMAX} set to 1.75, the modelled
+significant wave height matches ten altimeters with a bias of
+\SI{0.005}{m}, an RMSE of \SI{0.38}{m} and a correlation of 0.975.
 \end{abstract}
 
 \section{Motivation}
@@ -515,16 +518,49 @@ The gridlook preview (draft pull request d70-t/gridlook\#235) reads their
 metadata, time axis and levels but does not draw \texttt{dggs}-only HEALPix
 stores yet, with or without an ellipsoid.
 
-A third run on grid v2 with \texttt{BETAMAX} raised from 1.43 to 1.75 and
-the same forcing as the currents run (PBS jobs 7899025 for
-\texttt{ww3\_grid} and the interpolations, 7899026 for the month) is under
-way.
+\paragraph{Wind-input growth parameter.} A third run on grid v2 with
+\texttt{BETAMAX} raised from 1.43 to 1.75 and the same forcing as the
+currents run (PBS jobs 7899025 for \texttt{ww3\_grid} and the
+interpolations, 7899026 for the month: \SI{41927}{s} on 112 ranks, plus
+\SI{718}{s} for \texttt{ww3\_ounf}) is validated on the same 331\,154
+blocks (PBS job 7905048, Table~\ref{tab:betamax}). Grid v2 differs from v1
+only by the triangle-quality step (282 fewer nodes), so the change is that
+of \texttt{BETAMAX}: the bias is removed at every level (from
+\SI{-0.225}{m} to \SI{+0.005}{m}), the RMSE falls from 0.462 to
+\SI{0.384}{m} (17\,\%), and the scatter index and correlation improve
+slightly. The ten missions lie between \SI{-0.050}{m} (CFOSAT) and
+\SI{+0.038}{m} (HY-2C) in bias. The largest remaining bias is in the North
+Sea (\SI{-0.13}{m}), where the v3 grid is finer. The pyramid of the 12
+fields for the month (PBS job 7905049) takes \SI{7112}{s} on one core and
+\SI{29}{GB}, at
+\url{https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v2_jan2026_cur/ww3-l11-l7.zarr}.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+subset & bias 1.43 / 1.75 (m) & RMSE 1.43 / 1.75 (m) & SI 1.43 / 1.75 & $r$ 1.43 / 1.75 \\
+\midrule
+all          & $-0.225$ / $+0.005$ & 0.462 / 0.384 & 0.138 / 0.131 & 0.9738 / 0.9748 \\
+$\nside=128$ & $-0.240$ / $+0.012$ & 0.486 / 0.406 & 0.132 / 0.127 & 0.9730 / 0.9741 \\
+$\nside=512$ & $-0.212$ / $-0.002$ & 0.437 / 0.360 & 0.145 / 0.136 & 0.9717 / 0.9728 \\
+$\nside=1024$& $-0.175$ / $-0.016$ & 0.370 / 0.313 & 0.159 / 0.153 & 0.9701 / 0.9714 \\
+$\nside=2048$& $-0.143$ / $-0.000$ & 0.337 / 0.299 & 0.168 / 0.164 & 0.9679 / 0.9690 \\
+North Sea    & $-0.347$ / $-0.126$ & 0.557 / 0.373 & 0.150 / 0.121 & 0.9787 / 0.9805 \\
+Mediterranean& $-0.225$ / $-0.054$ & 0.405 / 0.330 & 0.154 / 0.148 & 0.9689 / 0.9697 \\
+\bottomrule
+\end{tabular}
+\caption{Runs 7894069 (grid v1, \texttt{BETAMAX} 1.43) and 7899026 (grid
+v2, \texttt{BETAMAX} 1.75), both with wind, ice, currents and sea level,
+against L3 altimetry, 4--31 January 2026, same blocks.}
+\label{tab:betamax}
+\end{table}
 
 A fourth run uses grid v3 with the same forcing and \texttt{BETAMAX}
 (PBS jobs 7901052 and 7901053; \texttt{ww3\_grid} finds 794\,613 sea
 points), so that its difference with the v2 run is the grid alone.
 
-\todo{results of the v2 / BETAMAX and v3 runs, boundary spectra from a global run}
+\todo{results of the v3 run, boundary spectra from a global run}
 
 \appendix
 \section{Reproducing}
