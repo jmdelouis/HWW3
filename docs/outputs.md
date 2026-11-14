@@ -132,6 +132,8 @@ Stores on S3 (trials, can be removed at any time):
 - <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v3/grid-l11-l7.zarr>
 - <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v2_jan2026_cur/ww3-l11-l7.zarr>
   (12 fields, January 2026, grid v2, `BETAMAX` 1.75)
+- <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v3_jan2026_cur/ww3-l11-l7.zarr>
+  (same on grid v3, PBS job 7905051: 7,337 s, 37 GB)
 
 The gridlook preview (draft pull request d70-t/gridlook#235) reads their
 metadata, levels and time axis but does not draw `dggs`-only HEALPix stores

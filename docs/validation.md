@@ -151,6 +151,24 @@ correlation improve slightly. The ten missions now lie between −0.050 m
 (−0.13 m) is a candidate for the finer v3 grid. Statistics:
 `results/natl_v2_jan2026_cur_val_stats.json`.
 
+Run `natl_v3_jan2026_cur` (grid v3, same forcing and `BETAMAX` as the v2
+run, PBS job 7901053: 68,832 s on 112 ranks, 1.64 times the v2 run for 1.58
+times the nodes; `ww3_ounf` 835 s; validation job 7905050) matches 328,902
+blocks, since the matching distance scales with the pixel size of the
+nearest node; the subsets by nside hold different samples and are not
+compared.
+
+| subset | N v2 / v3 | bias v2 / v3 (m) | RMSE v2 / v3 (m) | SI v2 / v3 | r v2 / v3 |
+|---|---|---|---|---|---|
+| all | 331,154 / 328,902 | +0.005 / +0.005 | 0.384 / 0.376 | 0.131 / 0.129 | 0.9748 / 0.9758 |
+| North Sea | 5,567 / 5,629 | −0.126 / −0.139 | 0.373 / 0.380 | 0.121 / 0.123 | 0.9805 / 0.9800 |
+| Mediterranean | 14,539 / 14,454 | −0.054 / −0.054 | 0.330 / 0.331 | 0.148 / 0.149 | 0.9697 / 0.9695 |
+
+At the 50 km scale of the altimeter blocks the grid hardly matters: the
+whole-domain RMSE improves by 0.008 m and the shelf seas do not change
+within 0.01 m. Coastal buoys are needed to see the effect of the finer
+shelf resolution. Statistics: `results/natl_v3_jan2026_cur_val_stats.json`.
+
 ```{figure} _static/fig/natl_jan2026_scatter.png
 :width: 100%
 

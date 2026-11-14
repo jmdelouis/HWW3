@@ -577,11 +577,61 @@ Atlantic swell) remains.}
 \label{fig:v2_maps}
 \end{figure}
 
-A fourth run uses grid v3 with the same forcing and \texttt{BETAMAX}
-(PBS jobs 7901052 and 7901053; \texttt{ww3\_grid} finds 794\,613 sea
-points), so that its difference with the v2 run is the grid alone.
+\paragraph{Bathymetry-driven grid.} A fourth run uses grid v3 with the
+same forcing and \texttt{BETAMAX} (PBS jobs 7901052 and 7901053;
+\texttt{ww3\_grid} finds 794\,613 sea points), so that its difference with
+the v2 run is the grid alone (Fig.~\ref{fig:v3_levels}). It takes
+\SI{68832}{s} on 112 ranks (1.64 times the v2 run for 1.58 times the
+nodes) and \SI{835}{s} for \texttt{ww3\_ounf}. The altimeter validation (PBS
+job 7905050, Table~\ref{tab:v3}) matches 328\,902 blocks instead of
+331\,154, since the matching distance scales with the pixel size of the
+nearest node, which has changed; the subsets by $\nside$ therefore hold
+different samples and are not compared. Over the whole domain the RMSE
+falls from 0.384 to \SI{0.376}{m}, the scatter index from 0.131 to 0.129
+and the correlation rises from 0.9748 to 0.9758, with the same bias. In the
+North Sea and the Mediterranean, the regions where the samples are almost
+the same, the scores do not change within \SI{0.01}{m}: at the \SI{50}{km}
+scale of the altimeter blocks, the extra resolution of v3 on the shelves
+brings little, and its cost is mostly worth it for coastal products. The
+12-field pyramid (PBS job 7905051, \SI{7337}{s}, \SI{37}{GB}) is at
+\url{https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v3_jan2026_cur/ww3-l11-l7.zarr}.
 
-\todo{results of the v3 run, boundary spectra from a global run}
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v3_levels.png}
+\caption{Grid v3 (OceanMesh2D size functions on GEBCO): nodes coloured by
+$\nside$; open-boundary nodes in red. Compare with
+Fig.~\ref{fig:natl_levels}.}
+\label{fig:v3_levels}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.49\textwidth]{fig/natl_v3_brittany.png}
+\includegraphics[width=0.49\textwidth]{fig/natl_v3_gibraltar.png}
+\caption{Grid v3 around Brittany and the Strait of Gibraltar, to compare
+with Fig.~\ref{fig:natl_zoom}.}
+\label{fig:v3_zoom}
+\end{figure}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+subset & $N$ v2 / v3 & bias v2 / v3 (m) & RMSE v2 / v3 (m) & SI v2 / v3 \\
+\midrule
+all           & 331\,154 / 328\,902 & $+0.005$ / $+0.005$ & 0.384 / 0.376 & 0.131 / 0.129 \\
+North Sea     & 5\,567 / 5\,629     & $-0.126$ / $-0.139$ & 0.373 / 0.380 & 0.121 / 0.123 \\
+Mediterranean & 14\,539 / 14\,454   & $-0.054$ / $-0.054$ & 0.330 / 0.331 & 0.148 / 0.149 \\
+\bottomrule
+\end{tabular}
+\caption{Runs 7899026 (grid v2) and 7901053 (grid v3), same forcing and
+\texttt{BETAMAX} 1.75, against L3 altimetry, 4--31 January 2026.}
+\label{tab:v3}
+\end{table}
+
+\todo{boundary spectra from a global run; comparison with coastal buoys,
+where grid v3 should matter}
 
 \appendix
 \section{Reproducing}
