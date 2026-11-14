@@ -281,19 +281,20 @@ time: refinement + balance / cell bathymetry / triangulation & 70 / 23 / \SI{11}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{fig/natl_levels.png}
-\caption{North Atlantic grid nodes coloured by $\nside$; open-boundary nodes
+\includegraphics[width=\textwidth]{fig/natl_v2_levels.png}
+\caption{North Atlantic grid v2 (with the triangle-quality step, used by the
+runs from job 7899026 on): nodes coloured by $\nside$; open-boundary nodes
 in red.}
 \label{fig:natl_levels}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.49\textwidth]{fig/natl_brittany.png}
-\includegraphics[width=0.49\textwidth]{fig/natl_iroise.png}\\
-\includegraphics[width=0.49\textwidth]{fig/natl_gibraltar.png}
-\includegraphics[width=0.49\textwidth]{fig/natl_openocean.png}
-\caption{HEALPix cells (blue) and WW3 triangles (red) around Brittany, the
+\includegraphics[width=0.49\textwidth]{fig/natl_v2_brittany.png}
+\includegraphics[width=0.49\textwidth]{fig/natl_v2_iroise.png}\\
+\includegraphics[width=0.49\textwidth]{fig/natl_v2_gibraltar.png}
+\includegraphics[width=0.49\textwidth]{fig/natl_v2_openocean.png}
+\caption{Grid v2: HEALPix cells (blue) and WW3 triangles (red) around Brittany, the
 Iroise Sea, the Strait of Gibraltar and the Azores (open ocean down to
 $\nside=128$). Near \ang{0} longitude above \ang{41.8}N the cells are
 strongly sheared in longitude--latitude because they lie at the boundary of
@@ -523,7 +524,8 @@ stores yet, with or without an ellipsoid.
 currents run (PBS jobs 7899025 for \texttt{ww3\_grid} and the
 interpolations, 7899026 for the month: \SI{41927}{s} on 112 ranks, plus
 \SI{718}{s} for \texttt{ww3\_ounf}) is validated on the same 331\,154
-blocks (PBS job 7905048, Table~\ref{tab:betamax}). Grid v2 differs from v1
+blocks (PBS job 7905048, Table~\ref{tab:betamax},
+Figs.~\ref{fig:v2_scatter} and~\ref{fig:v2_maps}). Grid v2 differs from v1
 only by the triangle-quality step (282 fewer nodes), so the change is that
 of \texttt{BETAMAX}: the bias is removed at every level (from
 \SI{-0.225}{m} to \SI{+0.005}{m}), the RMSE falls from 0.462 to
@@ -555,6 +557,25 @@ v2, \texttt{BETAMAX} 1.75), both with wind, ice, currents and sea level,
 against L3 altimetry, 4--31 January 2026, same blocks.}
 \label{tab:betamax}
 \end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v2_jan2026_cur_scatter.png}
+\caption{Run 7899026 (grid v2, \texttt{BETAMAX} 1.75, with currents and sea
+level): WW3 against altimeter $H_s$ (left) and bias and RMSE by $\nside$
+(right), to compare with Fig.~\ref{fig:val_scatter}.}
+\label{fig:v2_scatter}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v2_jan2026_cur_maps.png}
+\caption{Run 7899026: mean and maximum $H_s$ in January 2026, and WW3 minus
+altimeter $H_s$ along the tracks, to compare with Fig.~\ref{fig:val_maps}.
+The negative band along the southern open boundary (no incoming South
+Atlantic swell) remains.}
+\label{fig:v2_maps}
+\end{figure}
 
 A fourth run uses grid v3 with the same forcing and \texttt{BETAMAX}
 (PBS jobs 7901052 and 7901053; \texttt{ww3\_grid} finds 794\,613 sea
