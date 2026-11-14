@@ -138,10 +138,9 @@ Stores on S3 (trials, can be removed at any time):
 All four are drawn by the gridlook preview (draft pull request
 d70-t/gridlook#235), on the WGS84 ellipsoid, for example
 <https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v3_jan2026_cur/ww3-l11-l7.zarr>.
-The first grid stores (`grid_natl_v2`, `grid_natl_v3`) were drawn empty:
-`grid_pyramid.py` decoded `raw/uniq.u64` with $4\cdot4^d$ instead of the
-cdshealpix $16\cdot4^d$, so every cell identifier was $12\cdot4^d$ too large
-(beyond the sphere); the script now checks that the decoded pixels are
-valid. The first Hs stores (`natl_jan2026/hs-l11-l7.zarr`,
-`natl_jan2026_cur/hs-l11-l7.zarr`) are displayed but shifted, as explained
-above.
+The first grid stores were drawn empty: `grid_pyramid.py` decoded
+`raw/uniq.u64` with $4\cdot4^d$ instead of the cdshealpix $16\cdot4^d$, so
+every cell identifier was $12\cdot4^d$ too large (beyond the sphere); the
+script now checks that the decoded pixels are valid. Those stores, the
+shifted Hs stores of the v1 runs and the diagnostic test stores were removed
+from S3 on 2026-11-15.
