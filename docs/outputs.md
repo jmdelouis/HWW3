@@ -19,7 +19,7 @@ Nodes are in NESTED (Morton) order.
 
 | File | Type | Content |
 |---|---|---|
-| `uniq.u64` | uint64 | HEALPix NESTED uniq index of each node, $4\cdot4^{d} + i_{\rm pix}$ |
+| `uniq.u64` | uint64 | HEALPix NESTED uniq index of each node as in cdshealpix, $16\cdot4^{d} + i_{\rm pix}$ |
 | `level.u8` | uint8 | HEALPix depth $d$ of each node (nside $= 2^d$) |
 | `lon.f64`, `lat.f64` | float64 | geodetic degrees |
 | `depth.f64` | float64 | mean wet depth of the cell (m, positive down), at least `ww3.dmin` |
@@ -39,7 +39,7 @@ d = "grids/natl/raw/"
 uniq = np.fromfile(d + "uniq.u64", "<u8")
 level = np.fromfile(d + "level.u8", "u1")
 tri = np.fromfile(d + "tri.u32", "<u4").reshape(-1, 3)
-ipix = uniq - 4 * 4 ** level.astype(np.uint64)   # NESTED pixel at nside 2**level
+ipix = uniq - 16 * 4 ** level.astype(np.uint64)  # NESTED pixel at nside 2**level (cdshealpix uniq)
 ```
 
 ## Open-boundary file
@@ -87,7 +87,7 @@ step). `scripts/natl_pyramid.pbs` runs both on Datarmor:
 qsub -v GRID=grids/natl_v3 scripts/natl_pyramid.pbs                    # grid only, 20 s
 qsub -v RUN=natl_v2_jan2026_cur,GRID=grids/natl_v2 scripts/natl_pyramid.pbs
 zvenv/bin/python scripts/upload_s3.py grids/natl_v3/grid-l11-l7.zarr \
-  s3://grid4earth/public/trials/jmdelouis-2026-11-12-hww3/grid_natl_v3/grid-l11-l7.zarr
+  s3://grid4earth/public/trials/jmdelouis-2026-11-12-hww3/grid_natl_v3_fix/grid-l11-l7.zarr
 ```
 
 The pyramids are built on a compute node (zarr 3 needs Python ≥ 3.11:
@@ -128,15 +128,20 @@ run `natl_v2_jan2026_cur` (12 fields, 744 hours, PBS job 7905049) takes
 
 Stores on S3 (trials, can be removed at any time):
 
-- <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v2/grid-l11-l7.zarr>
-- <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v3/grid-l11-l7.zarr>
+- <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v2_fix/grid-l11-l7.zarr>
+- <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v3_fix/grid-l11-l7.zarr>
 - <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v2_jan2026_cur/ww3-l11-l7.zarr>
   (12 fields, January 2026, grid v2, `BETAMAX` 1.75)
 - <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v3_jan2026_cur/ww3-l11-l7.zarr>
   (same on grid v3, PBS job 7905051: 7,337 s, 37 GB)
 
-The gridlook preview (draft pull request d70-t/gridlook#235) reads their
-metadata, levels and time axis but does not draw `dggs`-only HEALPix stores
-yet, with or without an ellipsoid. The first Hs stores
-(`natl_jan2026/hs-l11-l7.zarr`, `natl_jan2026_cur/hs-l11-l7.zarr`) are
-displayed but shifted, as explained above.
+All four are drawn by the gridlook preview (draft pull request
+d70-t/gridlook#235), on the WGS84 ellipsoid, for example
+<https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v3_jan2026_cur/ww3-l11-l7.zarr>.
+The first grid stores (`grid_natl_v2`, `grid_natl_v3`) were drawn empty:
+`grid_pyramid.py` decoded `raw/uniq.u64` with $4\cdot4^d$ instead of the
+cdshealpix $16\cdot4^d$, so every cell identifier was $12\cdot4^d$ too large
+(beyond the sphere); the script now checks that the decoded pixels are
+valid. The first Hs stores (`natl_jan2026/hs-l11-l7.zarr`,
+`natl_jan2026_cur/hs-l11-l7.zarr`) are displayed but shifted, as explained
+above.

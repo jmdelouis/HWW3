@@ -9,7 +9,7 @@ use cdshealpix::nested;
 use rayon::prelude::*;
 use std::collections::HashSet;
 
-/// NESTED uniq index of cell `h` at depth `d` (`4 * 4^d + h`).
+/// NESTED uniq index of cell `h` at depth `d`, as in cdshealpix (`16 * 4^d + h`).
 #[inline]
 pub fn uniq(d: u8, h: u64) -> u64 {
     nested::to_uniq(d, h)

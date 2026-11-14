@@ -492,10 +492,13 @@ their place. The stores now hold the \texttt{dggs} convention only. The
 grid itself is also written as a pyramid (\texttt{scripts/grid\_pyramid.py}:
 level, cell size, depth, bathymetry slope and required size), for grids v2
 and v3, at
-\url{https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v3/grid-l11-l7.zarr}.
-The gridlook preview (draft pull request d70-t/gridlook\#235) reads their
-metadata, time axis and levels but does not draw \texttt{dggs}-only HEALPix
-stores yet, with or without an ellipsoid.
+\url{https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/grid_natl_v3_fix/grid-l11-l7.zarr}.
+The gridlook preview (draft pull request d70-t/gridlook\#235) draws both
+the run and the grid stores on the WGS84 ellipsoid. A first version of the
+grid stores was drawn empty: the node identifiers of \texttt{hww3-grid} are
+cdshealpix \texttt{uniq} indices, $16\cdot4^d + i_{\rm pix}$, and decoding
+them with $4\cdot4^d$ put every cell $12\cdot4^d$ beyond the last pixel of
+the sphere; \texttt{grid\_pyramid.py} now checks the decoded pixels.
 
 \paragraph{Wind-input growth parameter.} A third run on grid v2 with
 \texttt{BETAMAX} raised from 1.43 to 1.75 and the same forcing as the

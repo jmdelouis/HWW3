@@ -76,7 +76,7 @@ pub struct QualityBefore {
 
 /// The final grid: one entry per node, nodes in NESTED (Morton) order.
 pub struct Grid {
-    /// HEALPix NESTED uniq index of each node (`4 * 4^depth + ipix`)
+    /// HEALPix NESTED uniq index of each node, as in cdshealpix (`16 * 4^depth + ipix`)
     pub uniq: Vec<u64>,
     /// HEALPix depth of each node (`nside = 2^depth`)
     pub level: Vec<u8>,
@@ -390,7 +390,7 @@ pub fn write(cfg: &Config, grid: &Grid, summary: &Summary) -> Result<()> {
         "config": cfg,
         "summary": summary,
         "arrays": {
-            "uniq.u64": "HEALPix NESTED uniq index of each node (4*4^depth + ipix)",
+            "uniq.u64": "HEALPix NESTED uniq index of each node, cdshealpix convention (16*4^depth + ipix)",
             "level.u8": "HEALPix depth of each node (nside = 2^depth)",
             "lon.f64": "longitude (deg, geodetic)",
             "lat.f64": "latitude (deg, geodetic on the chosen ellipsoid)",

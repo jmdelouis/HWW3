@@ -77,7 +77,10 @@ def main():
 
     uniq = rd("uniq.u64", "<u8")
     level = rd("level.u8", "u1").astype(np.int64)
-    ipix = (uniq - (4 * 4 ** level).astype(np.uint64)).astype(np.int64)
+    # cdshealpix uniq: 16 * 4**depth + ipix (i.e. 4 * nside**2 at depth + 1)
+    ipix = (uniq - (16 * 4 ** level).astype(np.uint64)).astype(np.int64)
+    if np.any(ipix < 0) or np.any(ipix >= 12 * 4 ** level):
+        raise SystemExit("uniq.u64 does not decode to valid NESTED pixels")
     depth = rd("depth.f64", "<f8")
     lon, lat = rd("lon.f64", "<f8"), rd("lat.f64", "<f8")
     if os.path.exists(os.path.join(raw, "slope.f64")):
