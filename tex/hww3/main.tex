@@ -32,10 +32,11 @@ HEALPix pixel, the model state is a multi-resolution HEALPix map. It can be
 stored as GRID4EARTH Zarr datasets and compared with satellite products on
 the same grid without interpolation. This note describes the grid
 construction, how it is validated, and a first North Atlantic simulation for
-January 2026: with ERA5 winds, ice, Copernicus currents and sea level and
+January 2026: on the final bathymetry-driven grid (794\,613 nodes, 3 to
+\SI{51}{km}), with ERA5 winds, ice, Copernicus currents and sea level and
 the ST4 growth parameter \texttt{BETAMAX} set to 1.75, the modelled
 significant wave height matches ten altimeters with a bias of
-\SI{0.005}{m}, an RMSE of \SI{0.38}{m} and a correlation of 0.975.
+\SI{0.005}{m}, an RMSE of \SI{0.38}{m} and a correlation of 0.976.
 \end{abstract}
 
 \section{Motivation}
@@ -252,7 +253,10 @@ The January 2026 runs below use v1.}
 
 Open-boundary nodes (971) lie on the
 equator, at \ang{80}N, on the \ang{45}E cut of the Barents Sea and on the
-\ang{100}W cut of the Canadian archipelago (Figure~\ref{fig:natl_levels}).
+\ang{100}W cut of the Canadian archipelago. The figures of the grid
+(Figs.~\ref{fig:natl_levels} and~\ref{fig:natl_zoom}) show the final grid
+v3, refined from the bathymetry; grids v1 and v2 are kept in the tables
+for reference.
 
 \begin{table}[H]
 \centering
@@ -281,20 +285,19 @@ time: refinement + balance / cell bathymetry / triangulation & 70 / 23 / \SI{11}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{fig/natl_v2_levels.png}
-\caption{North Atlantic grid v2 (with the triangle-quality step, used by the
-runs from job 7899026 on): nodes coloured by $\nside$; open-boundary nodes
-in red.}
+\includegraphics[width=\textwidth]{fig/natl_v3_levels.png}
+\caption{Final North Atlantic grid v3 (OceanMesh2D size functions on GEBCO,
+794\,613 nodes): nodes coloured by $\nside$; open-boundary nodes in red.}
 \label{fig:natl_levels}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.49\textwidth]{fig/natl_v2_brittany.png}
-\includegraphics[width=0.49\textwidth]{fig/natl_v2_iroise.png}\\
-\includegraphics[width=0.49\textwidth]{fig/natl_v2_gibraltar.png}
-\includegraphics[width=0.49\textwidth]{fig/natl_v2_openocean.png}
-\caption{Grid v2: HEALPix cells (blue) and WW3 triangles (red) around Brittany, the
+\includegraphics[width=0.49\textwidth]{fig/natl_v3_brittany.png}
+\includegraphics[width=0.49\textwidth]{fig/natl_v3_iroise.png}\\
+\includegraphics[width=0.49\textwidth]{fig/natl_v3_gibraltar.png}
+\includegraphics[width=0.49\textwidth]{fig/natl_v3_openocean.png}
+\caption{Grid v3: HEALPix cells (blue) and WW3 triangles (red) around Brittany, the
 Iroise Sea, the Strait of Gibraltar and the Azores (open ocean down to
 $\nside=128$). Near \ang{0} longitude above \ang{41.8}N the cells are
 strongly sheared in longitude--latitude because they lie at the boundary of
@@ -339,21 +342,13 @@ converged (threshold \texttt{JGS\_PMIN} = 3\,\%). Memory use is
 (4464 steps) would therefore cost about \SI{23}{h} on 56 cores, or
 1300~core-hours.
 
-The wave field grows as expected (Fig.~\ref{fig:natl_test}): the median
+The wave field grows as expected: the median
 $H_s$ is \SI{1.0}{m} after \SI{3}{h}, \SI{1.85}{m} after \SI{6}{h} and
 \SI{2.75}{m} after \SI{12}{h}, with $T_{02}$ rising from 2.6 to
 \SI{4.8}{s}. $H_s$ stays lower on the lee side of the land masses (east of
 Britain, Shetland, the Americas) and at the open boundaries, where no
 spectra are imposed. The highest values (\SI{3.9}{m}) are on the
 Norwegian shelf near \ang{61}N, where the waves shoal. No NaN appears.
-
-\begin{figure}[ht]
-  \centering
-  \includegraphics[width=\textwidth]{fig/natl_test_hs.png}
-  \caption{$H_s$ after \SI{12}{h} of a homogeneous \SI{15}{m.s^{-1}}
-    westerly wind from rest (PBS job 7893925).}
-  \label{fig:natl_test}
-\end{figure}
 
 \subsection{January 2026: forcing and runs}
 \paragraph{Forcing.} ERA5 hourly \SI{10}{m} wind and sea-ice cover
@@ -401,12 +396,12 @@ which is how a HEALPix field is meant to be read.
 
 Over 4--31 January, 331\,154 blocks give a bias of \SI{-0.19}{m} for a mean
 observed $H_s$ of \SI{2.92}{m} ($-6.5$\,\%), an RMSE of \SI{0.45}{m}, a
-scatter index of 0.14 and a correlation of 0.972 (Table~\ref{tab:val},
-Fig.~\ref{fig:val_scatter}). The ten missions agree within
+scatter index of 0.14 and a correlation of 0.972 (Table~\ref{tab:val}).
+The ten missions agree within
 \SI{0.08}{m} in bias. The error does not grow where the grid is coarse:
 bias and RMSE decrease from $\nside=128$ (open ocean, high seas) to 2048
 (coast, lower seas), and the scatter index stays between 0.13 and 0.17.
-The along-track differences (Fig.~\ref{fig:val_maps}) point to two causes
+The along-track differences point to two causes
 of the negative bias, both outside the grid: (i) the southern open boundary
 at the equator, where no spectra are imposed, so that the swell coming
 from the South Atlantic is missing (differences below \SI{-1}{m} along
@@ -439,23 +434,6 @@ Mediterranean   &  14\,539 & 2.19 & $-0.20$ & 0.40 & 0.16 / 0.967 \\
 node.}
 \label{tab:val}
 \end{table}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig/natl_jan2026_scatter.png}
-\caption{Left: WW3 against altimeter $H_s$ (density, log scale). Right:
-bias and RMSE by $\nside$ of the matched node (number of blocks in
-brackets).}
-\label{fig:val_scatter}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig/natl_jan2026_maps.png}
-\caption{January 2026, run 7894000: mean and maximum $H_s$, and WW3 minus
-altimeter $H_s$ along the tracks.}
-\label{fig:val_maps}
-\end{figure}
 
 \paragraph{Effect of currents and sea level.} The second run (PBS job
 7894069, same forcing plus Copernicus Marine hourly surface currents and
@@ -524,8 +502,7 @@ stores yet, with or without an ellipsoid.
 currents run (PBS jobs 7899025 for \texttt{ww3\_grid} and the
 interpolations, 7899026 for the month: \SI{41927}{s} on 112 ranks, plus
 \SI{718}{s} for \texttt{ww3\_ounf}) is validated on the same 331\,154
-blocks (PBS job 7905048, Table~\ref{tab:betamax},
-Figs.~\ref{fig:v2_scatter} and~\ref{fig:v2_maps}). Grid v2 differs from v1
+blocks (PBS job 7905048, Table~\ref{tab:betamax}). Grid v2 differs from v1
 only by the triangle-quality step (282 fewer nodes), so the change is that
 of \texttt{BETAMAX}: the bias is removed at every level (from
 \SI{-0.225}{m} to \SI{+0.005}{m}), the RMSE falls from 0.462 to
@@ -558,29 +535,11 @@ against L3 altimetry, 4--31 January 2026, same blocks.}
 \label{tab:betamax}
 \end{table}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig/natl_v2_jan2026_cur_scatter.png}
-\caption{Run 7899026 (grid v2, \texttt{BETAMAX} 1.75, with currents and sea
-level): WW3 against altimeter $H_s$ (left) and bias and RMSE by $\nside$
-(right), to compare with Fig.~\ref{fig:val_scatter}.}
-\label{fig:v2_scatter}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig/natl_v2_jan2026_cur_maps.png}
-\caption{Run 7899026: mean and maximum $H_s$ in January 2026, and WW3 minus
-altimeter $H_s$ along the tracks, to compare with Fig.~\ref{fig:val_maps}.
-The negative band along the southern open boundary (no incoming South
-Atlantic swell) remains.}
-\label{fig:v2_maps}
-\end{figure}
-
 \paragraph{Bathymetry-driven grid.} A fourth run uses grid v3 with the
 same forcing and \texttt{BETAMAX} (PBS jobs 7901052 and 7901053;
 \texttt{ww3\_grid} finds 794\,613 sea points), so that its difference with
-the v2 run is the grid alone (Fig.~\ref{fig:v3_levels}). It takes
+the v2 run is the grid alone (Figs.~\ref{fig:natl_levels}
+and~\ref{fig:natl_zoom}). It takes
 \SI{68832}{s} on 112 ranks (1.64 times the v2 run for 1.58 times the
 nodes) and \SI{835}{s} for \texttt{ww3\_ounf}. The altimeter validation (PBS
 job 7905050, Table~\ref{tab:v3}) matches 328\,902 blocks instead of
@@ -596,22 +555,29 @@ brings little, and its cost is mostly worth it for coastal products. The
 12-field pyramid (PBS job 7905051, \SI{7337}{s}, \SI{37}{GB}) is at
 \url{https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v3_jan2026_cur/ww3-l11-l7.zarr}.
 
+This run closes the test: it is the reference configuration (grid v3, ERA5
+wind and ice, Copernicus currents and sea level, \texttt{BETAMAX} 1.75),
+and the figures below are its results (Figs.~\ref{fig:val_scatter}
+and~\ref{fig:val_maps}); the earlier runs are kept in the tables only. The
+negative band along the southern open boundary, where the South Atlantic
+swell is missing, is the largest remaining error.
+
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{fig/natl_v3_levels.png}
-\caption{Grid v3 (OceanMesh2D size functions on GEBCO): nodes coloured by
-$\nside$; open-boundary nodes in red. Compare with
-Fig.~\ref{fig:natl_levels}.}
-\label{fig:v3_levels}
+\includegraphics[width=\textwidth]{fig/natl_v3_jan2026_cur_scatter.png}
+\caption{Final run 7901053 (grid v3, \texttt{BETAMAX} 1.75, wind, ice,
+currents and sea level). Left: WW3 against altimeter $H_s$ (density, log
+scale). Right: bias and RMSE by $\nside$ of the matched node (number of
+blocks in brackets).}
+\label{fig:val_scatter}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.49\textwidth]{fig/natl_v3_brittany.png}
-\includegraphics[width=0.49\textwidth]{fig/natl_v3_gibraltar.png}
-\caption{Grid v3 around Brittany and the Strait of Gibraltar, to compare
-with Fig.~\ref{fig:natl_zoom}.}
-\label{fig:v3_zoom}
+\includegraphics[width=\textwidth]{fig/natl_v3_jan2026_cur_maps.png}
+\caption{Final run 7901053: mean and maximum $H_s$ in January 2026, and WW3
+minus altimeter $H_s$ along the tracks.}
+\label{fig:val_maps}
 \end{figure}
 
 \begin{table}[H]
@@ -642,12 +608,13 @@ figures) is described step by step in the Sphinx documentation,
 \item Table~\ref{tab:quality}: \texttt{qsub -v CFG=configs/natl\_v2\_datarmor.json,GRID=grids/natl\_v2 scripts/natl\_grid.pbs}.
 \item Table~\ref{tab:synth}: \texttt{cd hww3-grid \&\& cargo test --release island\_multiscale -- --nocapture}.
 \item Figure~\ref{fig:island}: \texttt{python scripts/plot\_mesh.py /tmp/hww3\_out\_island tex/hww3/fig/island\_mesh\_zoom.png 41 49 39 44.5}.
-\item Table~\ref{tab:natl}, Figures~\ref{fig:natl_levels}--\ref{fig:natl_zoom}:
-  \texttt{qsub scripts/natl\_grid.pbs} on Datarmor, then
-  \texttt{python scripts/plot\_levels.py grids/natl/plot/nodes.npz fig/natl\_levels.png} and
-  \texttt{python scripts/plot\_cells\_tris.py grids/natl/plot/<zone>.npz fig/natl\_<zone>.png}.
-\item Figure~\ref{fig:natl_test}: \texttt{qsub scripts/natl\_test.pbs} on
-  Datarmor, then \texttt{python scripts/plot\_hs.py runs/natl\_test/ww3.202601.nc fig/natl\_test\_hs.png}.
+\item Table~\ref{tab:natl}: \texttt{qsub scripts/natl\_grid.pbs} on Datarmor.
+\item Figures~\ref{fig:natl_levels}--\ref{fig:natl_zoom}:
+  \texttt{qsub -v CFG=configs/natl\_v3\_datarmor.json,GRID=grids/natl\_v3 scripts/natl\_grid.pbs}, then
+  \texttt{python scripts/plot\_levels.py grids/natl\_v3/plot/nodes.npz fig/natl\_v3\_levels.png} and
+  \texttt{python scripts/plot\_cells\_tris.py grids/natl\_v3/plot/<zone>.npz fig/natl\_v3\_<zone>.png}.
+\item Figures~\ref{fig:val_scatter}--\ref{fig:val_maps}:
+  \texttt{qsub -v RUN=natl\_v3\_jan2026\_cur,GRID=grids/natl\_v3 scripts/natl\_validate.pbs}.
 \end{itemize}
 
 \end{document}
