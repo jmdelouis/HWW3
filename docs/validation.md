@@ -169,6 +169,72 @@ whole-domain RMSE improves by 0.008 m and the shelf seas do not change
 within 0.01 m. Coastal buoys are needed to see the effect of the finer
 shelf resolution. Statistics: `results/natl_v3_jan2026_cur_val_stats.json`.
 
+## January 2026 against moored buoys
+
+`scripts/validate_buoys.py` (`qsub scripts/natl_buoys.pbs`, PBS job
+7920689, 5 min on one core) compares the v2 and v3 runs with the moored
+buoys of the Copernicus Marine in situ TAC: monthly files `MO/202601` of
+`INSITU_GLO_PHYBGCWAV_DISCRETE_MYNRT_013_030` on the Datarmor mirror
+(`/home/ref-copernicus-insitu`). Of 1,067 files, 449 carry `VHM0`. Samples
+with flag 1 after the 3-day cold start are averaged per hour; a platform
+distributed by several networks is kept once (same position to 0.01°); a
+buoy is kept with at least 100 hours and a wet node within 10 km in every
+run, so both runs use the same 267 buoys and 166,626 hours. The model is
+taken at the nearest node, linear in time. 178 buoys are at nside 2048 in
+both grids, 44 move from nside 1024 (v2) to 2048 (v3).
+
+| subset | buoys | bias v2 / v3 (m) | RMSE v2 / v3 (m) | SI v2 / v3 | r v2 / v3 |
+|---|---|---|---|---|---|
+| all | 267 | −0.015 / −0.004 | 0.368 / 0.375 | 0.263 / 0.268 | 0.9538 / 0.9522 |
+| v3 node at nside 2048 | 229 | −0.014 / +0.001 | 0.374 / 0.381 | 0.288 / 0.294 | 0.9475 / 0.9456 |
+| v3 node at nside 1024 | 34 | −0.033 / −0.038 | 0.333 / 0.335 | 0.169 / 0.170 | 0.9671 / 0.9667 |
+| depth < 50 m | 186 | −0.012 / +0.004 | 0.330 / 0.341 | 0.305 / 0.315 | 0.9261 / 0.9218 |
+| depth 50–200 m | 58 | +0.002 / +0.002 | 0.459 / 0.457 | 0.225 / 0.224 | 0.9493 / 0.9500 |
+| depth ≥ 200 m | 23 | −0.079 / −0.081 | 0.403 / 0.405 | 0.170 / 0.171 | 0.9747 / 0.9745 |
+| North Sea | 95 | −0.050 / −0.052 | 0.288 / 0.286 | 0.285 / 0.283 | 0.9396 / 0.9419 |
+| Channel and Biscay | 36 | +0.101 / +0.177 | 0.522 / 0.556 | 0.277 / 0.285 | 0.9452 / 0.9410 |
+| Mediterranean | 35 | −0.108 / −0.111 | 0.440 / 0.441 | 0.240 / 0.240 | 0.9528 / 0.9528 |
+| US and Canada coasts | 68 | −0.001 / −0.007 | 0.233 / 0.233 | 0.215 / 0.215 | 0.9476 / 0.9475 |
+
+The buoy scatter index is twice the altimeter one: most buoys are in less
+than 50 m of water (mean $H_s$ 1.1 m), where local wind, coastal sheltering
+and nearest-node sampling of a 3 km cell dominate. Grid v3 brings the bias
+closer to zero but not the RMSE, and every region but one is unchanged
+within 0.01 m. On the south coast of England (Channel Coastal Observatory
+buoys 6201007 Lyme Bay, 6201002 Torbay, 6201000 Mount's Bay, 6201008 Poole
+Bay) v2 underestimates and v3 overestimates the westerly storms, by up to
+1.5 m at 6201007: the shelter of these bays by the headlands is not
+resolved by 3 km cells, and depends on the upstream cells (nside 1024
+within 40 km in v2, none in v3). In Liverpool Bay (6201029) the RMSE falls
+from 0.52 to 0.32 m. $T_{m02}$ (`VTM02`, 180 buoys) is 0.10 s too short in
+both runs, RMSE 1.37 s (v2) and 1.33 s (v3). A coastal gain needs cells
+finer than nside 2048 near the coast. Statistics per subset and per buoy:
+`results/natl_v3_jan2026_cur_buoys_stats.json`.
+
+```{figure} _static/fig/natl_v3_jan2026_cur_buoys_scatter.png
+:width: 100%
+
+Run v3 against 267 moored buoys (hourly $H_s$), and RMSE change per buoy
+from v2 to v3.
+```
+
+```{figure} _static/fig/natl_v3_jan2026_cur_buoys_series.png
+:width: 100%
+
+Hourly $H_s$ at the four buoys where the RMSE changes most from v2 to v3.
+```
+
+## Open-boundary spectra
+
+The January 2026 runs impose no spectra on the open boundaries (equator,
+Barents Sea), hence the negative band along the equator. On Datarmor the
+Ifremer global run `GLOBMULTI` (`/home/datawork-WW3/FORECAST/GLOBMULTI/
+GLOB-30M/FIELD_NC/best_estimate/2026`, 0.5°, 3-hourly) writes the height,
+peak period, direction and spread of six partitions (`phs0`–`phs5`,
+`ptp*`, `pdir*`, `pspr*`), from which the boundary spectra can be rebuilt
+for `ww3_bounc`. Its point spectra (`POINTS/SPEC_NC`) are given at buoy
+positions only. This is not done yet.
+
 ```{figure} _static/fig/natl_jan2026_scatter.png
 :width: 100%
 

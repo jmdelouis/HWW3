@@ -36,7 +36,8 @@ January 2026: on the final bathymetry-driven grid (794\,613 nodes, 3 to
 \SI{51}{km}), with ERA5 winds, ice, Copernicus currents and sea level and
 the ST4 growth parameter \texttt{BETAMAX} set to 1.75, the modelled
 significant wave height matches ten altimeters with a bias of
-\SI{0.005}{m}, an RMSE of \SI{0.38}{m} and a correlation of 0.976.
+\SI{0.005}{m}, an RMSE of \SI{0.38}{m} and a correlation of 0.976; at 267 moored buoys, mostly coastal, the hourly
+$H_s$ has a bias of \SI{-0.004}{m} and an RMSE of \SI{0.37}{m}.
 \end{abstract}
 
 \section{Motivation}
@@ -190,7 +191,9 @@ meet.}
   Copernicus Marine; a fixed sea-ice obstruction taken from the January ERA5
   sea-ice concentration.
 \item Open boundaries (southern boundary at the equator, eastern Barents
-  Sea): spectra from an existing global run. \todo{source of the spectra}
+  Sea): no spectra imposed in the January 2026 runs; the partitions of the
+  Ifremer \texttt{GLOBMULTI} global run are the planned source (see the
+  end of Section~\ref{sec:validation}).
 \end{itemize}
 
 \subsection{Grid statistics}
@@ -378,7 +381,7 @@ yet. These two runs are kept on grid v1 as the reference January
 simulation; grid v2 (with the triangle-quality step,
 Table~\ref{tab:quality}) is used for all later runs.
 
-\subsection{January 2026: validation against altimetry}
+\subsection{January 2026: validation against altimetry and buoys}\label{sec:validation}
 The model $H_s$ is compared with the along-track L3 NRT significant wave
 height of the ten altimeters of CMEMS
 \texttt{WAVE\_GLO\_PHY\_SWH\_L3\_NRT\_014\_001} (AltiKa, CryoSat-2, CFOSAT,
@@ -599,8 +602,99 @@ Mediterranean & 14\,539 / 14\,454   & $-0.054$ / $-0.054$ & 0.330 / 0.331 & 0.14
 \label{tab:v3}
 \end{table}
 
-\todo{boundary spectra from a global run; comparison with coastal buoys,
-where grid v3 should matter}
+\paragraph{Moored buoys.} The altimeter blocks average \SI{50}{km} and stay
+away from the coast, so the two runs are also compared with the moored
+buoys of the Copernicus Marine in situ TAC (monthly files of
+\texttt{INSITU\_GLO\_PHYBGCWAV\_DISCRETE\_MYNRT\_013\_030}, Datarmor mirror;
+\texttt{scripts/validate\_buoys.py}, PBS job 7920689, \SI{5}{min} on one
+core). Of the 1\,067 January 2026 files, 449 carry $H_s$
+(\texttt{VHM0}); the good samples (flag 1) after the three days of cold
+start are averaged per hour, platforms distributed by several networks are
+kept once, and a buoy is kept if it has at least 100 hours and a wet node
+within \SI{10}{km} in both grids. This leaves 267 buoys and 166\,626 hours,
+the same in both runs; 178 buoys are at $\nside=2048$ in both grids and 44
+move from 1024 in v2 to 2048 in v3. The model is interpolated in time to
+the hourly bins at the nearest node (Table~\ref{tab:buoys},
+Figs.~\ref{fig:buoys} and~\ref{fig:buoy_series}).
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+subset & buoys & bias v2 / v3 (m) & RMSE v2 / v3 (m) & SI v2 / v3 \\
+\midrule
+all                     & 267 & $-0.015$ / $-0.004$ & 0.368 / 0.375 & 0.263 / 0.268 \\
+v3 node at $\nside=2048$& 229 & $-0.014$ / $+0.001$ & 0.374 / 0.381 & 0.288 / 0.294 \\
+v3 node at $\nside=1024$&  34 & $-0.033$ / $-0.038$ & 0.333 / 0.335 & 0.169 / 0.170 \\
+depth $<\SI{50}{m}$     & 186 & $-0.012$ / $+0.004$ & 0.330 / 0.341 & 0.305 / 0.315 \\
+depth 50--\SI{200}{m}   &  58 & $+0.002$ / $+0.002$ & 0.459 / 0.457 & 0.225 / 0.224 \\
+depth $\ge\SI{200}{m}$  &  23 & $-0.079$ / $-0.081$ & 0.403 / 0.405 & 0.170 / 0.171 \\
+North Sea               &  95 & $-0.050$ / $-0.052$ & 0.288 / 0.286 & 0.285 / 0.283 \\
+Channel and Biscay      &  36 & $+0.101$ / $+0.177$ & 0.522 / 0.556 & 0.277 / 0.285 \\
+Mediterranean           &  35 & $-0.108$ / $-0.111$ & 0.440 / 0.441 & 0.240 / 0.240 \\
+US and Canada coasts    &  68 & $-0.001$ / $-0.007$ & 0.233 / 0.233 & 0.215 / 0.215 \\
+\bottomrule
+\end{tabular}
+\caption{Runs 7899026 (grid v2) and 7901053 (grid v3) against moored
+buoys, hourly $H_s$, 4--31 January 2026, same buoys and hours in both
+runs. Depth is the model depth of the v3 node.}
+\label{tab:buoys}
+\end{table}
+
+The scatter index at the buoys (0.27) is twice the altimeter one: most
+buoys are in less than \SI{50}{m} of water, with a mean $H_s$ of
+\SI{1.1}{m}, where the local wind, the sheltering by the coast and the
+nearest-node sampling of a \SI{3}{km} cell dominate the error. Grid v3 does
+not improve these scores: the bias is closer to zero (from $-0.015$ to
+\SI{-0.004}{m}) but the RMSE grows from 0.368 to \SI{0.375}{m}, and every
+region except one is unchanged within \SI{0.01}{m}. The exception is the
+south coast of England (Channel Coastal Observatory buoys in Lyme Bay,
+Torbay, Mount's Bay, Poole Bay), where both grids have $\nside=2048$ at the
+buoy but v2 still has $\nside=1024$ cells within \SI{40}{km} and v3 none:
+v2 underestimates the westerly storms in these bays and v3 overestimates
+them, by up to \SI{1.5}{m} at buoy 6201007 (Fig.~\ref{fig:buoy_series}).
+The shelter of these bays by Portland Bill, Start Point and the Lizard is
+not resolved by \SI{3}{km} cells, and its result depends on the cells
+upstream; on the contrary, in Liverpool Bay (buoy 6201029) the RMSE falls
+from 0.52 to \SI{0.32}{m}. The mean zero-crossing period $T_{m02}$
+(\texttt{VTM02}, 180 buoys) is \SI{0.10}{s} too short in both runs, with an
+RMSE of 1.37 (v2) and \SI{1.33}{s} (v3). Grid v3 is therefore as good as v2
+for the coastal buoys but not better: a coastal gain needs cells finer than
+$\nside=2048$ (\SI{1.6}{km} at $\nside=4096$) along the coast and in the
+lee of headlands, which the generator can produce by raising
+$\nside^{\max}$ in a limited area.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v3_jan2026_cur_buoys_scatter.png}
+\caption{Run 7901053 (grid v3) against 267 moored buoys, hourly $H_s$.
+Left: density, log scale. Right: change of the RMSE per buoy from v2 to v3
+(colour scale saturated at $\pm\SI{0.05}{m}$).}
+\label{fig:buoys}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v3_jan2026_cur_buoys_series.png}
+\caption{Hourly $H_s$ at the four buoys where the RMSE changes most from v2
+to v3: Lyme Bay (6201007), Mount's Bay (6201000), Liverpool Bay (6201029)
+and Torbay (6201002). Black dots: buoy; the legend gives the $\nside$ of the
+node and its distance to the buoy.}
+\label{fig:buoy_series}
+\end{figure}
+
+\paragraph{Open-boundary spectra.} No spectra are imposed on the open
+boundaries in these runs: the southern boundary on the equator and the
+Barents Sea boundary are open and empty, which explains the negative band
+of Fig.~\ref{fig:val_maps} along the equator. A source for January 2026
+exists on Datarmor: the Ifremer global run \texttt{GLOBMULTI} at
+\ang{0.5} (\texttt{GLOB-30M}, ECMWF wind) writes every \SI{3}{h} the
+height, peak period, direction and spread of six wave partitions
+(\texttt{phs0}--\texttt{phs5}, \texttt{ptp}, \texttt{pdir},
+\texttt{pspr}) from which spectra on the open-boundary nodes can be rebuilt
+for \texttt{ww3\_bounc}; the point spectra of the same run
+(\texttt{POINTS/SPEC\_NC}) are given at buoy positions only and do not
+cover the boundary. This is the next step of the configuration.
 
 \appendix
 \section{Reproducing}
@@ -618,6 +712,8 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{python scripts/plot\_cells\_tris.py grids/natl\_v3/plot/<zone>.npz fig/natl\_v3\_<zone>.png}.
 \item Figures~\ref{fig:val_scatter}--\ref{fig:val_maps}:
   \texttt{qsub -v RUN=natl\_v3\_jan2026\_cur,GRID=grids/natl\_v3 scripts/natl\_validate.pbs}.
+\item Table~\ref{tab:buoys}, Figures~\ref{fig:buoys}--\ref{fig:buoy_series}:
+  \texttt{qsub scripts/natl\_buoys.pbs}.
 \end{itemize}
 
 \end{document}

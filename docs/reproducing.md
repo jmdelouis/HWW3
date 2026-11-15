@@ -168,6 +168,18 @@ Expected for the wind-and-ice run: 331,154 blocks, bias −0.19 m,
 RMSE 0.45 m, SI 0.14, r 0.972 (see Validation). Needs `scipy` and
 `matplotlib` in the venv (`pip install --only-binary=:all: scipy matplotlib`).
 
+### Buoy validation
+
+```bash
+qsub -o logs/natl_buoys.log -j oe scripts/natl_buoys.pbs   # 5 min, needs the v2 and v3 runs
+```
+
+Writes `runs/natl_v3_jan2026_cur/val/buoys_{stats.json,scatter.png,series.png}`
+from the Copernicus Marine moored buoys of January 2026
+(`/home/ref-copernicus-insitu/.../monthly/MO/202601`). Expected: 267 buoys,
+166,626 hours, $H_s$ bias −0.015 / −0.004 m and RMSE 0.368 / 0.375 m for
+v2 / v3 (see Validation).
+
 ## 8. Note
 
 ```bash
