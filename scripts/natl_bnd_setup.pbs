@@ -1,0 +1,46 @@
+#!/bin/bash
+#PBS -N hww3_bnd_prep
+#PBS -q sequentiel
+#PBS -l mem=30g
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -o /home1/datawork/jmdeloui/HWW3/logs/natl_bnd_setup.log
+# Run directory for the January 2026 run on grid v3 with open-boundary spectra:
+# the grid and forcing of runs/natl_v3_jan2026_cur, spectra rebuilt from the
+# partitions of the Ifremer GLOBMULTI GLOB-30M run (scripts/boundary_spectra.py),
+# then ww3_bounc writes nest.ww3.
+#   J=$(qsub scripts/natl_bnd_setup.pbs)
+#   qsub -W depend=afterok:$J -v RUN=natl_v3_jan2026_bnd -o logs/natl_v3_bnd_run.log scripts/natl_v2_run.pbs
+set -e
+R=/home1/datawork/jmdeloui/HWW3
+NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174
+source /usr/share/Modules/3.2.10/init/bash
+module purge
+module load intel-comp/20 impi/2019.9.304
+export LD_LIBRARY_PATH=$R/opt/lib:$NC/lib:$LD_LIBRARY_PATH
+B=$R/opt/ww3/bin
+SRC=$R/runs/${SRC:-natl_v3_jan2026_cur}
+G=$R/${GRID:-grids/natl_v3}
+D=$R/runs/${RUN:-natl_v3_jan2026_bnd}
+mkdir -p $D; cd $D
+for f in mod_def.ww3 wind.ww3 ice.ww3 current.ww3 level.ww3 natl.msh natl.obc; do ln -sf $(readlink -f $SRC/$f) .; done
+cp $SRC/ST4TABUHF2.bin $SRC/ww3_ounf.nml .
+sed 's|^! no boundary spectra yet; cold start.|! open-boundary spectra rebuilt from the GLOBMULTI GLOB-30M partitions (nest.ww3); cold start.|' \
+  $SRC/ww3_shel.nml > ww3_shel.nml
+t0=$(date +%s)
+$R/venv/bin/python $R/scripts/boundary_spectra.py $G spec
+echo "boundary_spectra: $(( $(date +%s)-t0 )) s"
+sed 's|^|spec/|' spec/spec.list > spec.list
+cat > ww3_bounc.nml <<NML
+&BOUND_NML
+  BOUND%MODE    = 'WRITE'
+  BOUND%INTERP  = 2
+  BOUND%VERBOSE = 0
+  BOUND%FILE    = 'spec.list'
+/
+NML
+t0=$(date +%s)
+$B/ww3_bounc > ww3_bounc.out 2>&1 || { tail -40 ww3_bounc.out; exit 1; }
+echo "ww3_bounc: $(( $(date +%s)-t0 )) s"
+tail -15 ww3_bounc.out
+ls -la nest.ww3

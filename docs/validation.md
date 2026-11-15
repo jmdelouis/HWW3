@@ -233,7 +233,19 @@ GLOB-30M/FIELD_NC/best_estimate/2026`, 0.5°, 3-hourly) writes the height,
 peak period, direction and spread of six partitions (`phs0`–`phs5`,
 `ptp*`, `pdir*`, `pspr*`), from which the boundary spectra can be rebuilt
 for `ww3_bounc`. Its point spectra (`POINTS/SPEC_NC`) are given at buoy
-positions only. This is not done yet.
+positions only.
+
+`scripts/boundary_spectra.py` (`scripts/natl_bnd_setup.pbs`, PBS job
+7920771) takes, for each of the 1,341 open-boundary nodes of grid v3, the
+nearest global cell with data (318 cells, at most 1.16° away), and sums
+over the six partitions a JONSWAP spectrum (γ = 3.3, peak 1/Tp, scaled to
+the partition height on the model frequencies) times a
+$\cos^{2s}(\Delta\theta/2)$ spreading with $s = 2/\sigma^2 - 1$. The
+rebuilt spectra give 0.99 of the global $H_s$ (mean 1.32 m on the boundary
+cells, maximum 4.58 m). `ww3_bounc` (linear interpolation between the two
+nearest cells) writes `nest.ww3` (249 times every 3 h, 366 MB) in 9 s. Run
+`natl_v3_jan2026_bnd` (grid v3, same forcing as `natl_v3_jan2026_cur` plus
+these spectra, PBS job 7920772) is running.
 
 ```{figure} _static/fig/natl_jan2026_scatter.png
 :width: 100%

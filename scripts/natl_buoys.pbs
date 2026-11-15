@@ -3,11 +3,12 @@
 #PBS -q sequentiel
 #PBS -l select=1:ncpus=1:mem=60g
 #PBS -l walltime=02:00:00
-# Moored-buoy validation of the January 2026 runs on grids v2 and v3.
-#   qsub scripts/natl_buoys.pbs
+# Moored-buoy validation of two January 2026 runs (LABEL:RUN_NC:GRID_DIR).
+#   qsub scripts/natl_buoys.pbs                         # grid v2 against grid v3
+#   qsub -v A=v3:runs/natl_v3_jan2026_cur/ww3.202601.nc:grids/natl_v3,B=v3bnd:runs/natl_v3_jan2026_bnd/ww3.202601.nc:grids/natl_v3,OUT=runs/natl_v3_jan2026_bnd/val/buoys scripts/natl_buoys.pbs
 cd $PBS_O_WORKDIR
-mkdir -p runs/natl_v3_jan2026_cur/val
-$PBS_O_WORKDIR/venv/bin/python scripts/validate_buoys.py \
-  runs/natl_v3_jan2026_cur/val/buoys \
-  v2:runs/natl_v2_jan2026_cur/ww3.202601.nc:grids/natl_v2 \
-  v3:runs/natl_v3_jan2026_cur/ww3.202601.nc:grids/natl_v3
+A=${A:-v2:runs/natl_v2_jan2026_cur/ww3.202601.nc:grids/natl_v2}
+B=${B:-v3:runs/natl_v3_jan2026_cur/ww3.202601.nc:grids/natl_v3}
+OUT=${OUT:-runs/natl_v3_jan2026_cur/val/buoys}
+mkdir -p $(dirname $OUT)
+$PBS_O_WORKDIR/venv/bin/python scripts/validate_buoys.py $OUT $A $B

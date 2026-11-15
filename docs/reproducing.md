@@ -156,6 +156,19 @@ qsub -W depend=afterok:$J -v RUN=natl_v3_jan2026_cur -o logs/natl_v3_run.log scr
 `ww3_prnc` 80, 1, 133 and 58 s). With the same forcing and `BETAMAX` as
 the v2 run, the difference between the two runs is the grid alone.
 
+### Grid v3 run with open-boundary spectra
+
+```bash
+J=$(qsub scripts/natl_bnd_setup.pbs)        # 2 min: spectra from GLOBMULTI GLOB-30M, ww3_bounc
+qsub -W depend=afterok:$J -v RUN=natl_v3_jan2026_bnd -o logs/natl_v3_bnd_run.log scripts/natl_v2_run.pbs
+```
+
+`natl_bnd_setup.pbs` links the grid and forcing of `runs/natl_v3_jan2026_cur`
+into `runs/natl_v3_jan2026_bnd`, rebuilds one spectrum file per global cell
+next to the open boundary in `spec/` (`scripts/boundary_spectra.py`) and runs
+`ww3_bounc`, which writes `nest.ww3`; `ww3_shel` reads it at start (column
+`b` of `log.ww3`).
+
 ### Altimeter validation
 
 ```bash
