@@ -134,8 +134,11 @@ Stores on S3 (trials, can be removed at any time):
   (12 fields, January 2026, grid v2, `BETAMAX` 1.75)
 - <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v3_jan2026_cur/ww3-l11-l7.zarr>
   (same on grid v3, PBS job 7905051: 7,337 s, 37 GB)
+- <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v3_jan2026_bnd/ww3-l11-l7.zarr>
+  (grid v3 with open-boundary spectra from GLOBMULTI, PBS job 7920778:
+  7,445 s, 37 GB, 225,116 objects uploaded in 5,470 s)
 
-All four are drawn by the gridlook preview (draft pull request
+All five are drawn by the gridlook preview (draft pull request
 d70-t/gridlook#235), on the WGS84 ellipsoid, for example
 <https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v3_jan2026_cur/ww3-l11-l7.zarr>.
 The first grid stores were drawn empty: `grid_pyramid.py` decoded
