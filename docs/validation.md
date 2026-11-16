@@ -245,7 +245,38 @@ rebuilt spectra give 0.99 of the global $H_s$ (mean 1.32 m on the boundary
 cells, maximum 4.58 m). `ww3_bounc` (linear interpolation between the two
 nearest cells) writes `nest.ww3` (249 times every 3 h, 366 MB) in 9 s. Run
 `natl_v3_jan2026_bnd` (grid v3, same forcing as `natl_v3_jan2026_cur` plus
-these spectra, PBS job 7920772) is running.
+these spectra, PBS job 7920772, 68,799 s on 112 cores) is validated on the
+same 328,902 altimeter blocks (PBS job 7920776) and 268 buoys (PBS job
+7920777); without / with boundary spectra:
+
+| subset | N | bias (m) | RMSE (m) | SI |
+|---|---|---|---|---|
+| all | 328,902 | +0.005 / +0.041 | 0.376 / 0.348 | 0.129 / 0.118 |
+| nside 128 | 155,126 | +0.013 / +0.055 | 0.384 / 0.350 | 0.123 / 0.110 |
+| nside 256 | 75,413 | +0.018 / +0.050 | 0.389 / 0.367 | 0.123 / 0.115 |
+| nside 512 | 47,048 | −0.015 / +0.025 | 0.377 / 0.347 | 0.141 / 0.129 |
+| nside 1024 | 30,714 | −0.019 / +0.002 | 0.350 / 0.333 | 0.147 / 0.140 |
+| nside 2048 | 20,601 | −0.026 / −0.005 | 0.299 / 0.283 | 0.165 / 0.156 |
+| North Sea | 5,629 | −0.139 / −0.139 | 0.381 / 0.381 | 0.123 / 0.123 |
+| Mediterranean | 14,454 | −0.054 / −0.054 | 0.331 / 0.331 | 0.149 / 0.149 |
+| buoys, hourly $H_s$ | 167,298 h | −0.004 / −0.004 | 0.375 / 0.375 | – |
+
+The correlation rises from 0.9758 to 0.9794 and the regression slope is
+1.000. All ten missions improve (RMSE lower by 0.015 to 0.038 m). The gain
+is largest on day 4, when the swell entering through the equator is
+missing from the cold start (RMSE 0.437 → 0.335 m, bias −0.19 → −0.13 m),
+and stays 0.02–0.04 m during the storms of 26–31 January. The negative band
+along the equator is gone. The North Sea, the Mediterranean and the buoys,
+sheltered from the boundaries, do not change ($T_{m02}$ RMSE 1.325 s at
+180 buoys in both runs). Statistics: `results/natl_v3_jan2026_bnd_val_stats.json`
+and `results/natl_v3_jan2026_bnd_buoys_stats.json`.
+
+```{figure} _static/fig/natl_v3_jan2026_bnd_maps.png
+:width: 100%
+
+Run with open-boundary spectra: mean and maximum $H_s$ in January 2026, and
+WW3 − altimeter along tracks.
+```
 
 ```{figure} _static/fig/natl_jan2026_scatter.png
 :width: 100%

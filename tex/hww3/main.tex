@@ -37,7 +37,10 @@ January 2026: on the final bathymetry-driven grid (794\,613 nodes, 3 to
 the ST4 growth parameter \texttt{BETAMAX} set to 1.75, the modelled
 significant wave height matches ten altimeters with a bias of
 \SI{0.005}{m}, an RMSE of \SI{0.38}{m} and a correlation of 0.976; at 267 moored buoys, mostly coastal, the hourly
-$H_s$ has a bias of \SI{-0.004}{m} and an RMSE of \SI{0.37}{m}.
+$H_s$ has a bias of \SI{-0.004}{m} and an RMSE of \SI{0.37}{m}. Imposing on the
+open boundaries spectra rebuilt from the partitions of the Ifremer global
+run lowers the altimeter RMSE to \SI{0.35}{m} (bias \SI{+0.04}{m},
+correlation 0.979) and leaves the buoy scores unchanged.
 \end{abstract}
 
 \section{Motivation}
@@ -191,9 +194,10 @@ meet.}
   Copernicus Marine; a fixed sea-ice obstruction taken from the January ERA5
   sea-ice concentration.
 \item Open boundaries (southern boundary at the equator, eastern Barents
-  Sea): no spectra imposed in the January 2026 runs; the partitions of the
-  Ifremer \texttt{GLOBMULTI} global run are the planned source (see the
-  end of Section~\ref{sec:validation}).
+  Sea): no spectra imposed in the first January 2026 runs; the last run
+  imposes spectra rebuilt from the partitions of the Ifremer
+  \texttt{GLOBMULTI} global run (see the end of
+  Section~\ref{sec:validation}).
 \end{itemize}
 
 \subsection{Grid statistics}
@@ -566,7 +570,8 @@ wind and ice, Copernicus currents and sea level, \texttt{BETAMAX} 1.75),
 and the figures below are its results (Figs.~\ref{fig:val_scatter}
 and~\ref{fig:val_maps}); the earlier runs are kept in the tables only. The
 negative band along the southern open boundary, where the South Atlantic
-swell is missing, is the largest remaining error.
+swell is missing, is the largest remaining error; the run with boundary
+spectra at the end of this section removes it.
 
 \begin{figure}[H]
 \centering
@@ -683,18 +688,79 @@ node and its distance to the buoy.}
 \label{fig:buoy_series}
 \end{figure}
 
-\paragraph{Open-boundary spectra.} No spectra are imposed on the open
-boundaries in these runs: the southern boundary on the equator and the
-Barents Sea boundary are open and empty, which explains the negative band
-of Fig.~\ref{fig:val_maps} along the equator. A source for January 2026
-exists on Datarmor: the Ifremer global run \texttt{GLOBMULTI} at
-\ang{0.5} (\texttt{GLOB-30M}, ECMWF wind) writes every \SI{3}{h} the
-height, peak period, direction and spread of six wave partitions
-(\texttt{phs0}--\texttt{phs5}, \texttt{ptp}, \texttt{pdir},
-\texttt{pspr}) from which spectra on the open-boundary nodes can be rebuilt
-for \texttt{ww3\_bounc}; the point spectra of the same run
-(\texttt{POINTS/SPEC\_NC}) are given at buoy positions only and do not
-cover the boundary. This is the next step of the configuration.
+\paragraph{Open-boundary spectra.} The runs above impose no spectra on the
+open boundaries: the southern boundary on the equator and the Barents Sea
+boundary are open and empty, which explains the negative band of
+Fig.~\ref{fig:val_maps} along the equator. The Ifremer global run
+\texttt{GLOBMULTI} at \ang{0.5} (\texttt{GLOB-30M}, ECMWF wind) writes
+every \SI{3}{h} the height, peak period, direction, spread and wind-sea
+fraction of six wave partitions (\texttt{phs0}--\texttt{phs5},
+\texttt{ptp}, \texttt{pdir}, \texttt{pspr}, \texttt{pws}); its point
+spectra (\texttt{POINTS/SPEC\_NC}) are given at buoy positions only and do
+not cover the boundary. \texttt{scripts/boundary\_spectra.py} takes, for
+each of the 1\,341 open-boundary nodes of grid v3, the nearest valid
+global cell (318 cells, at most \ang{1.16} from a node) and rebuilds there
+the sum over the partitions of a JONSWAP spectrum ($\gamma=3.3$, peak
+$1/T_p$, scaled to the partition height on the 32 model frequencies) times
+a $\cos^{2s}$ directional distribution with $s=2/\sigma^2-1$ for the spread
+$\sigma$. The rebuilt spectra keep the global $H_s$ (mean ratio 0.991).
+\texttt{ww3\_bounc} interpolates them between the two nearest stations of
+each node into \texttt{nest.ww3} (249 times, \SI{366}{MB}); building
+everything takes \SI{2}{min} (PBS job 7920771).
+
+Run 7920772 (grid v3, same forcing and \texttt{BETAMAX} as run 7901053,
+plus these spectra, \SI{68799}{s} on 112 cores) is validated on the same
+328\,902 altimeter blocks (Table~\ref{tab:bnd}, Fig.~\ref{fig:bnd_maps}).
+The RMSE falls from 0.376 to \SI{0.348}{m}, the scatter index from 0.129
+to 0.118 and the correlation rises from 0.9758 to 0.9794, for every one
+of the ten missions (RMSE lower by 0.015 to \SI{0.038}{m}) and at every
+level; the largest gain is on the coarse open-ocean cells ($\nside=128$,
+0.384 to \SI{0.350}{m}). The mean bias moves from $+0.005$ to
+\SI{+0.041}{m}, with a regression slope of 1.000. The gain is largest at
+the start of the month, when the swell entering through the equator is
+missing from the cold start (day 4: RMSE 0.437 to \SI{0.335}{m}, bias
+$-0.19$ to \SI{-0.13}{m}), and remains 0.02 to \SI{0.04}{m} during the
+storms of 26--31 January, as the South Atlantic swell reaches the
+mid-latitudes. The negative band along the equator is gone
+(Fig.~\ref{fig:bnd_maps}). In the North Sea and the Mediterranean, which
+the boundary swell does not reach, the scores do not change. At the 268
+moored buoys (PBS job 7920777) the hourly $H_s$ RMSE stays at
+\SI{0.3745}{m} and the $T_{m02}$ RMSE at \SI{1.325}{s}: the buoys are
+sheltered from the equatorial and Barents boundaries, and their error is
+local (coastal wind and resolution, see the moored-buoy paragraph).
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+subset & $N$ & bias, without / with (m) & RMSE, without / with (m) & SI, without / with \\
+\midrule
+all             & 328\,902 & $+0.005$ / $+0.041$ & 0.376 / 0.348 & 0.129 / 0.118 \\
+$\nside=128$    & 155\,126 & $+0.013$ / $+0.055$ & 0.384 / 0.350 & 0.123 / 0.110 \\
+$\nside=256$    &  75\,413 & $+0.018$ / $+0.050$ & 0.389 / 0.367 & 0.123 / 0.115 \\
+$\nside=512$    &  47\,048 & $-0.015$ / $+0.025$ & 0.377 / 0.347 & 0.141 / 0.129 \\
+$\nside=1024$   &  30\,714 & $-0.019$ / $+0.002$ & 0.350 / 0.333 & 0.147 / 0.140 \\
+$\nside=2048$   &  20\,601 & $-0.026$ / $-0.005$ & 0.299 / 0.283 & 0.165 / 0.156 \\
+North Sea       &   5\,629 & $-0.139$ / $-0.139$ & 0.381 / 0.381 & 0.123 / 0.123 \\
+Mediterranean   &  14\,454 & $-0.054$ / $-0.054$ & 0.331 / 0.331 & 0.149 / 0.149 \\
+buoys ($H_s$, hourly) & 167\,298 & $-0.004$ / $-0.004$ & 0.375 / 0.375 & -- \\
+\bottomrule
+\end{tabular}
+\caption{Run 7901053 (grid v3, no boundary spectra) / run 7920772 (same
+with spectra from \texttt{GLOBMULTI} on the open boundaries) against L3
+altimetry, 4--31 January 2026, \SI{50}{km} blocks, and against 268 moored
+buoys.}
+\label{tab:bnd}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v3_jan2026_bnd_maps.png}
+\caption{Run 7920772 with open-boundary spectra: mean and maximum $H_s$ in
+January 2026, and WW3 minus altimeter $H_s$ along the tracks; compare
+with Fig.~\ref{fig:val_maps}.}
+\label{fig:bnd_maps}
+\end{figure}
 
 \appendix
 \section{Reproducing}
@@ -714,6 +780,10 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{qsub -v RUN=natl\_v3\_jan2026\_cur,GRID=grids/natl\_v3 scripts/natl\_validate.pbs}.
 \item Table~\ref{tab:buoys}, Figures~\ref{fig:buoys}--\ref{fig:buoy_series}:
   \texttt{qsub scripts/natl\_buoys.pbs}.
+\item Table~\ref{tab:bnd}, Figure~\ref{fig:bnd_maps}:
+  \texttt{qsub scripts/natl\_bnd\_setup.pbs}, then the run
+  \texttt{natl\_v3\_jan2026\_bnd}, \texttt{natl\_validate.pbs} and
+  \texttt{natl\_buoys.pbs} (\texttt{docs/reproducing.md}).
 \end{itemize}
 
 \end{document}
