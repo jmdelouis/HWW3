@@ -27,7 +27,8 @@ Marine for January 2026 and run on Datarmor (Ifremer).
 ::::{grid} 2
 :::{grid-item-card} Build a grid
 [Installation](installation.md), [configuration](configuration.md) and
-[outputs](outputs.md) of the `hww3-grid` generator.
+[outputs](outputs.md) of the `hww3-grid` generator, and how to build
+[a grid for another region or a finer grid](new_region.md).
 :::
 :::{grid-item-card} How it works
 The [algorithm](algorithm.md): refinement, 2:1 balance, bathymetry,
@@ -49,6 +50,7 @@ runs, step by step, with the job scripts.
 
 installation
 configuration
+new_region
 algorithm
 outputs
 validation

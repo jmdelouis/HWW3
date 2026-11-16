@@ -11,6 +11,9 @@ file. The program prints a JSON summary on stdout and fails if the mesh is
 invalid or, when `quality.enforce` is true, if a triangle angle is outside
 the accepted range.
 
+To build a grid for another region or a finer grid, see
+[A grid for another region](new_region.md).
+
 ## Example: North Atlantic
 
 ```json
