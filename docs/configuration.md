@@ -86,6 +86,10 @@ the grade limit.
 | `max_angle_deg` | 130 | largest accepted triangle angle |
 | `flips` | true | Delaunay edge flips (max-min angle) inside the mesh |
 | `max_level_jump` | 1 | largest level difference allowed across a flipped edge |
+| `alternate` | true | alternate the diagonals of nearly square 2×2 blocks of equal pixels from one row of blocks to the next, so that the triangles do not all share one orientation |
+| `alternate_max_ratio` | 1.2 | largest ratio of the two diagonals of an alternated block |
+| `cfl_flips` | true | edge flips that lengthen the explicit WW3 time step where it is short |
+| `cfl_threshold` | 0.8 | CFL length, in cell sizes, below which a node is improved by `cfl_flips` |
 | `trim_boundary` | true | remove boundary triangles outside the angle range |
 | `enforce` | true | fail if an angle is still outside the range |
 

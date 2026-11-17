@@ -138,13 +138,41 @@ improved by changing the connectivity only:
    triangles increases. Passes are repeated until no edge flips. This
    max-min angle criterion converges to the Delaunay triangulation of the
    nodes constrained by the boundary, which maximises the smallest angle.
-2. **Boundary trimming.** A boundary triangle (one of its edges belongs to
+2. **Alternated diagonals** (`quality.alternate`). In a uniform area, the
+   four cells around a HEALPix corner form a 2×2 block of pixels
+   $(i_0, j_0)$…$(i_0+1, j_0+1)$ of one base face, and the two triangles
+   of the block share one of its diagonals. Choosing everywhere the same
+   diagonal gives triangles that all have the same orientation, which
+   makes the numerical diffusion of the WW3 schemes anisotropic. The block
+   diagonal is therefore taken as $(i_0, j_0)$–$(i_0+1, j_0+1)$ when $j_0$
+   is even and $(i_0+1, j_0)$–$(i_0, j_0+1)$ when $j_0$ is odd: the
+   diagonals alternate from one row of blocks to the next (chevrons) and
+   every node keeps six neighbours. On a square lattice this pattern gives
+   an explicit time step 27 % longer than a single diagonal direction
+   ($0.895\,\Delta x/c$ against $0.707$), whereas a checkerboard
+   ("union jack") would shorten it ($0.667$). Only nearly square blocks
+   are changed, whose diagonals differ by at most `alternate_max_ratio`
+   (1.2): HEALPix blocks are rhombi away from the equator, and their short
+   diagonal already gives nearly equilateral triangles. The new triangles
+   must keep their angles within the bounds.
+3. **CFL flips** (`quality.cfl_flips`). For every interior node the
+   largest explicit time step of the WW3 propagation schemes is computed
+   as in `w3profsmd.F90` (section 10). Around each node whose CFL length is
+   below `cfl_threshold` (0.8) cell sizes, an edge is flipped when the
+   quadrilateral is convex, the angles stay within the bounds, the level
+   jump across the new edge is at most `max_level_jump`, and the smallest
+   CFL length of the four nodes increases by more than 0.1 %. This repairs
+   the junctions between alternated and non-alternated blocks and the
+   level transitions, where the explicit step is shortest.
+4. **Boundary trimming.** A boundary triangle (one of its edges belongs to
    no other triangle) whose angles are outside
    [`min_angle_deg`, `max_angle_deg`] is removed; this exposes new boundary
    edges, so the test is repeated, and pinch nodes created on the way are
    removed. Interior triangles are never removed, so no hole is created.
 
-Flips do not change the nodes, the boundary or the topology (Euler
+None of these steps moves a node: every node stays the centre of its
+HEALPix pixel, so the model output remains a HEALPix map. Flips do not
+change the nodes, the boundary or the topology (Euler
 characteristic). With `quality.enforce`, the program fails if an angle is
 still outside the range; the bounds 20°–130° are the defaults.
 
@@ -180,7 +208,37 @@ The node latitudes are converted back to geodetic latitudes (series to
 $e^6$ plus two Newton iterations, round-trip error < $10^{-12}$ rad) for
 WW3. The difference reaches 0.128° at 45°N.
 
-## 10. Validation
+## 10. Explicit time step
+
+WW3 limits its explicit unstructured schemes (N, PSI, FCT; `w3profsmd.F90`,
+routines `W3XYPFSN2` and `W3CFLUG`) with a CFL condition computed on the
+triangles. For a triangle with vertices 1, 2, 3, the flux coefficients are
+$K_k = \boldsymbol\lambda\cdot\mathbf n_k$, with $\boldsymbol\lambda$ half the
+mean of the three nodal advection velocities and $\mathbf n_k$ the inward
+normal of the edge opposite vertex $k$, whose length is that edge (`IEN`).
+For each spectral component the largest stable step at node $i$ is
+
+$$ \Delta t_i = S_i \Big/ \sum_{T\ni i}\max(0, K_{i,T}), $$
+
+with $S_i$ a third of the area of the triangles around $i$ (`SI`). The
+global step is the minimum over the interior nodes (open and coastal
+boundary nodes are left out unless `FSBCCFL`), and each component is
+sub-cycled `ceil(DT / min Δt_i)` times. For a speed $c$ in direction
+$\theta$, $\Delta t_i = L_i(\theta)/c$ with a CFL length $L_i(\theta)$ that
+depends only on the triangles. `hww3-grid` computes $L_i$, the minimum over
+the model directions, and $\Delta t_i = L_i / c_g$ with the linear group
+speed of the lowest model frequency (`freq1`, the fastest component) at the
+node depth, currents excluded. The summary (`cfl`) gives the smallest
+step, the node that sets it, the number of sub-cycles at `dtxy` and, per
+nside, the minimum, 1 % quantile and median of $\Delta t_i$ and of
+$L_i$ divided by the cell size (the efficiency); `raw/dt_explicit.f64` and
+`raw/cfl_length.f64` hold the values per node.
+
+The fully implicit scheme used in the North Atlantic runs (`IMPTOTAL`) has
+no such limit; these numbers matter for the explicit schemes and measure
+the geometric quality of the triangles for the transport.
+
+## 11. Validation
 
 The final mesh is checked (`validate::check`): non-manifold edges,
 inconsistent orientation, clockwise triangles, pinch nodes, isolated nodes,

@@ -415,6 +415,141 @@ pub fn delaunay_flips(nodes: &[[f64; 3]], levels: &[u8], max_level_jump: u8, tri
     total
 }
 
+/// Base face and (i, j) coordinates of a NESTED pixel inside its face: the
+/// bits of the index below the face number are interleaved, i on the even
+/// bits and j on the odd bits.
+pub fn face_ij(depth: u8, h: u64) -> (u64, u32, u32) {
+    let nb = 2 * depth as u32;
+    let face = if nb >= 64 { 0 } else { h >> nb };
+    let (mut i, mut j) = (0u32, 0u32);
+    for b in 0..depth as u32 {
+        i |= (((h >> (2 * b)) & 1) as u32) << b;
+        j |= (((h >> (2 * b + 1)) & 1) as u32) << b;
+    }
+    (face, i, j)
+}
+
+/// For two triangles sharing the edge (`u`, `v`) with opposite vertices `w`
+/// and `x`: when the four nodes are a 2×2 block of pixels of one depth and
+/// one base face, `Some(true)` if the preferred diagonal of the block is
+/// (`w`, `x`) and `Some(false)` if it is (`u`, `v`); `None` otherwise.
+///
+/// The block with lower-left pixel (i0, j0) prefers the diagonal
+/// (i0, j0)–(i0+1, j0+1) when j0 is even and (i0+1, j0)–(i0, j0+1) when j0
+/// is odd: the diagonals alternate from one row of blocks to the next
+/// (chevrons), every interior node has six neighbours, and the triangles no
+/// longer share one orientation.
+pub fn block_preference(leaves: &[(u8, u64)], u: u32, v: u32, w: u32, x: u32) -> Option<bool> {
+    let q = [u, v, w, x].map(|k| leaves[k as usize]);
+    let d = q[0].0;
+    if q.iter().any(|l| l.0 != d) {
+        return None;
+    }
+    let c = q.map(|l| face_ij(l.0, l.1));
+    if c.iter().any(|f| f.0 != c[0].0) {
+        return None;
+    }
+    let i0 = c.iter().map(|f| f.1).min().unwrap();
+    let j0 = c.iter().map(|f| f.2).min().unwrap();
+    let mut seen = [false; 4];
+    for f in &c {
+        let (di, dj) = (f.1.wrapping_sub(i0), f.2.wrapping_sub(j0));
+        if di > 1 || dj > 1 {
+            return None;
+        }
+        seen[(2 * dj + di) as usize] = true;
+    }
+    if seen.iter().any(|s| !s) {
+        return None;
+    }
+    // (u, v) must be a diagonal of the block
+    let (du, dv) = ((c[0].1 as i64 - c[1].1 as i64), (c[0].2 as i64 - c[1].2 as i64));
+    if du == 0 || dv == 0 {
+        return None;
+    }
+    let uv_is_main = du * dv > 0; // (i0, j0)-(i0+1, j0+1)
+    let main_preferred = j0 % 2 == 0;
+    Some(uv_is_main != main_preferred)
+}
+
+/// Alternate the diagonals of the 2×2 blocks of equal pixels (see
+/// [`block_preference`]): an interior edge is flipped to the preferred
+/// diagonal when the quadrilateral is convex and both new triangles keep
+/// their angles within [`min_angle`, `max_angle`] (radians). Only nearly
+/// square blocks are changed, whose diagonals differ by at most a factor
+/// `max_ratio`: in a rhombic block the short diagonal gives nearly
+/// equilateral triangles, which are already isotropic and allow a longer
+/// explicit time step. The nodes do not move. Returns the number of flips.
+pub fn alternate_diagonals(
+    nodes: &[[f64; 3]],
+    leaves: &[(u8, u64)],
+    min_angle: f64,
+    max_angle: f64,
+    max_ratio: f64,
+    tris: &mut [[u32; 3]],
+) -> usize {
+    let mut total = 0;
+    for _pass in 0..10 {
+        let mut dir: HashMap<(u32, u32), (u32, u32)> = HashMap::with_capacity(3 * tris.len());
+        for (k, t) in tris.iter().enumerate() {
+            for i in 0..3 {
+                dir.insert((t[i], t[(i + 1) % 3]), (k as u32, t[(i + 2) % 3]));
+            }
+        }
+        let mut touched = vec![false; tris.len()];
+        let mut flips = 0;
+        let edges: Vec<(u32, u32)> = dir.keys().copied().filter(|&(u, v)| u < v).collect();
+        for (u, v) in edges {
+            let (Some(&(k1, w)), Some(&(k2, x))) = (dir.get(&(u, v)), dir.get(&(v, u))) else {
+                continue;
+            };
+            if touched[k1 as usize] || touched[k2 as usize] || w == x {
+                continue;
+            }
+            if block_preference(leaves, u, v, w, x) != Some(true) {
+                continue;
+            }
+            if dir.contains_key(&(w, x)) || dir.contains_key(&(x, w)) {
+                continue;
+            }
+            let (pu, pv, pw, px) =
+                (&nodes[u as usize], &nodes[v as usize], &nodes[w as usize], &nodes[x as usize]);
+            if orientation(pw, pu, px) <= 0.0 || orientation(px, pv, pw) <= 0.0 {
+                continue;
+            }
+            // only nearly square blocks: the diagonals differ by at most max_ratio
+            let (luv, lwx) = (crate::geo::angle(pu, pv), crate::geo::angle(pw, px));
+            if luv.max(lwx) > max_ratio * luv.min(lwx) {
+                continue;
+            }
+            let n1 = [w, u, x];
+            let n2 = [x, v, w];
+            let (a1, b1) = min_max_angle(nodes, &n1);
+            let (a2, b2) = min_max_angle(nodes, &n2);
+            if a1.min(a2) < min_angle || b1.max(b2) > max_angle {
+                continue;
+            }
+            tris[k1 as usize] = n1;
+            tris[k2 as usize] = n2;
+            touched[k1 as usize] = true;
+            touched[k2 as usize] = true;
+            dir.remove(&(u, v));
+            dir.remove(&(v, u));
+            for (k, t) in [(k1, n1), (k2, n2)] {
+                for i in 0..3 {
+                    dir.insert((t[i], t[(i + 1) % 3]), (k, t[(i + 2) % 3]));
+                }
+            }
+            flips += 1;
+        }
+        total += flips;
+        if flips == 0 {
+            break;
+        }
+    }
+    total
+}
+
 /// Remove boundary triangles whose minimum angle is below `min_angle` or
 /// whose maximum angle is above `max_angle` (radians). A triangle is on the
 /// boundary when one of its edges belongs to no other triangle. Removing a

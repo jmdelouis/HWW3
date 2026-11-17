@@ -20,5 +20,9 @@
     "nth": 36, "nk": 32, "freq1": 0.0373, "xfr": 1.1, "dir_offset": 0.0,
     "dtmax": 600.0, "dtxy": 600.0, "dtkth": 300.0, "dtmin": 10.0,
     "zlim": -0.1, "dmin": 2.0
+  },
+  "quality": {
+    "alternate": false,
+    "cfl_flips": false
   }
 }

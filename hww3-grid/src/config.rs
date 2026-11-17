@@ -99,6 +99,19 @@ pub struct Quality {
     /// Largest HEALPix level difference allowed across a flipped edge
     /// (default 1, as in the 2:1 balanced tree).
     pub max_level_jump: u8,
+    /// Alternate the diagonals of the 2×2 blocks of equal pixels from one
+    /// row of blocks to the next, so that the triangles do not all share one
+    /// orientation (default true).
+    pub alternate: bool,
+    /// Largest ratio of the two diagonals of a block that is alternated
+    /// (default 1.2): more rhombic blocks keep their short diagonal.
+    pub alternate_max_ratio: f64,
+    /// Edge flips that lengthen the explicit WW3 time step where it is
+    /// short (default true), see `cfl::cfl_flips`.
+    pub cfl_flips: bool,
+    /// CFL length, in cell sizes, below which a node is improved by
+    /// `cfl_flips` (default 0.8).
+    pub cfl_threshold: f64,
     /// Remove boundary triangles outside the angle bounds (default true).
     pub trim_boundary: bool,
     /// Fail if an angle is still outside the bounds (default true).
@@ -112,6 +125,10 @@ impl Default for Quality {
             max_angle_deg: 130.0,
             flips: true,
             max_level_jump: 1,
+            alternate: true,
+            alternate_max_ratio: 1.2,
+            cfl_flips: true,
+            cfl_threshold: 0.8,
             trim_boundary: true,
             enforce: true,
         }

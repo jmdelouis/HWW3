@@ -28,6 +28,8 @@
     "max_angle_deg": 130.0,
     "flips": true,
     "max_level_jump": 1,
+    "alternate": false,
+    "cfl_flips": false,
     "trim_boundary": true,
     "enforce": true
   },

@@ -39,6 +39,7 @@ All tests must pass (see [Validation](validation.md)).
 qsub scripts/natl_grid.pbs                       # grid v1: coast distance, no angle control
 qsub -v CFG=configs/natl_v2_datarmor.json,GRID=grids/natl_v2 scripts/natl_grid.pbs   # v2: + angle control
 qsub -v CFG=configs/natl_v3_datarmor.json,GRID=grids/natl_v3 scripts/natl_grid.pbs   # v3: depth and slope
+qsub -v CFG=configs/natl_v4_datarmor.json,GRID=grids/natl_v4 scripts/natl_grid.pbs   # v4: + alternated diagonals, CFL flips
 ```
 
 Grid v3 (PBS job 7899977, 70 s on 8 cores, 7.0 GB) is refined from the

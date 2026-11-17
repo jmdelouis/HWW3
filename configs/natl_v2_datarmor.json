@@ -16,7 +16,8 @@
   "bathy": "../data/gebco/natl/meta.json",
   "coast": { "source": "shapefile", "path": "/home1/datahome/marc/data/GSHHS/gshhs_land.shp" },
   "output_dir": "../grids/natl_v2",
-  "quality": { "min_angle_deg": 20.0, "max_angle_deg": 130.0, "flips": true, "max_level_jump": 1, "trim_boundary": true, "enforce": true },
+  "quality": { "min_angle_deg": 20.0, "max_angle_deg": 130.0, "flips": true, "max_level_jump": 1, "alternate": false, "cfl_flips": false,
+               "trim_boundary": true, "enforce": true },
   "ww3": {
     "nth": 36, "nk": 32, "freq1": 0.0373, "xfr": 1.1, "dir_offset": 0.0,
     "dtmax": 600.0, "dtxy": 600.0, "dtkth": 300.0, "dtmin": 10.0,

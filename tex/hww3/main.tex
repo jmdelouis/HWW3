@@ -312,6 +312,90 @@ two polar base faces.}
 \label{fig:natl_zoom}
 \end{figure}
 
+\subsection{Triangle orientation and explicit time step (grid v4)}\label{sec:v4}
+Two remarks of F.~Ardhuin on grid v3 led to grid v4. First, the triangles
+should not all share one orientation, since the numerical diffusion of the
+WW3 schemes is then anisotropic. In a uniform area the four cells around a
+HEALPix corner form a $2\times2$ block of pixels of one base face, and in
+grid v3 the Delaunay flips give every block the same diagonal: in the
+equatorial band, where the blocks are nearly square, one edge in three
+runs north--south and almost none east--west. Second, the efficiency of
+the explicit schemes depends on the CFL condition and on the geometry of
+the triangles. WW3 computes it in \texttt{w3profsmd.F90}
+(\texttt{W3XYPFSN2}, \texttt{W3CFLUG}): with $K_k=\boldsymbol\lambda\cdot\mathbf
+n_k$ the flux coefficients of a triangle ($\boldsymbol\lambda$ half the mean
+nodal advection velocity, $\mathbf n_k$ the inward normal of the edge
+opposite vertex $k$, of length that edge), the largest stable step at node
+$i$ is $\Delta t_i = S_i/\sum_{T\ni i}\max(0,K_{i,T})$, $S_i$ being a third of
+the area of the triangles around $i$; the global step is the minimum over
+the interior nodes, and each spectral component is sub-cycled
+$\lceil \mathrm{DT}/\min\Delta t_i\rceil$ times. For a speed $c$,
+$\Delta t_i=L_i/c$ with a CFL length $L_i$ (minimum over the 36 directions)
+that depends only on the triangles; \texttt{hww3-grid} now computes it for
+every node, with $c$ the group speed of the lowest model frequency at the
+node depth, and reports it in the summary.
+
+Two connectivity steps are added after the Delaunay flips. The nodes do
+not move, so the output stays a HEALPix map:
+\begin{itemize}
+\item \emph{Alternated diagonals}: the block with lower-left pixel
+  $(i_0,j_0)$ takes the diagonal $(i_0,j_0)$--$(i_0{+}1,j_0{+}1)$ when $j_0$
+  is even and the other one when $j_0$ is odd, when the two diagonals
+  differ by less than 20\,\% and the angles stay within
+  \ang{20}--\ang{130}. On a square lattice, alternating row by row raises
+  the explicit step from $0.707\,\Delta x/c$ (one diagonal direction) to
+  $0.895\,\Delta x/c$, whereas a checkerboard lowers it to $0.667$. Away
+  from the equator the blocks are rhombi whose short diagonal already
+  gives nearly equilateral triangles, and they are left unchanged.
+\item \emph{CFL flips}: around every node whose CFL length is below 0.8
+  cell sizes, an edge is flipped when the smallest CFL length of the four
+  nodes of its quadrilateral increases, within the same angle and level
+  bounds.
+\end{itemize}
+
+Grid v4 (\texttt{configs/natl\_v4\_datarmor.json}, PBS job 7935472,
+\SI{149}{s}, \SI{7.3}{GB}) has the same 794\,613 nodes as grid v3;
+160\,814 blocks are alternated and 55\,985 edges are flipped for the CFL
+condition (Table~\ref{tab:v4}, Fig.~\ref{fig:v4}). In the equatorial band
+the share of north--south edges falls from 31 to 17\,\% and that of
+east--west edges rises from 1 to 15\,\%. The smallest explicit step, for
+the fastest component (\SI{0.0373}{Hz}), rises from 59.6 to \SI{64.7}{s}
+(11 to 10 sub-cycles for a \SI{600}{s} step), the smallest CFL length at
+every level by 7 to 12\,\% and the median by 5 to 11\,\%. The largest
+angle reaches the \ang{130} bound (2\,550 triangles above \ang{120}
+instead of 970). The January 2026 runs use the implicit scheme, which
+has no CFL limit, and were made on grid v3.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+$\nside$ & nodes & min $\Delta t$ v3 / v4 (s) & min $L/\Delta x$ v3 / v4 & median $L/\Delta x$ v3 / v4 \\
+\midrule
+128  &   8\,862 & 1303 / 1458 & 0.535 / 0.599 & 0.761 / 0.846 \\
+256  &  15\,018 &  614 /  682 & 0.535 / 0.592 & 0.774 / 0.826 \\
+512  &  40\,899 &  274 /  304 & 0.522 / 0.557 & 0.771 / 0.812 \\
+1024 & 119\,384 &  135 /  147 & 0.502 / 0.537 & 0.764 / 0.813 \\
+2048 & 551\,192 & 59.6 / 64.7 & 0.469 / 0.502 & 0.760 / 0.837 \\
+\bottomrule
+\end{tabular}
+\caption{Explicit WW3 time step of the interior nodes for the lowest model
+frequency, grid v3 / grid v4 (same nodes); $L/\Delta x$ is the CFL
+length divided by the cell size.}
+\label{tab:v4}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v4_alternation.png}
+\caption{Grids v3 and v4 at \ang{2}--\ang{10}N, \ang{40}--\ang{28}W
+($\nside=128$, with three seamounts): HEALPix cells (blue), WW3 triangles
+(red) and nodes (black). In grid v3 every block has its north--south
+diagonal; in grid v4 the diagonals alternate between north--south and
+east--west.}
+\label{fig:v4}
+\end{figure}
+
 \subsection{WW3 build and grid preprocessing}
 WW3 \texttt{develop} (commit \texttt{dea641c}) is built on Datarmor with
 Intel Fortran 19.1.3 and Intel MPI 2019.9 (\texttt{scripts/build\_ww3.pbs},
@@ -780,6 +864,10 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{qsub -v RUN=natl\_v3\_jan2026\_cur,GRID=grids/natl\_v3 scripts/natl\_validate.pbs}.
 \item Table~\ref{tab:buoys}, Figures~\ref{fig:buoys}--\ref{fig:buoy_series}:
   \texttt{qsub scripts/natl\_buoys.pbs}.
+\item Table~\ref{tab:v4}, Figure~\ref{fig:v4}:
+  \texttt{qsub -v CFG=configs/natl\_v4\_datarmor.json,GRID=grids/natl\_v4 scripts/natl\_grid.pbs}, then
+  \texttt{python scripts/extract\_zoom.py grids/natl\_v<3|4> grids/natl\_v<3|4>/plot/eq.npz -40 -28 2 10} and
+  \texttt{python scripts/plot\_alternation.py \ldots{} fig/natl\_v4\_alternation.png}.
 \item Table~\ref{tab:bnd}, Figure~\ref{fig:bnd_maps}:
   \texttt{qsub scripts/natl\_bnd\_setup.pbs}, then the run
   \texttt{natl\_v3\_jan2026\_bnd}, \texttt{natl\_validate.pbs} and

@@ -47,6 +47,10 @@ pub struct Summary {
     pub quality_before: QualityBefore,
     /// edge flips made by the Delaunay step
     pub n_flips: usize,
+    /// edge flips made to alternate the diagonals of 2×2 blocks
+    pub n_alternated: usize,
+    /// edge flips made to lengthen the explicit time step
+    pub n_cfl_flips: usize,
     /// bad boundary triangles removed (including pinch removal after trimming)
     pub n_trimmed: usize,
     /// nodes of the final mesh
@@ -57,6 +61,8 @@ pub struct Summary {
     pub nodes_per_nside: Vec<(u32, usize)>,
     /// validation of the final mesh
     pub mesh: MeshReport,
+    /// largest explicit time step of the WW3 schemes
+    pub cfl: crate::cfl::CflReport,
     /// wall time of each step (s)
     pub timings_s: Vec<(String, f64)>,
 }
@@ -94,6 +100,11 @@ pub struct Grid {
     pub slope: Vec<f64>,
     /// cell size required by the depth and slope criteria, km (with `refine_bathy`)
     pub target_km: Vec<f64>,
+    /// largest explicit WW3 time step of the node for the fastest component
+    /// (s, infinite on boundary nodes)
+    pub dt_explicit: Vec<f64>,
+    /// geometric CFL length of the node (m), see [`crate::cfl`]
+    pub cfl_length: Vec<f64>,
 }
 
 /// Densify chains of (lon, lat) degrees into unit vectors on the HEALPix
@@ -242,6 +253,33 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
     } else {
         0
     };
+    let n_alternated = if q.alternate {
+        crate::mesh::alternate_diagonals(
+            &centres,
+            &leaves,
+            q.min_angle_deg.to_radians(),
+            q.max_angle_deg.to_radians(),
+            q.alternate_max_ratio,
+            &mut tri.tris,
+        )
+    } else {
+        0
+    };
+    let n_cfl_flips = if q.cfl_flips {
+        crate::cfl::cfl_flips(
+            &centres,
+            &leaf_levels,
+            cfg.ww3.nth,
+            cfg.ww3.dir_offset,
+            q.cfl_threshold,
+            q.min_angle_deg.to_radians(),
+            q.max_angle_deg.to_radians(),
+            q.max_level_jump,
+            &mut tri.tris,
+        )
+    } else {
+        0
+    };
     let n_trimmed = if q.trim_boundary {
         crate::mesh::trim_boundary(
             n,
@@ -253,7 +291,7 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
     } else {
         0
     };
-    lap("quality (flips + boundary trim)", &mut t0);
+    lap("quality (flips, alternation, boundary trim)", &mut t0);
 
     // connected components over triangle edges
     let mut parent: Vec<u32> = (0..n as u32).collect();
@@ -298,6 +336,8 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
         obc: vec![],
         slope: vec![],
         target_km: vec![],
+        dt_explicit: vec![],
+        cfl_length: vec![],
     };
     for i in 0..n {
         if keep[i] {
@@ -327,6 +367,23 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
     let kept_centres: Vec<[f64; 3]> = (0..n).filter(|&i| keep[i]).map(|i| centres[i]).collect();
     let report = check(&kept_centres, &grid.level, &grid.tris);
     lap("components + validation", &mut t0);
+    let w = &cfg.ww3;
+    let (dt, len, cfl) = crate::cfl::explicit_steps(
+        &kept_centres,
+        &grid.tris,
+        &grid.level,
+        &grid.depth,
+        &grid.lon,
+        &grid.lat,
+        w.freq1,
+        w.nth,
+        w.dir_offset,
+        w.dtxy,
+        dmin..=dmax,
+    );
+    grid.dt_explicit = dt;
+    grid.cfl_length = len;
+    lap("explicit time step", &mut t0);
 
     let mut per = Vec::new();
     for d in dmin..=dmax {
@@ -351,11 +408,14 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
             n_angle_above_120: before_quality.n_angle_above_120,
         },
         n_flips,
+        n_alternated,
+        n_cfl_flips,
         n_trimmed,
         n_nodes: grid.uniq.len(),
         n_open_boundary: grid.obc.len(),
         nodes_per_nside: per,
         mesh: report,
+        cfl,
         timings_s: timings,
     };
     Ok((grid, summary))
@@ -382,6 +442,8 @@ pub fn write(cfg: &Config, grid: &Grid, summary: &Summary) -> Result<()> {
     let flat: Vec<u32> = grid.tris.iter().flatten().copied().collect();
     ww3::write_raw(&raw.join("tri.u32"), &flat)?;
     ww3::write_raw(&raw.join("obc.u32"), &grid.obc)?;
+    ww3::write_raw(&raw.join("dt_explicit.f64"), &grid.dt_explicit)?;
+    ww3::write_raw(&raw.join("cfl_length.f64"), &grid.cfl_length)?;
     if !grid.slope.is_empty() {
         ww3::write_raw(&raw.join("slope.f64"), &grid.slope)?;
         ww3::write_raw(&raw.join("target_km.f64"), &grid.target_km)?;
@@ -397,6 +459,8 @@ pub fn write(cfg: &Config, grid: &Grid, summary: &Summary) -> Result<()> {
             "depth.f64": "mean water depth over wet samples (m, positive down)",
             "tri.u32": "triangles, 3 x 0-based node indices, counter-clockwise",
             "obc.u32": "0-based open-boundary node indices",
+            "dt_explicit.f64": "largest explicit WW3 time step of the node for the lowest model frequency, s (inf on boundary nodes)",
+            "cfl_length.f64": "geometric CFL length of the node, m: S_i / max over directions of sum of positive K/c (w3profsmd)",
             "slope.f64": "mean bathymetry slope |grad h| of the cell (with refine_bathy)",
             "target_km.f64": "cell size required by the depth and slope criteria, km (with refine_bathy)"
         }

@@ -78,6 +78,39 @@ fn uniform_open_ocean() {
     pipeline::write(&cfg, &grid, &s).unwrap();
 }
 
+/// Alternating the diagonals of nearly square 2×2 blocks and the CFL flips
+/// keep the HEALPix nodes and the angle bounds, and do not shorten the
+/// explicit WW3 time step.
+#[test]
+fn alternate_diagonals_cfl() {
+    let b = write_bathy("alternate", -20.0, 20.0, -15.0, 15.0, 0.1, |_, _| -3000.0);
+    // equatorial band, where HEALPix blocks are nearly square
+    let d = Domain { lon_min: -10.0, lon_max: 10.0, lat_min: -8.0, lat_max: 8.0 };
+    let mut cfg = config("alt_off", &b, d.clone(), 64, 64, vec![]);
+    cfg.quality.alternate = false;
+    cfg.quality.cfl_flips = false;
+    let (g0, s0) = pipeline::build(&cfg).unwrap();
+    let cfg = config("alt_on", &b, d, 64, 64, vec![]);
+    let (g1, s1) = pipeline::build(&cfg).unwrap();
+    println!(
+        "alternated {}, cfl flips {}, dt_min {:.1} -> {:.1} s, efficiency median {:.3} -> {:.3}, min {:.3} -> {:.3}",
+        s1.n_alternated,
+        s1.n_cfl_flips,
+        s0.cfl.dt_min_s,
+        s1.cfl.dt_min_s,
+        s0.cfl.per_nside[0].efficiency_median,
+        s1.cfl.per_nside[0].efficiency_median,
+        s0.cfl.per_nside[0].efficiency_min,
+        s1.cfl.per_nside[0].efficiency_min
+    );
+    assert!(s1.mesh.is_valid());
+    assert!(s1.mesh.angles_within(cfg.quality.min_angle_deg, cfg.quality.max_angle_deg));
+    assert_eq!(g0.uniq, g1.uniq, "nodes must stay the same HEALPix pixels");
+    assert!(s1.n_alternated > 0);
+    assert!(s1.cfl.per_nside[0].efficiency_median > s0.cfl.per_nside[0].efficiency_median);
+    assert!(s1.cfl.dt_min_s >= 0.999 * s0.cfl.dt_min_s);
+}
+
 /// Multi-resolution grid around a circular island sitting on the base-face
 /// corner: one hole (Euler characteristic 0), 2:1 transitions only.
 #[test]

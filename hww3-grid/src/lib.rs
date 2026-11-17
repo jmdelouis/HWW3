@@ -26,8 +26,11 @@
 //! 3. [`bathy`]: cell-averaged depth and wet fraction of every leaf;
 //! 4. [`mesh`]: conforming triangulation of the wet cell centres built from
 //!    the HEALPix adjacency around every cell corner and edge midpoint, then
-//!    removal of pinch (bow-tie) nodes that WW3 rejects;
-//! 5. [`validate`]: topological and geometric checks of the mesh;
+//!    removal of pinch (bow-tie) nodes that WW3 rejects, Delaunay flips and
+//!    alternation of the diagonals of uniform 2×2 blocks (the nodes never
+//!    move);
+//! 5. [`validate`]: topological and geometric checks of the mesh, and
+//!    [`cfl`]: largest explicit time step of the WW3 schemes per node;
 //! 6. [`ww3`]: Gmsh mesh, open-boundary list, namelists and raw arrays
 //!    (written by [`pipeline::write`]).
 //!
@@ -51,6 +54,7 @@
 #![warn(missing_docs)]
 
 pub mod bathy;
+pub mod cfl;
 pub mod coast;
 pub mod config;
 pub mod geo;

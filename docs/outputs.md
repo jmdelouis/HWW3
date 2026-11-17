@@ -25,6 +25,8 @@ Nodes are in NESTED (Morton) order.
 | `depth.f64` | float64 | mean wet depth of the cell (m, positive down), at least `ww3.dmin` |
 | `tri.u32` | uint32 | triangles, 3 × 0-based node indices, counter-clockwise |
 | `obc.u32` | uint32 | 0-based open-boundary node indices |
+| `dt_explicit.f64` | float64 | largest explicit WW3 time step of the node for the lowest model frequency, s (infinite on boundary nodes), see [Algorithm](algorithm.md) |
+| `cfl_length.f64` | float64 | CFL length of the node, m: $\Delta t_i$ times the propagation speed |
 | `slope.f64` | float64 | mean bathymetry slope of the cell (with `refine_bathy`) |
 | `target_km.f64` | float64 | cell size required by the size functions, km (with `refine_bathy`) |
 
@@ -64,8 +66,11 @@ $ End of file
 Main keys of the summary: `n_nodes`, `n_open_boundary`, `nodes_per_nside`,
 `n_leaves`, `n_wet_leaves`, `n_balance_splits`, `n_components`,
 `n_pinch_tris_removed`, `quality_before` (angles of the raw
-triangulation), `n_flips`, `n_trimmed`, `mesh` (the validation report, see
-[Validation](validation.md)) and `timings_s`.
+triangulation), `n_flips`, `n_alternated`, `n_cfl_flips`, `n_trimmed`,
+`mesh` (the validation report, see [Validation](validation.md)), `cfl`
+(explicit time step: `dt_min_s`, `worst_node`, `n_below_dtxy`,
+`subcycles_at_dtxy` and per-nside statistics, see
+[Algorithm](algorithm.md)) and `timings_s`.
 
 ## Model output as a HEALPix pyramid
 

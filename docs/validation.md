@@ -80,6 +80,40 @@ Open ocean (32°W–24°W, 38°N–44°N): sheared cells near the boundary
 between HEALPix polar and equatorial base faces.
 ```
 
+### Grid v4: alternated diagonals and explicit time step
+
+Grid v4 (`configs/natl_v4_datarmor.json`, PBS job 7935472, 8 cores,
+149 s, 7.3 GB) is grid v3 with the two new connectivity steps (see
+[Algorithm](algorithm.md)): the same 794,613 nodes, 160,814 alternated
+blocks and 55,985 CFL flips. The mesh stays valid (same 1,531,542
+triangles, Euler characteristic −787, no non-manifold or inconsistent edge,
+angles 20.0°–130.0°, 2,550 triangles above 120° instead of 970). In the
+equatorial band the share of north–south edges falls from 31 % to 17 % and
+that of east–west edges rises from 1 % to 15 %. Explicit WW3 time step of
+the interior nodes for the lowest frequency (0.0373 Hz), v3 / v4:
+
+| nside | nodes | min Δt (s) | min L/Δx | median L/Δx |
+|---|---|---|---|---|
+| 128 | 8,862 | 1303 / 1458 | 0.535 / 0.599 | 0.761 / 0.846 |
+| 256 | 15,018 | 614 / 682 | 0.535 / 0.592 | 0.774 / 0.826 |
+| 512 | 40,899 | 274 / 304 | 0.522 / 0.557 | 0.771 / 0.812 |
+| 1024 | 119,384 | 135 / 147 | 0.502 / 0.537 | 0.764 / 0.813 |
+| 2048 | 551,192 | 59.6 / 64.7 | 0.469 / 0.502 | 0.760 / 0.837 |
+
+The global explicit step rises from 59.6 s to 64.7 s (11 to 10 sub-cycles
+for `dtxy` = 600 s); it is set by a nside-2048 node at 160–175 m depth,
+where the group speed of the lowest frequency is largest. Alternation
+alone (threshold 1.2) raises the medians but not the minima; with a
+threshold of 1.5 the medians gain less; the CFL flips alone give the same
+minima as both steps together with less isotropic diagonals.
+
+```{figure} _static/fig/natl_v4_alternation.png
+:width: 100%
+
+Grids v3 and v4 at 2°–10°N, 40°–28°W (nside 128): cells (blue),
+triangles (red), nodes (black).
+```
+
 ## First WW3 run
 
 12 h cold start with a homogeneous 15 m/s westerly wind
