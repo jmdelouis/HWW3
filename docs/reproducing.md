@@ -170,6 +170,14 @@ next to the open boundary in `spec/` (`scripts/boundary_spectra.py`) and runs
 `ww3_bounc`, which writes `nest.ww3`; `ww3_shel` reads it at start (column
 `b` of `log.ww3`).
 
+The same run on grid v4 (PBS jobs 7935602–7935604, 19.5 h):
+
+```bash
+J1=$(qsub -v BETAMAX=1.75,RUN=natl_v4_jan2026_cur,GRID=grids/natl_v4 -o logs/natl_v4_setup.log scripts/natl_v2_setup.pbs)
+J2=$(qsub -W depend=afterok:$J1 -v SRC=natl_v4_jan2026_cur,RUN=natl_v4_jan2026_bnd,GRID=grids/natl_v4 -o logs/natl_v4_bnd_setup.log scripts/natl_bnd_setup.pbs)
+qsub -W depend=afterok:$J2 -v RUN=natl_v4_jan2026_bnd -o logs/natl_v4_bnd_run.log scripts/natl_v2_run.pbs
+```
+
 ### Altimeter validation
 
 ```bash

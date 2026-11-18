@@ -363,8 +363,22 @@ the fastest component (\SI{0.0373}{Hz}), rises from 59.6 to \SI{64.7}{s}
 (11 to 10 sub-cycles for a \SI{600}{s} step), the smallest CFL length at
 every level by 7 to 12\,\% and the median by 5 to 11\,\%. The largest
 angle reaches the \ang{130} bound (2\,550 triangles above \ang{120}
-instead of 970). The January 2026 runs use the implicit scheme, which
-has no CFL limit, and were made on grid v3.
+instead of 970).
+
+The January 2026 runs use the implicit scheme, which has no CFL limit.
+The run with open-boundary spectra was repeated on grid v4 with the same
+forcing, \texttt{BETAMAX} and spectra (PBS job 7935604, 112 ranks):
+\texttt{ww3\_shel} took \SI{70120}{s} instead of \SI{68800}{s} on grid v3
+(+1.9\,\%). Against the altimeters (328\,902 blocks) the scores are those
+of grid v3 to within \SI{1}{mm} at every level and in every region (bias
+\SI{+0.041}{m}, RMSE \SI{0.348}{m}, SI 0.118, $r$ 0.979). Against the 268
+buoys (167\,298 hours) $H_s$ RMSE goes from 0.374 to \SI{0.373}{m} and
+$T_{m02}$ RMSE from 1.325 to \SI{1.316}{s} ($r$ 0.780 to 0.783); the
+largest changes are near the coasts: $H_s$ RMSE 0.627 to \SI{0.616}{m} in
+the Irish and Celtic seas, $T_{m02}$ RMSE 0.854 to \SI{0.811}{s} off
+Iberia and 0.826 to \SI{0.811}{s} in deep water. With the implicit scheme
+the orientation of the triangles thus changes the solution very little,
+and slightly for the better.
 
 \begin{table}[H]
 \centering\small

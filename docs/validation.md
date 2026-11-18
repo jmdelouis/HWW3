@@ -114,6 +114,23 @@ Grids v3 and v4 at 2°–10°N, 40°–28°W (nside 128): cells (blue),
 triangles (red), nodes (black).
 ```
 
+January 2026 run on grid v4 with open-boundary spectra (implicit scheme,
+same forcing, `BETAMAX` and spectra as the v3 run, PBS job 7935604):
+`ww3_shel` 70,120 s instead of 68,800 s (+1.9 %).
+
+| | v3 | v4 |
+|---|---|---|
+| altimeters (328,902 blocks): bias / RMSE (m) | +0.041 / 0.348 | +0.041 / 0.348 |
+| altimeters: SI / r | 0.118 / 0.979 | 0.118 / 0.979 |
+| buoys $H_s$ (268 buoys, 167,298 h): RMSE (m) / SI | 0.374 / 0.267 | 0.373 / 0.266 |
+| buoys $T_{m02}$ (113,744 h): RMSE (s) / r | 1.325 / 0.780 | 1.316 / 0.783 |
+| $H_s$ RMSE, Irish and Celtic seas (m) | 0.627 | 0.616 |
+| $T_{m02}$ RMSE, Iberia and Canaries (s) | 0.854 | 0.811 |
+
+Altimeter scores agree to within 1 mm at every level and in every region;
+the buoy scores improve slightly, mostly near the coasts. Files:
+`results/natl_v4_jan2026_bnd_{val,buoys}_stats.json`.
+
 ## First WW3 run
 
 12 h cold start with a homogeneous 15 m/s westerly wind
