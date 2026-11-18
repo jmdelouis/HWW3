@@ -10,6 +10,7 @@
 \usepackage{siunitx}
 \usepackage{xcolor}
 \usepackage{hyperref}
+\usepackage{xurl}
 \usepackage{float}
 \usepackage{microtype}
 
@@ -31,16 +32,21 @@ steep slopes, coarse over the deep ocean. The model code is unchanged. Because e
 HEALPix pixel, the model state is a multi-resolution HEALPix map. It can be
 stored as GRID4EARTH Zarr datasets and compared with satellite products on
 the same grid without interpolation. This note describes the grid
-construction, how it is validated, and a first North Atlantic simulation for
-January 2026: on the final bathymetry-driven grid (794\,613 nodes, 3 to
-\SI{51}{km}), with ERA5 winds, ice, Copernicus currents and sea level and
-the ST4 growth parameter \texttt{BETAMAX} set to 1.75, the modelled
-significant wave height matches ten altimeters with a bias of
-\SI{0.005}{m}, an RMSE of \SI{0.38}{m} and a correlation of 0.976; at 267 moored buoys, mostly coastal, the hourly
-$H_s$ has a bias of \SI{-0.004}{m} and an RMSE of \SI{0.37}{m}. Imposing on the
-open boundaries spectra rebuilt from the partitions of the Ifremer global
-run lowers the altimeter RMSE to \SI{0.35}{m} (bias \SI{+0.04}{m},
-correlation 0.979) and leaves the buoy scores unchanged.
+construction, how it is validated, and a North Atlantic simulation for
+January 2026. The grid was built in four versions; the most complete,
+grid v4, is the reference: 794\,613 nodes from 3 to \SI{51}{km} placed by
+the depth and slope size functions of OceanMesh2D, all angles within
+\ang{20}--\ang{130}, triangle diagonals alternated to avoid a single
+orientation, and a connectivity optimised for the CFL condition of the
+explicit WW3 schemes (smallest explicit step raised by 8.6\,\%), with the
+nodes kept on the HEALPix pixel centres. On grid v4, with ERA5 winds, ice,
+Copernicus currents and sea level, the ST4 growth parameter
+\texttt{BETAMAX} set to 1.75 and open-boundary spectra rebuilt from the
+partitions of the Ifremer global run, the modelled significant wave height
+matches ten altimeters with a bias of \SI{+0.041}{m}, an RMSE of
+\SI{0.35}{m} and a correlation of 0.979; at 268 moored buoys, mostly
+coastal, the hourly $H_s$ has a bias of \SI{-0.005}{m} and an RMSE of
+\SI{0.37}{m}. The month takes \SI{19.5}{h} on 112 cores.
 \end{abstract}
 
 \section{Motivation}
@@ -194,11 +200,37 @@ meet.}
   Copernicus Marine; a fixed sea-ice obstruction taken from the January ERA5
   sea-ice concentration.
 \item Open boundaries (southern boundary at the equator, eastern Barents
-  Sea): no spectra imposed in the first January 2026 runs; the last run
-  imposes spectra rebuilt from the partitions of the Ifremer
+  Sea): no spectra imposed in the first January 2026 runs; the last runs
+  impose spectra rebuilt from the partitions of the Ifremer
   \texttt{GLOBMULTI} global run (see the end of
   Section~\ref{sec:validation}).
 \end{itemize}
+
+The grid was improved in four steps, each kept in its own configuration
+file so that every run of this note can be reproduced
+(Table~\ref{tab:versions}). \textbf{Grid v4 is the most complete grid and
+the reference configuration}: it has the nodes of grid v3 and adds the
+triangle orientation and CFL steps of Section~\ref{sec:v4}. The sections
+below follow the order in which the versions were made; the reference
+results are those of grid v4 with open-boundary spectra
+(Section~\ref{sec:v4}, Table~\ref{tab:reference}).
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{llrp{6.4cm}}
+\toprule
+grid & configuration & nodes & added \\
+\midrule
+v1 & \texttt{natl\_datarmor.json}    & 502\,690 & distance-to-coast refinement, triangles from the HEALPix adjacency \\
+v2 & \texttt{natl\_v2\_datarmor.json} & 502\,408 & edge flips and boundary trimming: angles \ang{20}--\ang{130} \\
+v3 & \texttt{natl\_v3\_datarmor.json} & 794\,613 & depth, slope and Rossby-radius size functions (OceanMesh2D) \\
+\textbf{v4} & \texttt{natl\_v4\_datarmor.json} & 794\,613 & alternated diagonals, CFL-driven flips (reference) \\
+\bottomrule
+\end{tabular}
+\caption{North Atlantic grid versions (\texttt{configs/}). Every version
+keeps the nodes on HEALPix pixel centres.}
+\label{tab:versions}
+\end{table}
 
 \subsection{Grid statistics}
 The grid was built on Datarmor (PBS job 7893701, 8 cores) in
@@ -261,9 +293,10 @@ The January 2026 runs below use v1.}
 Open-boundary nodes (971) lie on the
 equator, at \ang{80}N, on the \ang{45}E cut of the Barents Sea and on the
 \ang{100}W cut of the Canadian archipelago. The figures of the grid
-(Figs.~\ref{fig:natl_levels} and~\ref{fig:natl_zoom}) show the final grid
-v3, refined from the bathymetry; grids v1 and v2 are kept in the tables
-for reference.
+(Figs.~\ref{fig:natl_levels} and~\ref{fig:natl_zoom}) show grid v3,
+refined from the bathymetry, whose nodes are those of the reference grid v4
+(grid v4 only changes some diagonals, Fig.~\ref{fig:v4}); grids v1 and v2
+are kept in the tables for reference.
 
 \begin{table}[H]
 \centering
@@ -293,7 +326,7 @@ time: refinement + balance / cell bathymetry / triangulation & 70 / 23 / \SI{11}
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{fig/natl_v3_levels.png}
-\caption{Final North Atlantic grid v3 (OceanMesh2D size functions on GEBCO,
+\caption{North Atlantic grid v3, with the nodes of the reference grid v4 (OceanMesh2D size functions on GEBCO,
 794\,613 nodes): nodes coloured by $\nside$; open-boundary nodes in red.}
 \label{fig:natl_levels}
 \end{figure}
@@ -312,8 +345,9 @@ two polar base faces.}
 \label{fig:natl_zoom}
 \end{figure}
 
-\subsection{Triangle orientation and explicit time step (grid v4)}\label{sec:v4}
-Two remarks of F.~Ardhuin on grid v3 led to grid v4. First, the triangles
+\subsection{Reference grid v4: triangle orientation and explicit time step}\label{sec:v4}
+Grid v4 is the most complete grid of this note and the reference
+configuration. Two remarks of F.~Ardhuin on grid v3 led to grid v4. First, the triangles
 should not all share one orientation, since the numerical diffusion of the
 WW3 schemes is then anisotropic. In a uniform area the four cells around a
 HEALPix corner form a $2\times2$ block of pixels of one base face, and in
@@ -391,6 +425,38 @@ were not changed. With the implicit scheme
 the orientation of the triangles thus changes the solution very little:
 the altimeter scores are unchanged and the buoy scores change locally,
 slightly for the better on average.
+
+\paragraph{Reference configuration.} Grid v4 with open-boundary spectra
+gathers every improvement of this note: bathymetry-driven resolution,
+angles within \ang{20}--\ang{130}, alternated diagonals, CFL-optimised
+connectivity, \texttt{BETAMAX} 1.75, currents, sea level and boundary
+spectra. Table~\ref{tab:reference} compares its scores with the first
+January run. Its 12 hourly fields are published as a HEALPix pyramid
+(\SI{37}{GB}, 225\,116 objects) at
+\url{https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v4_jan2026_bnd/ww3-l11-l7.zarr}
+and can be viewed with the gridlook preview,
+\url{https://grid4earth.eu/gridlook-preview/\#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v4_jan2026_bnd/ww3-l11-l7.zarr}.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrr}
+\toprule
+ & first run (grid v1) & reference (grid v4) \\
+\midrule
+nodes & 502\,690 & 794\,613 \\
+forcing & wind, ice & + currents, sea level, boundary spectra \\
+\texttt{BETAMAX} & 1.43 & 1.75 \\
+altimeters: bias / RMSE (m) & $-0.19$ / 0.45 & $+0.041$ / 0.348 \\
+altimeters: SI / $r$ & 0.14 / 0.972 & 0.118 / 0.979 \\
+buoys $H_s$: bias / RMSE (m) & -- & $-0.005$ / 0.373 \\
+\texttt{ww3\_shel}, 112 ranks & \SI{11.3}{h} & \SI{19.5}{h} \\
+\bottomrule
+\end{tabular}
+\caption{First January 2026 run (PBS job 7894000) and reference run on
+grid v4 (PBS job 7935604), against L3 altimetry (4--31 January, 331\,154
+and 328\,902 blocks of \SI{50}{km}) and 268 moored buoys.}
+\label{tab:reference}
+\end{table}
 
 \begin{table}[H]
 \centering\small
@@ -933,6 +999,12 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{qsub -v CFG=configs/natl\_v4\_datarmor.json,GRID=grids/natl\_v4 scripts/natl\_grid.pbs}, then
   \texttt{python scripts/extract\_zoom.py grids/natl\_v<3|4> grids/natl\_v<3|4>/plot/eq.npz -40 -28 2 10} and
   \texttt{python scripts/plot\_alternation.py \ldots{} fig/natl\_v4\_alternation.png}.
+\item Table~\ref{tab:reference}, Figures~\ref{fig:v4_maps}--\ref{fig:v4_series}
+  (reference run): \texttt{qsub -v BETAMAX=1.75,RUN=natl\_v4\_jan2026\_cur,GRID=grids/natl\_v4 scripts/natl\_v2\_setup.pbs},
+  \texttt{qsub -v SRC=natl\_v4\_jan2026\_cur,RUN=natl\_v4\_jan2026\_bnd,GRID=grids/natl\_v4 scripts/natl\_bnd\_setup.pbs},
+  \texttt{qsub -v RUN=natl\_v4\_jan2026\_bnd scripts/natl\_v2\_run.pbs}, then
+  \texttt{natl\_validate.pbs}, \texttt{natl\_buoys.pbs} and
+  \texttt{python scripts/plot\_run\_diff.py} (\texttt{docs/reproducing.md}).
 \item Table~\ref{tab:bnd}, Figure~\ref{fig:bnd_maps}:
   \texttt{qsub scripts/natl\_bnd\_setup.pbs}, then the run
   \texttt{natl\_v3\_jan2026\_bnd}, \texttt{natl\_validate.pbs} and

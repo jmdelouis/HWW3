@@ -142,10 +142,13 @@ Stores on S3 (trials, can be removed at any time):
 - <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v3_jan2026_bnd/ww3-l11-l7.zarr>
   (grid v3 with open-boundary spectra from GLOBMULTI, PBS job 7920778:
   7,445 s, 37 GB, 225,116 objects uploaded in 5,470 s)
+- <https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v4_jan2026_bnd/ww3-l11-l7.zarr>
+  (reference: grid v4 with open-boundary spectra, PBS job 7935607:
+  37 GB, 225,116 objects uploaded in 5,003 s)
 
-All five are drawn by the gridlook preview (draft pull request
+All six are drawn by the gridlook preview (draft pull request
 d70-t/gridlook#235), on the WGS84 ellipsoid, for example
-<https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v3_jan2026_cur/ww3-l11-l7.zarr>.
+<https://grid4earth.eu/gridlook-preview/#https://data.grid4earth.eu/trials/jmdelouis-2026-11-12-hww3/natl_v4_jan2026_bnd/ww3-l11-l7.zarr> (reference run).
 The first grid stores were drawn empty: `grid_pyramid.py` decoded
 `raw/uniq.u64` with $4\cdot4^d$ instead of the cdshealpix $16\cdot4^d$, so
 every cell identifier was $12\cdot4^d$ too large (beyond the sphere); the
