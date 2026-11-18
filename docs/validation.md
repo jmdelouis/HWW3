@@ -127,9 +127,46 @@ same forcing, `BETAMAX` and spectra as the v3 run, PBS job 7935604):
 | $H_s$ RMSE, Irish and Celtic seas (m) | 0.627 | 0.616 |
 | $T_{m02}$ RMSE, Iberia and Canaries (s) | 0.854 | 0.811 |
 
-Altimeter scores agree to within 1 mm at every level and in every region;
-the buoy scores improve slightly, mostly near the coasts. Files:
+Altimeter scores agree to within 1 mm at every level and in every region.
+Per buoy, the $H_s$ RMSE changes by less than 5 mm at 243 buoys, decreases
+at 12 and increases at 13, by at most 0.07 m, at coastal nside-2048 nodes
+in the Channel, off western Ireland and in the Canaries. Node by node
+(4–31 January), the mean $H_s$ changes by less than 3.4 cm at 99 % of the
+nodes and the RMS of the hourly difference has a median of 3 mm (99th
+percentile 4.2 cm, maximum 0.44 m at a few coastal and island nodes); it
+reaches 2–3 cm south of about 36°N, where the diagonals were alternated,
+and stays below 1 cm further north. Files:
 `results/natl_v4_jan2026_bnd_{val,buoys}_stats.json`.
+
+```{figure} _static/fig/natl_v4_jan2026_bnd_diff.png
+:width: 100%
+
+Grid v4 against grid v3 (both with open-boundary spectra): mean $H_s$ of
+v4, difference of the mean and RMS of the hourly difference, from
+`python scripts/plot_run_diff.py runs/natl_v3_jan2026_bnd/ww3.202601.nc v3
+runs/natl_v4_jan2026_bnd/ww3.202601.nc v4 grids/natl_v4/raw/tri.u32 out.png`.
+```
+
+```{figure} _static/fig/natl_v4_jan2026_bnd_maps.png
+:width: 100%
+
+Grid v4 run with open-boundary spectra: mean and maximum $H_s$, WW3 minus
+altimeter $H_s$ along the tracks.
+```
+
+```{figure} _static/fig/natl_v4_jan2026_bnd_buoys_scatter.png
+:width: 100%
+
+Grid v4 run against 268 buoys (left) and change of the $H_s$ RMSE per buoy
+from grid v3 to grid v4 (right).
+```
+
+```{figure} _static/fig/natl_v4_jan2026_bnd_buoys_series.png
+:width: 100%
+
+Hourly $H_s$ at the four buoys where the RMSE decreases most from grid v3
+to grid v4.
+```
 
 ## First WW3 run
 

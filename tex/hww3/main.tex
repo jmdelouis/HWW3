@@ -376,9 +376,21 @@ buoys (167\,298 hours) $H_s$ RMSE goes from 0.374 to \SI{0.373}{m} and
 $T_{m02}$ RMSE from 1.325 to \SI{1.316}{s} ($r$ 0.780 to 0.783); the
 largest changes are near the coasts: $H_s$ RMSE 0.627 to \SI{0.616}{m} in
 the Irish and Celtic seas, $T_{m02}$ RMSE 0.854 to \SI{0.811}{s} off
-Iberia and 0.826 to \SI{0.811}{s} in deep water. With the implicit scheme
-the orientation of the triangles thus changes the solution very little,
-and slightly for the better.
+Iberia and 0.826 to \SI{0.811}{s} in deep water. Per buoy, the $H_s$
+RMSE changes by less than \SI{5}{mm} at 243 buoys, decreases at 12 and
+increases at 13, by at most \SI{0.07}{m} (Fig.~\ref{fig:v4_buoys}); the
+largest changes are at coastal nodes of $\nside=2048$ in the Channel, off
+western Ireland and in the Canaries (Fig.~\ref{fig:v4_series}). Node by
+node (Fig.~\ref{fig:v4_diff}, 4--31 January), the mean $H_s$ changes by
+less than \SI{3.4}{cm} at 99\,\% of the nodes and the RMS of the hourly
+difference has a median of \SI{3}{mm} (99th percentile \SI{4.2}{cm},
+maximum \SI{0.44}{m} at a few coastal and island nodes); it reaches 2 to
+\SI{3}{cm} south of about \ang{36}N, where the diagonals were alternated,
+and stays below \SI{1}{cm} further north, where the blocks are rhombi and
+were not changed. With the implicit scheme
+the orientation of the triangles thus changes the solution very little:
+the altimeter scores are unchanged and the buoy scores change locally,
+slightly for the better on average.
 
 \begin{table}[H]
 \centering\small
@@ -408,6 +420,45 @@ length divided by the cell size.}
 diagonal; in grid v4 the diagonals alternate between north--south and
 east--west.}
 \label{fig:v4}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v4_jan2026_bnd_maps.png}
+\caption{Run 7935604 (grid v4, open-boundary spectra): mean and maximum
+$H_s$ in January 2026, and WW3 minus altimeter $H_s$ along the tracks;
+compare with Fig.~\ref{fig:bnd_maps} (grid v3).}
+\label{fig:v4_maps}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v4_jan2026_bnd_diff.png}
+\caption{Grid v4 against grid v3, both with open-boundary spectra, 4--31
+January 2026: mean $H_s$ of the v4 run, difference of the mean $H_s$
+(v4 $-$ v3) and RMS of the hourly $H_s$ difference, drawn on the v4
+triangles (\texttt{scripts/plot\_run\_diff.py}).}
+\label{fig:v4_diff}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v4_jan2026_bnd_buoys_scatter.png}
+\caption{Run 7935604 (grid v4) against 268 moored buoys, hourly $H_s$.
+Left: density, log scale. Right: change of the RMSE per buoy from grid v3
+to grid v4, both with open-boundary spectra (colour scale saturated at
+$\pm\SI{0.05}{m}$).}
+\label{fig:v4_buoys}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v4_jan2026_bnd_buoys_series.png}
+\caption{Hourly $H_s$ at the four buoys where the RMSE decreases most from
+grid v3 to grid v4: two buoys in Poole and Christchurch bays (6201008,
+6201009), Finnis (off the Aran Islands) and Las Palmas. Black dots: buoy; the legend gives the
+$\nside$ of the node and its distance to the buoy.}
+\label{fig:v4_series}
 \end{figure}
 
 \subsection{WW3 build and grid preprocessing}
