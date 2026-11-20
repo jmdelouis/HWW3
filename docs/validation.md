@@ -168,6 +168,76 @@ Hourly $H_s$ at the four buoys where the RMSE decreases most from grid v3
 to grid v4.
 ```
 
+### Explicit scheme: extra cost and where it comes from
+
+The run with open-boundary spectra was repeated with the explicit N scheme
+(`EXPFSN`, split propagation, refraction, frequency shift and sources;
+`scripts/natl_exp_setup.pbs`) on grids v3 and v4, same forcing, spectra,
+`BETAMAX`, 600 s step and 112 ranks (PBS jobs 7951887 and 7951889). Both
+runs stopped at the first restart write (8 January 00 h for v3, 7 January
+21 h for v4) when the user quota of the work file system was exceeded.
+
+| run | altimeters: blocks | bias (m) | RMSE (m) | buoys $H_s$ RMSE (m) | `ww3_shel` per model day (s) |
+|---|---|---|---|---|---|
+| v3 implicit | 45,076 | −0.032 | 0.283 | 0.310 | 2104 |
+| v4 implicit | 45,076 | −0.031 | 0.283 | 0.310 | 2115 |
+| v3 explicit | 45,076 | −0.017 | 0.283 | 0.301 | 4196 |
+| v4 explicit | 44,670 | −0.017 | 0.283 | 0.301 | 4318 |
+
+Scores over 4 January 00 h – 7 January 20 h (`VAL_END=2026-01-07T21:00`
+for the altimeters; 252 buoys with at least 48 good hours,
+`VAL_MIN_HOURS=48`, PBS job 7957810); wall time from 2 to 7 January.
+The explicit scheme is 2.0 times slower (1.99 on v3, 2.04 on v4), and
+grid v4 is 2.9 % slower than v3 with it although it needs 3.4 % fewer
+propagation sweeps, so propagation is not the only explicit cost.
+
+`scripts/explicit_cost.py` recomputes the explicit step of
+`PDLIB_W3XYPFSN2` for every node and component. Each component is
+sub-cycled $\lceil 600/\min_i \Delta t_i\rceil$ times, the minimum being
+taken over the whole domain, so one node sets the sub-cycling of the
+grid. On grid v4 ITER falls from 10 at 0.0373 Hz to 1 above 0.33 Hz and
+the sweeps per step are $S = 3678$ (3806 on v3, 1152 with one sweep per
+component; +4 % at most with the largest current). The nside-2048 nodes
+need a median of 4.7 sub-steps; the global ITER is set by 1,090 of them
+above 7, in Arctic channels, Norwegian fjords, the Hebrides and around
+Svalbard, at 50–550 m depth, where the group speed of 0.0373 Hz peaks
+(kh ≈ 1.2, about 180 m, 25 m/s) and where coastal triangles at the angle
+bounds have a CFL length of 0.50–0.60 cells instead of 0.84. With the
+nodes kept on HEALPix centres, excluding the 100 / 10,000 / 100,000
+worst nodes lowers $S$ by 3 / 7 / 12 %, moving the nodes above 7 / 5 / 3
+sub-steps one level coarser by 5 / 16 / 29 %, and a perfect connectivity
+by 27 %: the grid alone cannot remove the factor 2.
+
+Node by node on grid v4, explicit minus implicit $H_s$ has a mean of
++0.5 cm and an RMS median of 2.1 cm (99th percentile 20 cm), with
+higher explicit $H_s$ along the swell paths and the largest differences
+at coastal nodes of southern Greenland (RMS up to 3.26 m). v4 minus v3
+with the explicit scheme: RMS median 3 mm. Files:
+`results/natl_v{3,4}_explicit_cost.json`,
+`results/natl_v{3,4}_jan2026_{exp,bnd_w7}_val_stats.json`,
+`results/natl_v4_jan2026_exp_buoys_stats.json`.
+
+```{figure} _static/fig/natl_v4_explicit_cost_map.png
+:width: 100%
+
+Grid v4: explicit sub-steps per 600 s that each node alone would impose,
+with the 1,090 nodes above 7 circled, histogram per nside, and zooms on
+the Canadian Arctic Archipelago, western Norway, the Hebrides and Svalbard.
+```
+
+```{figure} _static/fig/natl_explicit_cost_curves.png
+:width: 100%
+
+ITER per frequency, and sweeps per step when the worst nodes are excluded
+or moved one HEALPix level coarser (dashed: perfect connectivity).
+```
+
+```{figure} _static/fig/natl_v4_jan2026_exp_diff.png
+:width: 100%
+
+Explicit minus implicit scheme on grid v4, 4–7 January.
+```
+
 ## First WW3 run
 
 12 h cold start with a homogeneous 15 m/s westerly wind

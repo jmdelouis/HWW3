@@ -39,7 +39,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 SPINUP_DAYS = 3.0
 MAXDIST_KM = 10.0
-MIN_HOURS = 100
+# VAL_MIN_HOURS lowers it for short runs (the 92 hours of the explicit runs after spin-up)
+MIN_HOURS = int(os.environ.get("VAL_MIN_HOURS", 100))
 EARTH_KM = 6371.0
 BUOY_DEFAULT = ("/home/ref-copernicus-insitu/INSITU_GLO_PHYBGCWAV_DISCRETE_MYNRT_013_030/"
                 "cmems_obs-ins_glo_phybgcwav_mynrt_na_irr_202311/monthly/MO/202601")

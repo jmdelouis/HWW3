@@ -46,7 +46,11 @@ partitions of the Ifremer global run, the modelled significant wave height
 matches ten altimeters with a bias of \SI{+0.041}{m}, an RMSE of
 \SI{0.35}{m} and a correlation of 0.979; at 268 moored buoys, mostly
 coastal, the hourly $H_s$ has a bias of \SI{-0.005}{m} and an RMSE of
-\SI{0.37}{m}. The month takes \SI{19.5}{h} on 112 cores.
+\SI{0.37}{m}. The month takes \SI{19.5}{h} on 112 cores with the implicit
+scheme. The explicit scheme is twice as slow: its sub-cycling is global
+and set by about a thousand coastal nodes of \SI{3}{km} in fjords and
+Arctic channels, and with the nodes kept on HEALPix pixel centres a
+better grid could remove at most about a third of its propagation sweeps.
 \end{abstract}
 
 \section{Motivation}
@@ -527,6 +531,158 @@ $\nside$ of the node and its distance to the buoy.}
 \label{fig:v4_series}
 \end{figure}
 
+\subsection{Explicit scheme: extra cost and where it comes from}\label{sec:explicit}
+To measure what the CFL optimisation of grid v4 gives, the run with
+open-boundary spectra was repeated with the explicit N scheme of WW3
+(\texttt{EXPFSN}, with propagation, refraction, frequency shift and source
+terms split; \texttt{scripts/natl\_exp\_setup.pbs}) on grids v3 and v4,
+with the same forcing, spectra, \texttt{BETAMAX}, global step
+(\SI{600}{s}) and 112 ranks (PBS jobs 7951887 and 7951889). Both runs
+stopped at the first restart write, on 8 January 00\,h (v3) and 7 January
+21\,h (v4), when the user quota of the work file system was exceeded; the
+comparison covers 1--7 January.
+
+\paragraph{Wall time.} From 2 January 00\,h to 7 January 20\,h,
+\texttt{ww3\_shel} takes \SI{4196}{s} per model day on grid v3 and
+\SI{4318}{s} on grid v4 with the explicit scheme, against 2104 and
+\SI{2115}{s} with the implicit scheme: the explicit runs are 1.99 (v3)
+and 2.04 (v4) times slower, and the cold-start day costs \SI{6.5}{ks}
+against \SI{3.3}{ks}. With the explicit scheme grid v4 is 2.9\,\% slower
+than grid v3, although it needs 3.4\,\% fewer propagation sweeps
+(below): the propagation is not the only cost of the explicit run, and
+the share of the source terms (dynamic step, \texttt{DTMIN}
+\SI{10}{s}) and of the other split steps was not measured.
+
+\paragraph{Sub-cycling.} In \texttt{PDLIB\_W3XYPFSN2}
+(\texttt{w3profsmd\_pdlib.F90}) each spectral component $(f,\theta)$ is
+advected with $\mathrm{ITER}(f,\theta)=\lceil\mathrm{DT}/\min_i\Delta
+t_i(f,\theta)\rceil$ sub-steps, the minimum being taken over all the
+interior nodes of the domain (\texttt{MPI\_ALLREDUCE}): one node sets the
+sub-cycling of the whole grid for that component.
+\texttt{scripts/explicit\_cost.py} recomputes $\Delta t_i$ from the grid
+with the WW3 formula (Sec.~\ref{sec:v4}) for the 32 frequencies and 36
+directions, with the group speed at the node depth and no current. It
+gives the number of sweeps per global step,
+$S=\sum_{f,\theta}\mathrm{ITER}$, and for every node the number of
+sub-steps that this node alone would impose (maximum over the
+components). On grid v4, ITER falls from 10 at \SI{0.0373}{Hz} to 1
+above \SI{0.33}{Hz} and $S=3678$, 3.2 times the 1152 sweeps of one sweep
+per component (grid v3: $S=3806$). Adding the largest Copernicus current
+of the month to the group speed would raise $S$ by at most 4\,\% (3833).
+
+\paragraph{Costly nodes.} Fig.~\ref{fig:xcost_map} maps the local
+sub-steps. They follow the resolution, with medians of 0.3, 0.6, 1.3,
+2.5 and 4.7 at $\nside=128$ to 2048; the 551\,192 interior nodes at
+$\nside=2048$ (75\,\% of the interior nodes) need about 5. The global
+ITER is set by the tail of this distribution: the 1\,090 nodes above 7
+sub-steps, all at $\nside=2048$, lie in the channels of the Canadian
+Arctic Archipelago, the Norwegian fjords, the Hebrides and around
+Svalbard (boxes A--D), at depths of 50 to \SI{550}{m}. Two factors
+combine there. The group speed of the lowest frequency peaks at
+$kh\approx1.2$, that is about \SI{180}{m} for \SI{0.0373}{Hz}, where it
+is 1.2 times its deep-water value (\SI{25}{m/s} instead of
+\SI{21}{m/s}); and these nodes are on the coast, where the triangles
+reach the angle bounds and the CFL length falls to 0.50--0.60 cell sizes
+instead of a median of 0.84 at $\nside=2048$. The worst node
+(\ang{85.3}W, \ang{73.1}N, \SI{161}{m}, CFL length \SI{1.62}{km} for a
+\SI{3.2}{km} cell) alone imposes 9.15 sub-steps.
+
+\paragraph{What the grid can still gain.} With the vertices kept on
+HEALPix pixel centres, the grid can change only through its connectivity
+or the level of its nodes. Three estimates bound the gain
+(Fig.~\ref{fig:xcost_curves}). Excluding the worst nodes from the
+minimum lowers $S$ by 3\,\% for 100 nodes, 7\,\% for 10\,000 and 12\,\%
+for 100\,000 (3554, 3421, 3243). Moving every node above $K$ sub-steps
+one HEALPix level coarser, which halves its sub-steps, gives $S=3490$
+($-5\,\%$) for $K=7$ (1\,090 nodes), 3099 ($-16\,\%$) for $K=5$
+(210\,060 nodes) and 2614 ($-29\,\%$) for $K=3$ (516\,652 nodes, nearly
+all the $\nside=2048$ nodes). A perfect connectivity, every node at the
+median CFL length of its level, gives $S=2700$ ($-27\,\%$). Even if all
+the explicit time were propagation, a 27 to 36\,\% reduction of $S$
+would leave the explicit run 1.3 to 1.5 times slower than the implicit
+one: with a global sub-cycling, the grid alone cannot bring the explicit
+scheme to the cost of the implicit one.
+
+\paragraph{Accuracy.} Over 4 January 00\,h -- 7 January 20\,h, after the
+same 3-day spin-up, the explicit runs have a smaller altimeter bias and
+the same RMSE (Table~\ref{tab:explicit}); the bias decreases most at
+$\nside=128$ ($-0.024$ to \SI{-0.005}{m}) and least at $\nside=2048$
+($-0.063$ to \SI{-0.055}{m}). Node by node (Fig.~\ref{fig:exp_diff}),
+the explicit minus implicit $H_s$ on grid v4 has a mean of
+\SI{+0.5}{cm}; its mean exceeds \SI{5}{cm} in absolute value at 7\,\% of
+the nodes and the RMS of the hourly difference has a median of
+\SI{2.1}{cm} (99th percentile \SI{20}{cm}). The explicit $H_s$ is higher
+by \SI{2.7}{cm} on average along the swell paths of the central
+Atlantic (RMS median \SI{3.9}{cm}) and of the Labrador Sea (RMS median
+\SI{7.4}{cm}); the largest differences are at coastal nodes of southern
+Greenland, up to an RMS of \SI{3.26}{m} at \ang{47.7}W, \ang{60.7}N where
+the explicit mean $H_s$ is \SI{2.8}{m} lower. Between grids v3 and v4 the
+explicit runs differ as little as the implicit ones (RMS median
+\SI{3}{mm}, 99th percentile \SI{3.4}{cm}). At the 252 buoys with at least
+48 good hours in the window (22\,743 hours, PBS job 7957810), the $H_s$
+RMSE on grid v4 falls from 0.310 to \SI{0.301}{m} with the explicit
+scheme ($r$ 0.925 to 0.930), mostly in the North Sea (0.368 to
+\SI{0.350}{m}, 90 buoys) and the Mediterranean (0.396 to \SI{0.382}{m});
+per buoy it changes by less than \SI{5}{mm} at 75 buoys, decreases at 91
+and increases at 86, between \SI{-0.24}{m} and \SI{+0.15}{m} at Dutch,
+German and Belgian coastal buoys. The $T_{m02}$ RMSE is unchanged (1.218
+and \SI{1.219}{s}) but its bias goes from $-0.29$ to \SI{-0.42}{s}.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrrrr}
+\toprule
+ & \multicolumn{4}{c}{altimeters} & buoys & \texttt{ww3\_shel} \\
+run & blocks & bias (m) & RMSE (m) & SI & RMSE (m) & per day (s) \\
+\midrule
+v3 implicit & 45\,076 & $-0.032$ & 0.283 & 0.121 & 0.310 & 2104 \\
+v4 implicit & 45\,076 & $-0.031$ & 0.283 & 0.121 & 0.310 & 2115 \\
+v3 explicit & 45\,076 & $-0.017$ & 0.283 & 0.121 & 0.301 & 4196 \\
+v4 explicit & 44\,670 & $-0.017$ & 0.283 & 0.121 & 0.301 & 4318 \\
+\bottomrule
+\end{tabular}
+\caption{Implicit and explicit schemes on grids v3 and v4: $H_s$ against
+L3 altimetry ($r=0.971$ for all) and 252 moored buoys (22\,743 hours)
+from 4 January 00\,h to 7 January 20\,h (the v4 explicit run ends at
+19\,h), and wall time of \texttt{ww3\_shel} per model day from 2 to 7
+January on 112 ranks.}
+\label{tab:explicit}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v4_explicit_cost_map.png}
+\caption{Grid v4: number of explicit sub-steps per \SI{600}{s} step that
+each node alone would impose (maximum over the 1152 components, no
+current). Top left: all nodes, the 1\,090 nodes above 7 circled. Top
+right: histogram per $\nside$. Bottom: triangles of the Canadian Arctic
+Archipelago (A), western Norway (B), the Hebrides (C) and Svalbard (D),
+coloured by their worst vertex.}
+\label{fig:xcost_map}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_explicit_cost_curves.png}
+\caption{Explicit cost of grids v3 and v4. Left: ITER per frequency
+(maximum and mean over the directions; dotted, with the largest current
+of the month added). Centre: sweeps per step $S$ when the $N$ worst
+nodes are excluded from the minimum. Right: $S$ when the nodes above $K$
+sub-steps are moved one HEALPix level coarser; dashed, every node at the
+median CFL length of its level.}
+\label{fig:xcost_curves}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v4_jan2026_exp_diff.png}
+\caption{Explicit against implicit scheme on grid v4, 4 January 00\,h --
+7 January 19\,h: mean $H_s$ of the explicit run, difference of the mean
+$H_s$ and RMS of the hourly difference
+(\texttt{scripts/plot\_run\_diff.py}).}
+\label{fig:exp_diff}
+\end{figure}
+
 \subsection{WW3 build and grid preprocessing}
 WW3 \texttt{develop} (commit \texttt{dea641c}) is built on Datarmor with
 Intel Fortran 19.1.3 and Intel MPI 2019.9 (\texttt{scripts/build\_ww3.pbs},
@@ -1005,6 +1161,15 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{qsub -v RUN=natl\_v4\_jan2026\_bnd scripts/natl\_v2\_run.pbs}, then
   \texttt{natl\_validate.pbs}, \texttt{natl\_buoys.pbs} and
   \texttt{python scripts/plot\_run\_diff.py} (\texttt{docs/reproducing.md}).
+\item Table~\ref{tab:explicit}, Figures~\ref{fig:xcost_map}--\ref{fig:exp_diff}
+  (explicit scheme):
+  \texttt{qsub -v SRC=natl\_v4\_jan2026\_bnd,CUR=natl\_v4\_jan2026\_cur,RUN=natl\_v4\_jan2026\_exp,GRID=grids/natl\_v4 scripts/natl\_exp\_setup.pbs},
+  \texttt{qsub -v RUN=natl\_v4\_jan2026\_exp scripts/natl\_v2\_run.pbs} (same for v3),
+  \texttt{validate\_altimetry.py} with \texttt{VAL\_END=2026-01-07T21:00},
+  \texttt{validate\_buoys.py} with \texttt{VAL\_MIN\_HOURS=48},
+  \texttt{explicit\_cost.py}, \texttt{plot\_explicit\_cost.py map} and
+  \texttt{curves}, and \texttt{plot\_run\_diff.py}, with the arguments
+  given in \texttt{docs/reproducing.md}.
 \item Table~\ref{tab:bnd}, Figure~\ref{fig:bnd_maps}:
   \texttt{qsub scripts/natl\_bnd\_setup.pbs}, then the run
   \texttt{natl\_v3\_jan2026\_bnd}, \texttt{natl\_validate.pbs} and

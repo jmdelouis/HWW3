@@ -10,10 +10,10 @@
 # (grids/scan/<wl>_<slp>_<fl>_<grade>_summary.json).
 #   qsub -v SCAN="100:10:0:0.2 128:10:0:0.2" scripts/natl_grid_scan.pbs
 set -e
-cd /home1/datawork/jmdeloui/HWW3
+R=${R:-/home1/datawork/jmdeloui/HWW3}; cd $R
 export RUSTUP_HOME=$HOME/stl-mpi/rustup CARGO_HOME=$HOME/stl-mpi/cargo
 export PATH=$CARGO_HOME/bin:$PATH
-export CARGO_TARGET_DIR=/home1/datawork/jmdeloui/HWW3/target_datarmor
+export CARGO_TARGET_DIR=$R/target_datarmor
 cargo build --release --manifest-path hww3-grid/Cargo.toml
 export RAYON_NUM_THREADS=8
 PY=${HWW3_PYTHON:-/appli/anaconda/versions/4.7.12/bin/python}

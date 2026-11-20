@@ -9,7 +9,7 @@
 #   qsub -v RUN=natl_v2_jan2026_cur scripts/natl_v2_run.pbs
 #   qsub -v RUN=natl_v3_jan2026_cur -o logs/natl_v3_run.log scripts/natl_v2_run.pbs
 set -e
-R=/home1/datawork/jmdeloui/HWW3
+R=${R:-/home1/datawork/jmdeloui/HWW3}
 NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174
 source /usr/share/Modules/3.2.10/init/bash
 module purge

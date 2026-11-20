@@ -92,6 +92,13 @@ def main():
     lonmin, lonmax, latmin, latmax = lon.min(), lon.max(), lat.min(), lat.max()
 
     t0, t1 = tm[0] + SPINUP_DAYS * 86400.0, tm[-1]
+    # optional end of the window (VAL_END=2026-01-07T21:00), to compare runs of different lengths
+    if os.environ.get("VAL_END"):
+        import datetime
+
+        end = datetime.datetime.fromisoformat(os.environ["VAL_END"]) - datetime.datetime(2000, 1, 1)
+        t1 = min(t1, end.total_seconds())
+        print("window end", os.environ["VAL_END"], flush=True)
     rows = []  # obs, model, mission, level, lon, lat
     days = sorted({netCDF4.num2date(t, "seconds since 2000-01-01").strftime("%Y/%m") for t in (t0, t1)})
     files = []

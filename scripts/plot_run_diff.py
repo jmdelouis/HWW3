@@ -28,15 +28,17 @@ def main():
     t = a["time"][:]
     t = t - t[0]
     i0 = int(np.searchsorted(t, spin))
-    nt = len(t) - i0
+    kmax = min(len(t), len(b["time"]))  # common hours when run B is shorter
+    nt = kmax - i0
     n = len(lon)
     sb = np.zeros(n)
     sd = np.zeros(n)
     sd2 = np.zeros(n)
     cnt = np.zeros(n)
-    for k in range(i0, len(t), 24):
-        ha = a["hs"][k:k + 24].astype(float).filled(np.nan)
-        hb = b["hs"][k:k + 24].astype(float).filled(np.nan)
+    for k in range(i0, kmax, 24):
+        k1 = min(k + 24, kmax)
+        ha = a["hs"][k:k1].astype(float).filled(np.nan)
+        hb = b["hs"][k:k1].astype(float).filled(np.nan)
         ok = np.isfinite(ha) & np.isfinite(hb)
         d = np.where(ok, hb - ha, 0.0)
         sb += np.where(ok, hb, 0.0).sum(0)

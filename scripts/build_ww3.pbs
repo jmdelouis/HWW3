@@ -11,7 +11,7 @@
 # Fortran module was made by an old gfortran, hence the local netCDF-Fortran.
 # Run: qsub scripts/build_ww3.pbs
 set -e
-R=/home1/datawork/jmdeloui/HWW3
+R=${R:-/home1/datawork/jmdeloui/HWW3}
 SRC=$R/src
 PREFIX=$R/opt
 NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174

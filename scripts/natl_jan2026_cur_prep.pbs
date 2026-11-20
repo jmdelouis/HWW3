@@ -8,7 +8,7 @@
 # Copernicus Marine (Datarmor mirror) currents and sea level -> current.ww3, level.ww3;
 # wind and ice reused from runs/natl_jan2026.
 set -e
-R=/home1/datawork/jmdeloui/HWW3
+R=${R:-/home1/datawork/jmdeloui/HWW3}
 NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174
 source /usr/share/Modules/3.2.10/init/bash
 module purge

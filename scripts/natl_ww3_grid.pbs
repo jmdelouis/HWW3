@@ -7,7 +7,7 @@
 #PBS -o /home1/datawork/jmdeloui/HWW3/logs/natl_ww3_grid.log
 # Run ww3_grid on the North Atlantic HEALPix grid (creates mod_def.ww3).
 set -e
-R=/home1/datawork/jmdeloui/HWW3
+R=${R:-/home1/datawork/jmdeloui/HWW3}
 source /etc/profile.d/modules.sh 2>/dev/null || true
 module purge
 module load intel-comp/20 impi/2019.9.304

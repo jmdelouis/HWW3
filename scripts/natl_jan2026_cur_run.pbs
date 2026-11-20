@@ -7,7 +7,7 @@
 #PBS -o /home1/datawork/jmdeloui/HWW3/logs/natl_jan2026_cur_run.log
 # January 2026 North Atlantic run with currents and sea level, 112 MPI ranks, then ww3_ounf.
 set -e
-R=/home1/datawork/jmdeloui/HWW3
+R=${R:-/home1/datawork/jmdeloui/HWW3}
 NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174
 source /usr/share/Modules/3.2.10/init/bash
 module purge

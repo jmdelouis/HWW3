@@ -178,6 +178,36 @@ J2=$(qsub -W depend=afterok:$J1 -v SRC=natl_v4_jan2026_cur,RUN=natl_v4_jan2026_b
 qsub -W depend=afterok:$J2 -v RUN=natl_v4_jan2026_bnd -o logs/natl_v4_bnd_run.log scripts/natl_v2_run.pbs
 ```
 
+### Explicit scheme
+
+The same run with the explicit N scheme (PBS jobs 7951887 and 7951889,
+about 4,300 s per model day instead of 2,100 s). Every PBS script takes
+`R` (default `/home1/datawork/jmdeloui/HWW3`) to run from another file
+system, for example `qsub -v R=/home1/scratch/jmdeloui/HWW3,...`.
+
+```bash
+for v in 3 4; do
+  J=$(qsub -v SRC=natl_v${v}_jan2026_bnd,CUR=natl_v${v}_jan2026_cur,RUN=natl_v${v}_jan2026_exp,GRID=grids/natl_v$v -o logs/natl_v${v}_exp_setup.log scripts/natl_exp_setup.pbs)
+  qsub -W depend=afterok:$J -v RUN=natl_v${v}_jan2026_exp -o logs/natl_v${v}_exp_run.log scripts/natl_v2_run.pbs
+done
+```
+
+Scores on the common window (altimeters with `VAL_END=2026-01-07T21:00`,
+buoys with `VAL_MIN_HOURS=48`), the explicit cost per node and the figures:
+
+```bash
+VAL_END=2026-01-07T21:00 python scripts/validate_altimetry.py runs/natl_v4_jan2026_exp/ww3.202601.nc grids/natl_v4/plot/nodes.npz runs/natl_v4_jan2026_exp/val/natl_v4_jan2026_exp
+VAL_MIN_HOURS=48 python scripts/validate_buoys.py runs/natl_v4_jan2026_exp/val/buoys \
+  v3imp:runs/natl_v3_jan2026_bnd/ww3.202601.nc:grids/natl_v3 v3exp:runs/natl_v3_jan2026_exp/ww3.202601.nc:grids/natl_v3 \
+  v4imp:runs/natl_v4_jan2026_bnd/ww3.202601.nc:grids/natl_v4 v4exp:runs/natl_v4_jan2026_exp/ww3.202601.nc:grids/natl_v4
+python scripts/explicit_cost.py grids/natl_v4 results/natl_v4 "grid v4" runs/natl_jan2026_cur/current.nc   # 5 min, 40 GB
+python scripts/plot_explicit_cost.py map grids/natl_v4 results/natl_v4 natl_v4_explicit_cost_map.png \
+  -97 -80 70 79  4.4 7.6 59 63  -7.2 -5.2 56.4 57.8  10 22 76 80.5
+python scripts/plot_explicit_cost.py curves natl_explicit_cost_curves.png results/natl_v3 results/natl_v4
+python scripts/plot_run_diff.py runs/natl_v4_jan2026_bnd/ww3.202601.nc "v4 implicit" \
+  runs/natl_v4_jan2026_exp/ww3.202601.nc "v4 explicit" grids/natl_v4/raw/tri.u32 natl_v4_jan2026_exp_diff.png 3
+```
+
 ### Altimeter validation
 
 ```bash
