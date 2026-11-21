@@ -56,6 +56,10 @@ Capping the explicit sub-steps during the grid construction (grid v5,
 1.23 times the implicit run on grid v4, with unchanged altimeter scores
 but a buoy $H_s$ RMSE \SI{2}{cm} higher, lost at a few buoys sheltered by
 islands and headlands whose \SI{3}{km} cells were removed.
+Adding the FES2014 tide to the Copernicus currents and sea level leaves the
+altimeter scores unchanged and lowers the buoy $T_{m02}$ RMSE from 1.32 to
+\SI{1.26}{s}, mostly at the shallow buoys of the English Channel, where the
+model now follows the tidal modulation of $H_s$ and $T_{m02}$.
 \end{abstract}
 
 \section{Motivation}
@@ -1321,6 +1325,128 @@ with Fig.~\ref{fig:val_maps}.}
 \label{fig:bnd_maps}
 \end{figure}
 
+\paragraph{FES2014 tide.}\label{sec:tide} The hourly mean Copernicus
+Marine fields used so far contain no tide, although the tidal currents reach \SIrange{1}{2}{m/s} in
+the English Channel, the Irish Sea and the Bay of Fundy and the tidal range
+exceeds \SI{5}{m} on many coasts covered by \SI{3}{km} cells.
+\texttt{scripts/fes\_tides.py} adds the FES2014 tide to the currents and
+the sea level of the reference run, on their 1/12\textdegree{} grid
+($1009\times1789$ points, 744 hours). It takes the 32 constituents of the
+Datarmor copy of FES2014 except Sa and Ssa (seasonal, already in the ocean
+model): FES2014a currents and FES2014b extrapolated elevations at
+1/16\textdegree. The complex constants $A e^{-ig}$ are interpolated
+bilinearly to the Copernicus grid; the current constants, which have gaps
+near the coast, are first extended by eight passes of the mean of the valid
+neighbours (about \SI{7}{km} per pass). The tide at time $t$ is
+$\mathrm{Re}\sum_k f_k A_k e^{i(G_k+u_k-g_k)}$ with the equilibrium
+arguments $G$ and the nodal corrections $f$, $u$ of pyTMD~3.1 (FES
+corrections), as pyTMD does for the FES models. The M2 current amplitude
+reaches \SI{2.5}{m/s} (99th percentile \SI{0.5}{m/s} over the sea points)
+and the M2 elevation amplitude \SI{5.1}{m} (Bay of Fundy); the full tide
+reaches \SI{4.1}{m/s} and \SI{7.9}{m}. Building the two files takes
+\SI{1075}{s} and \texttt{ww3\_prnc} \SI{132}{s} for the currents and
+\SI{50}{s} for the level (\texttt{scripts/natl\_tide\_setup.pbs}, PBS job
+7958070). Run 7958071 is the reference run (grid v4, open-boundary
+spectra, PBS job 7935604) with these forcing files; \texttt{ww3\_shel} took
+\SI{68321}{s} against \SI{70119}{s} without tide.
+
+Against the altimeters (Table~\ref{tab:tide}) the scores change by less
+than \SI{3}{mm}: the tide changes $H_s$ near the coasts, where the
+\SI{50}{km} blocks are few, and the RMSE falls most on the finer cells
+($\nside=1024$: 0.333 to \SI{0.331}{m}) and in the North Sea (0.381 to
+\SI{0.379}{m}). The hourly $H_s$ difference (Fig.~\ref{fig:tide_diff}) has
+an RMS of \SI{4}{mm} at the median node and \SI{8.9}{cm} at the 99th
+percentile, and the monthly mean $H_s$ changes by less than \SI{1.2}{cm}
+at 99\,\% of the nodes. The RMS exceeds \SI{10}{cm} at 5\,667 nodes, half
+of them in the English Channel, with the maximum, \SI{0.84}{m}, in the
+Normano-Breton gulf (\ang{2.17}W \ang{48.95}N, where the mean $H_s$ also
+changes by \SI{0.31}{m}); the others are around Brittany, in the Irish Sea
+and the Bristol Channel, west of Scotland, in Hudson Strait and on the
+Amazon shelf, where the tidal currents are strong. It exceeds \SI{5}{cm}
+in the Gulf of Maine, the southern North Sea and the White Sea. At the 268
+moored buoys (PBS job 7963439) the $H_s$ RMSE falls from 0.373 to
+\SI{0.372}{m}: it changes by less than \SI{5}{mm} at 193 buoys, falls by
+more at 62 and rises by more at 13. The largest gains are at the shallow
+buoys of the English coast of the Channel (0.313 to \SI{0.260}{m} at
+6201012, \ang{0.84}W \ang{50.72}N, node depth \SI{6.6}{m}; 0.352 to
+\SI{0.311}{m} at 6200290), where the model now follows the semi-diurnal
+modulation of $H_s$ seen by the buoys (Fig.~\ref{fig:tide_series}). The
+mean period gains more: the $T_{m02}$ RMSE falls from 1.316 to
+\SI{1.263}{s} at 180 buoys (by more than \SI{0.02}{s} at 47, rises by more
+at 3), and from 1.62 to \SI{1.49}{s} in the Channel and Biscay, where 25
+of 32 buoys improve by more than \SI{0.02}{s} and none degrades by as
+much. Part of the total comes from nine buoys whose $T_{m02}$ RMSE exceeds
+\SI{3}{s} without tide. Five are in harbours and estuaries (Le Havre, the
+Elbe, the two posts of the Maeslantkering, the Wadden Sea), where the
+model $T_{m02}$ is 1.0 to \SI{3.9}{s} too long because the model has the
+offshore swell that the buoy does not see
+(Fig.~\ref{fig:tide_series_tm02}); there the tide lowers the RMSE by 0.08
+to \SI{0.54}{s}, and at Le Havre (6200255, node depth \SI{5.3}{m}, spring
+tidal range about \SI{7}{m}) the model $T_{m02}$ falls to \SI{1.5}{s} at
+every low water. Four are Irish Lights buoys whose reported period, 5 to
+\SI{12}{s} on average, is 1.9 to \SI{3.8}{s} longer than the model's; the
+tide changes them by at most \SI{0.11}{s}. Without these nine buoys the $T_{m02}$ RMSE
+still falls from 1.055 to \SI{1.021}{s} (171 buoys), and from 1.42 to
+\SI{1.32}{s} in the Channel and Biscay (31 buoys).
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+subset & $N$ & bias (m) & RMSE (m) & $r$ \\
+\midrule
+altimeters, all   & 328\,902 & $+0.041$ / $+0.041$ & 0.348 / 0.348 & 0.9793 / 0.9794 \\
+$\nside=1024$     &  30\,714 & $+0.002$ / $+0.002$ & 0.333 / 0.331 & 0.9735 / 0.9738 \\
+$\nside=2048$     &  20\,601 & $-0.005$ / $-0.005$ & 0.283 / 0.282 & 0.9706 / 0.9709 \\
+North Sea         &   5\,629 & $-0.139$ / $-0.138$ & 0.381 / 0.379 & 0.9799 / 0.9802 \\
+buoys $H_s$, all (268)          & 167\,298 & $-0.005$ / $-0.003$ & 0.373 / 0.372 & 0.9526 / 0.9531 \\
+\quad Channel and Biscay (36)   &  23\,337 & $+0.175$ / $+0.184$ & 0.553 / 0.550 & 0.9414 / 0.9428 \\
+\quad North Sea (96)            &  60\,924 & $-0.054$ / $-0.052$ & 0.289 / 0.286 & 0.9441 / 0.9452 \\
+\quad Irish and Celtic seas (12) &  7\,634 & $+0.089$ / $+0.095$ & 0.616 / 0.612 & 0.9018 / 0.9034 \\
+buoys $T_{m02}$ (s), all (180)  & 113\,744 & $-0.10$ / $-0.12$ & 1.316 / 1.263 & 0.783 / 0.798 \\
+\quad depth $<\SI{50}{m}$ (119) &  74\,473 & $0.00$ / $-0.04$ & 1.484 / 1.414 & 0.690 / 0.711 \\
+\quad Channel and Biscay (32)   &  20\,896 & $+0.67$ / $+0.61$ & 1.622 / 1.489 & 0.736 / 0.770 \\
+\quad North Sea (39)            &  24\,752 & $+0.05$ / $+0.01$ & 1.469 / 1.387 & 0.384 / 0.413 \\
+\bottomrule
+\end{tabular}
+\caption{Reference run 7935604 (grid v4, open-boundary spectra, Copernicus
+currents and sea level without tide) / run 7958071 (same with the FES2014
+tide added), given as without / with, against L3 altimetry (4--31
+January 2026, \SI{50}{km} blocks)
+and hourly buoy $H_s$ and $T_{m02}$ (number of buoys in brackets).}
+\label{tab:tide}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v4_jan2026_tide_diff.png}
+\caption{Run 7958071 with the FES2014 tide: mean $H_s$ in January 2026,
+change of the mean $H_s$ and RMS of the hourly $H_s$ difference from the
+run without tide (4--31 January, PBS job 7962685).}
+\label{fig:tide_diff}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v4_jan2026_tide_buoys_series.png}
+\caption{Hourly $H_s$ at the four buoys whose RMSE changes most with the
+tide, all on the English coast of the Channel (6201007, bottom, is the one
+that degrades): buoy (dots), run without tide (blue) and with the FES2014
+tide (orange).}
+\label{fig:tide_series}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v4_jan2026_tide_buoys_series_tm02.png}
+\caption{Hourly $T_{m02}$ at the four buoys whose $T_{m02}$ RMSE changes
+most with the tide. At Le Havre (6200255, top), on the Elbe (6201083) and
+at the Maeslantkering barrier the model has the offshore swell that the
+buoy does not see; at Le Havre the model $T_{m02}$ falls to \SI{1.5}{s} at
+every low water.}
+\label{fig:tide_series_tm02}
+\end{figure}
+
 \appendix
 \section{Reproducing}
 The complete procedure (sources and data, grid, WW3 build, forcing, runs,
@@ -1370,6 +1496,12 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{qsub scripts/natl\_bnd\_setup.pbs}, then the run
   \texttt{natl\_v3\_jan2026\_bnd}, \texttt{natl\_validate.pbs} and
   \texttt{natl\_buoys.pbs} (\texttt{docs/reproducing.md}).
+\item Table~\ref{tab:tide}, Figures~\ref{fig:tide_diff}--\ref{fig:tide_series_tm02}
+  (FES2014 tide): \texttt{pip install --target pylib --no-deps pyTMD timescale},
+  \texttt{qsub scripts/natl\_tide\_setup.pbs}, then
+  \texttt{qsub -v RUN=natl\_v4\_jan2026\_tide scripts/natl\_v2\_run.pbs},
+  \texttt{validate\_altimetry.py}, \texttt{validate\_buoys.py} and
+  \texttt{plot\_run\_diff.py} (\texttt{docs/reproducing.md}).
 \end{itemize}
 
 \end{document}

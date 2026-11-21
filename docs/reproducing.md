@@ -178,6 +178,34 @@ J2=$(qsub -W depend=afterok:$J1 -v SRC=natl_v4_jan2026_cur,RUN=natl_v4_jan2026_b
 qsub -W depend=afterok:$J2 -v RUN=natl_v4_jan2026_bnd -o logs/natl_v4_bnd_run.log scripts/natl_v2_run.pbs
 ```
 
+### FES2014 tide
+
+The hourly Copernicus Marine fields have no tide. `scripts/fes_tides.py`
+adds the FES2014 tide (Datarmor copy in
+`/home/datawork-WW3/FORCING/FES2014/SRC_GLOBAL_RECT`) to `current.nc` and
+`level.nc` of `prep_cmems.py`; it needs pyTMD 3.1, installed once without
+its dependencies:
+
+```bash
+$R/venv/bin/pip install --target $R/pylib --no-deps pyTMD timescale
+J=$(qsub -v R=$R scripts/natl_tide_setup.pbs)   # 21 min: fes_tides.py, ww3_prnc current and level
+qsub -W depend=afterok:$J -v R=$R,RUN=natl_v4_jan2026_tide -o $R/logs/natl_v4_tide_run.log scripts/natl_v2_run.pbs
+```
+
+`natl_tide_setup.pbs` links the grid, wind, ice and `nest.ww3` of
+`runs/natl_v4_jan2026_bnd` into `runs/natl_v4_jan2026_tide` (PBS jobs
+7958070 and 7958071, 19 h). Validation (PBS jobs 7962685 and 7963439):
+
+```bash
+V=runs/natl_v4_jan2026_tide/val
+python scripts/validate_altimetry.py runs/natl_v4_jan2026_tide/ww3.202601.nc grids/natl_v4/plot/nodes.npz $V/natl_v4_jan2026_tide
+python scripts/validate_buoys.py $V/buoys v4bnd:runs/natl_v4_jan2026_bnd/ww3.202601.nc:grids/natl_v4   v4tide:runs/natl_v4_jan2026_tide/ww3.202601.nc:grids/natl_v4
+python scripts/plot_run_diff.py runs/natl_v4_jan2026_bnd/ww3.202601.nc "v4 without tide"   runs/natl_v4_jan2026_tide/ww3.202601.nc "v4 with FES2014 tide" grids/natl_v4/raw/tri.u32 $V/natl_v4_tide_minus_bnd_diff.png 3
+```
+
+Expected: altimeter RMSE 0.348 m and bias +0.041 m as without tide; buoy
+$H_s$ RMSE 0.373 → 0.372 m and $T_{m02}$ RMSE 1.316 → 1.263 s.
+
 ### Explicit scheme
 
 The same run with the explicit N scheme (PBS jobs 7951887 and 7951889,

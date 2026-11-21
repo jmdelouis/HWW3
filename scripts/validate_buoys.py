@@ -22,6 +22,10 @@ in every run, so all runs are compared on the same buoys and hours. The
 model is interpolated linearly in time to the hourly bins. Statistics are
 given for all pairs, per buoy, and per class of the buoy (the HEALPix depth
 of its node in the last run, the model depth, the region).
+
+Outputs: OUT_PREFIX_stats.json, OUT_PREFIX_scatter.png and, with two runs or
+more, OUT_PREFIX_series.png and OUT_PREFIX_series_tm02.png (Hs and Tm02 at
+the four buoys whose RMSE changes most between the last two runs).
 """
 import argparse
 import datetime
@@ -251,6 +255,11 @@ def main():
             ok = row["ok"]
             e[lab] = {"dist_km": round(m["dist_km"], 2), "level": m["level"],
                       "depth": round(m["depth"], 1), **stats(row["obs_hs"][ok], m["hs"][ok])}
+            if row["obs_tm02"] is not None:
+                okt = ok & np.isfinite(row["obs_tm02"]) & np.isfinite(m["tm02"])
+                for other in labels:
+                    okt &= np.isfinite(row[other]["tm02"])
+                e[lab]["tm02"] = stats(row["obs_tm02"][okt], m["tm02"][okt])
         summary["per_buoy"].append(e)
     with open(a.out + "_stats.json", "w") as f:
         json.dump(summary, f, indent=1)
@@ -287,25 +296,32 @@ def main():
     fig.savefig(a.out + "_scatter.png", dpi=150)
     plt.close(fig)
 
-    # time series at the buoys where the runs differ most
+    # time series at the buoys where the runs differ most, for Hs and for Tm02
     if len(labels) > 1:
-        order = np.argsort([abs(e[last]["rmse"] - e[labels[-2]]["rmse"]) for e in summary["per_buoy"]])[::-1][:4]
-        fig, axs = plt.subplots(len(order), 1, figsize=(11, 2.3 * len(order)), sharex=True)
         days = hours / 24.0 - (netCDF4.date2num(datetime.datetime(2026, 1, 1), "hours since 2000-01-01") / 24.0) + 1
-        for axk, i in zip(np.atleast_1d(axs), order):
-            row = rows[i]
-            axk.plot(days, row["obs_hs"], "k.", ms=2, label="buoy")
-            for lab in labels:
-                ok = row["ok"]
-                axk.plot(days, np.where(ok, row[lab]["hs"], np.nan), lw=1,
-                         label=f"{lab} (nside {2 ** row[lab]['level']}, {row[lab]['dist_km']:.1f} km)")
-            axk.set_ylabel("$H_s$ (m)")
-            axk.set_title(f"{row['name']} ({row['lon']:.2f}, {row['lat']:.2f}), {row['region']}", fontsize=9)
-            axk.legend(fontsize=7, loc="upper right")
-        np.atleast_1d(axs)[-1].set_xlabel("day of January 2026")
-        fig.tight_layout()
-        fig.savefig(a.out + "_series.png", dpi=150)
-        plt.close(fig)
+        for var, unit, suffix in (("hs", "$H_s$ (m)", ""), ("tm02", "$T_{m02}$ (s)", "_tm02")):
+            def change(e):
+                x, y = (e[last], e[labels[-2]]) if var == "hs" else (e[last].get("tm02", {}), e[labels[-2]].get("tm02", {}))
+                return abs(x["rmse"] - y["rmse"]) if "rmse" in x and "rmse" in y else -1.0
+            dch = np.array([change(e) for e in summary["per_buoy"]])
+            order = [i for i in np.argsort(dch)[::-1][:4] if dch[i] >= 0]
+            if not order:
+                continue
+            fig, axs = plt.subplots(len(order), 1, figsize=(11, 2.3 * len(order)), sharex=True)
+            for axk, i in zip(np.atleast_1d(axs), order):
+                row = rows[i]
+                axk.plot(days, row["obs_" + var], "k.", ms=2, label="buoy")
+                for lab in labels:
+                    ok = row["ok"]
+                    axk.plot(days, np.where(ok, row[lab][var], np.nan), lw=1,
+                             label=f"{lab} (nside {2 ** row[lab]['level']}, {row[lab]['dist_km']:.1f} km)")
+                axk.set_ylabel(unit)
+                axk.set_title(f"{row['name']} ({row['lon']:.2f}, {row['lat']:.2f}), {row['region']}", fontsize=9)
+                axk.legend(fontsize=7, loc="upper right")
+            np.atleast_1d(axs)[-1].set_xlabel("day of January 2026")
+            fig.tight_layout()
+            fig.savefig(a.out + "_series" + suffix + ".png", dpi=150)
+            plt.close(fig)
     print(json.dumps({k: v for k, v in summary["hs"].items()}, indent=1))
 
 

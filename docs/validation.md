@@ -498,6 +498,80 @@ Run with open-boundary spectra: mean and maximum $H_s$ in January 2026, and
 WW3 − altimeter along tracks.
 ```
 
+## FES2014 tide
+
+The hourly Copernicus Marine fields (`cmems_mod_glo_phy_anfc_0.083deg_PT1H-m`)
+have no tide. `scripts/fes_tides.py` adds the FES2014 tide to the currents
+and sea level of the reference run on their 1/12° grid (1009 × 1789 points,
+744 hours): 32 constituents of the Datarmor copy of FES2014 (all but Sa and
+Ssa), FES2014a currents and FES2014b extrapolated elevations at 1/16°, the
+complex constants interpolated bilinearly after eight gap-filling passes of
+the current constants near the coast, and the equilibrium arguments and
+nodal corrections of pyTMD 3.1 (FES corrections). The M2 current amplitude
+reaches 2.5 m/s (p99 0.5 m/s) and the M2 elevation amplitude 5.1 m; the full
+tide reaches 4.1 m/s and 7.9 m. `scripts/natl_tide_setup.pbs` (PBS job
+7958070) takes 1,075 s for the tide and 132 s + 50 s for `ww3_prnc`.
+
+Run `natl_v4_jan2026_tide` (PBS job 7958071, 68,321 s against 70,119 s
+without tide) is the reference run (grid v4, open-boundary spectra) with
+the tide. Without / with tide, 4–31 January (validation jobs 7962685 and
+7963439):
+
+| subset | N | bias (m) | RMSE (m) | r |
+|---|---|---|---|---|
+| altimeters, all | 328,902 | +0.041 / +0.041 | 0.348 / 0.348 | 0.9793 / 0.9794 |
+| nside 1024 | 30,714 | +0.002 / +0.002 | 0.333 / 0.331 | 0.9735 / 0.9738 |
+| nside 2048 | 20,601 | −0.005 / −0.005 | 0.283 / 0.282 | 0.9706 / 0.9709 |
+| North Sea | 5,629 | −0.139 / −0.138 | 0.381 / 0.379 | 0.9799 / 0.9802 |
+| buoys $H_s$, all (268) | 167,298 | −0.005 / −0.003 | 0.373 / 0.372 | 0.9526 / 0.9531 |
+| Channel and Biscay (36) | 23,337 | +0.175 / +0.184 | 0.553 / 0.550 | 0.9414 / 0.9428 |
+| North Sea (96) | 60,924 | −0.054 / −0.052 | 0.289 / 0.286 | 0.9441 / 0.9452 |
+| buoys $T_{m02}$ (s), all (180) | 113,744 | −0.10 / −0.12 | 1.316 / 1.263 | 0.783 / 0.798 |
+| depth < 50 m (119) | 74,473 | 0.00 / −0.04 | 1.484 / 1.414 | 0.690 / 0.711 |
+| Channel and Biscay (32) | 20,896 | +0.67 / +0.61 | 1.622 / 1.489 | 0.736 / 0.770 |
+| North Sea (39) | 24,752 | +0.05 / +0.01 | 1.469 / 1.387 | 0.384 / 0.413 |
+
+The altimeter scores change by less than 3 mm. The hourly $H_s$ difference
+has an RMS of 4 mm at the median node and 8.9 cm at p99; it exceeds 10 cm at
+5,667 nodes, half of them in the English Channel (maximum 0.84 m in the
+Normano-Breton gulf, 2.17°W 48.95°N), the others around Brittany, in the
+Irish Sea, west of Scotland, in Hudson Strait and on the Amazon shelf. At
+the buoys, the $H_s$ RMSE changes by less than 5 mm at 193 of 268 buoys,
+falls by more at 62 and rises by more at 13; the largest gains are on the
+English coast of the Channel (6201012: 0.313 → 0.260 m), where the model
+now follows the semi-diurnal modulation of $H_s$. The $T_{m02}$ RMSE falls
+at 47 of 180 buoys by more than 0.02 s and rises by as much at 3; in the
+Channel and Biscay 25 of 32 buoys improve and none degrades. Nine buoys
+have a $T_{m02}$ RMSE above 3 s without tide: five in harbours and
+estuaries (Le Havre, the Elbe, the Maeslantkering, the Wadden Sea), where
+the model has the offshore swell that the buoy does not see and the tide
+lowers the RMSE by 0.08 to 0.54 s, and four Irish Lights buoys whose
+reported period is 1.9 to 3.8 s longer than the model's. Without these nine
+buoys the $T_{m02}$ RMSE falls from 1.055 to 1.021 s (171 buoys). Statistics:
+`results/natl_v4_jan2026_tide_val_stats.json` and
+`results/natl_v4_jan2026_tide_buoys_stats.json` (per-buoy $T_{m02}$
+included).
+
+```{figure} _static/fig/natl_v4_jan2026_tide_diff.png
+:width: 100%
+
+Run with the FES2014 tide: mean $H_s$, change of the mean $H_s$ and RMS of
+the hourly $H_s$ difference from the run without tide.
+```
+
+```{figure} _static/fig/natl_v4_jan2026_tide_buoys_series.png
+:width: 100%
+
+Hourly $H_s$ at the four buoys whose RMSE changes most with the tide.
+```
+
+```{figure} _static/fig/natl_v4_jan2026_tide_buoys_series_tm02.png
+:width: 100%
+
+Hourly $T_{m02}$ at the four buoys whose $T_{m02}$ RMSE changes most with the
+tide.
+```
+
 ```{figure} _static/fig/natl_jan2026_scatter.png
 :width: 100%
 

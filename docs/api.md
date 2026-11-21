@@ -34,8 +34,9 @@ warnings as errors).
 | `natl_test.pbs`, `plot_hs.py` | homogeneous-wind test and $H_s$ map |
 | `get_era5.py`, `prep_era5.py` | ERA5 download and `ww3_prnc` input |
 | `prep_cmems.py` | Copernicus Marine currents and sea level from the Datarmor mirror |
+| `fes_tides.py`, `natl_tide_setup.pbs` | FES2014 tide added to the Copernicus Marine currents and sea level, and the run directory with the tide |
 | `natl_jan2026_*.pbs` | forcing preparation and January 2026 runs |
 | `natl_v2_setup.pbs`, `natl_bnd_setup.pbs`, `natl_exp_setup.pbs`, `natl_v2_run.pbs` | run setups (implicit, open-boundary spectra, explicit scheme) and runs on grids v2 and later |
-| `validate_altimetry.py`, `validate_buoys.py`, `natl_validate.pbs`, `natl_buoys.pbs` | $H_s$ against L3 altimetry and moored buoys |
+| `validate_altimetry.py`, `validate_buoys.py`, `natl_validate.pbs`, `natl_buoys.pbs` | $H_s$ against L3 altimetry, $H_s$ and $T_{m02}$ against moored buoys |
 | `explicit_cost.py`, `natl_explicit_cost.pbs`, `plot_explicit_cost.py` | sub-cycling of the explicit scheme per node and component |
 | `plot_run_diff.py`, `plot_level_change.py` | differences between two runs (same or different grids) and between two grids |
