@@ -26,10 +26,11 @@ estimates use:
 |---|---|
 | Scope | The HWW3 explicit configuration only: N scheme (`EXPFSN`), ST4, DIA (`NL1`), `LN1`, `DB1`, `BT4`, `MLIM`, ice as an obstruction (`IC0`), currents, sea level, open-boundary spectra, on the `hww3-grid` mesh, on one A100. |
 | Fortran to port | About 7,400 active lines (19,200 raw lines) out of the 259,054 lines of `model/src`. The physics (ST4, DIA, LN1, DB1, BT4, source integration) is 2,157 active lines; the propagation is 1,432. |
+| Decisions (21 November 2026) | Kernels in CubeCL, with Burn for tensors, tape and checkpointing. Only the CUDA crates are installed (no Rust nightly with Enzyme for now). ST4 is simplified first, then ported in full: the aim is a complete WW3. The first target is M2, with finite-difference gradients, before any adjoint work. |
 | Smallest useful version | The forward model on GPU, validated against the Fortran explicit runs. Gradients with respect to a handful of parameters (`BETAMAX` first) then come from finite differences in double precision, with no AD code. |
-| Cost to that point (milestone M2) | 30–58 person-weeks for one developer who knows WW3, Rust and GPUs (central value about 40). For Jean-Marc with coding assistants writing most of the code: 11–31 weeks of his time (central value about 18). |
-| Cost to reverse mode for the fields (milestone M4) | 52–97 person-weeks for one developer (central value about 70). For Jean-Marc with assistants: 17–48 weeks (central value about 30). |
-| AD in Rust on GPU today | No tool differentiates Rust GPU kernels automatically. The kernels are written in CubeCL, with Burn for tensors and the tape. The adjoint of the propagation is written by hand: it is the transposed operator. The adjoints of the source terms are written by hand too, or the source terms are written as Burn tensor operations so that Burn differentiates them. `std::autodiff` (Enzyme) works on the CPU only and serves for reference derivatives. |
+| Cost to that point | **M2a**, with a simplified ST4 that WW3 also runs (`SINTABLE = 0`, `SDSCUM = 0`): 26–52 person-weeks for one developer who knows WW3, Rust and GPUs (central value about 35), or 10–28 weeks of Jean-Marc's time with coding assistants writing most of the code (central value about 16). **M2b**, with the full ST4: 30–59 person-weeks (about 40), or 11–31 weeks of his time (about 18). |
+| Cost to reverse mode for the fields (milestone M4) | 52–98 person-weeks for one developer (central value about 70). For Jean-Marc with assistants: 17–48 weeks (central value about 30). |
+| AD in Rust on GPU today | No tool differentiates Rust GPU kernels automatically. The kernels are written in CubeCL, with Burn for tensors and the tape. The adjoint of the propagation is written by hand: it is the transposed operator. The adjoints of the source terms are written by hand too, or the source terms are written as Burn tensor operations so that Burn differentiates them. `std::autodiff` (Enzyme) works on the CPU only; it is not installed for now, and the reference derivatives come from finite differences in double precision. |
 | Expected speed | 40–550 s per model day on one A100 for grid v4, against 4,318 s for the Fortran explicit scheme on 112 cores: 8 to 100 times faster. The micro-benchmark of milestone M0 narrows this range. |
 | Biggest cost drivers | How faithful the ST4 port must be; hand-written adjoints of the source terms; debugging against the Fortran. |
 
@@ -163,7 +164,7 @@ adjoints of fused kernels.
 | mesh, geometry, boundary flags | 1–2 | 0 | reuses `hww3-grid`; node-to-triangle lists in compressed sparse rows for the GPU |
 | geographic propagation | 2–3 | 2–3 | per-frequency sub-cycling, open-boundary values, coastal no-inflow masks; the adjoint is the transposed sweep (1 pw); derivatives with respect to depth and currents need the sub-step states (1–2 pw) |
 | spectral propagation | 2–4 | 1–3 | 1 pw with first-order upwind (linear, transposed); 3 pw to keep the WW3 limiter |
-| ST4 and its tables | 6–11 | 5–10 | the largest item: $u_*$ iteration, tail-stress tables, swell dissipation, saturation, cumulative term on GPU; tables rebuilt in the differentiated code for `BETAMAX` |
+| ST4 and its tables | 6–11 | 5–10 | the largest item: $u_*$ iteration, tail-stress tables, swell dissipation, saturation, cumulative term on GPU; tables rebuilt in the differentiated code for `BETAMAX`. Done in two steps (section 2.5): 2–5 pw for the simplified ST4 of M2a, then 4–6 pw for the tables and the directional cumulative term |
 | DIA | 1–2 | 1 | fixed gathers and scatters; the adjoint swaps them |
 | LN1 | 0.5 | 0.2 | |
 | DB1 | 0.5–1 | 0.5 | |
@@ -197,7 +198,7 @@ glue, so the derivatives column becomes 10–17 pw. The price:
 |---|---|---|
 | Fortran unit harness: drive `W3SIN4`, `W3SDS4`, `W3SNL1`, `W3SDB1`, `W3SBT4`, `W3SRCE` on spectra read from restart files and dump the tendencies | 1–2 | minutes |
 | propagation-only Fortran runs: sources off (`RUN%FLSOU = F` in `ww3_grid.nml`), from `restart001.ww3` of the grid v5 $K=4$ explicit run (8 January 00 h), 48 h; an idealised swell from `ww3_strt`; comparison tools | 1–2 | under 300 core-hours |
-| full runs against the existing explicit runs, and debugging | 3–8 | GPU only. The references are on scratch: `runs/natl_v5k4_jan2026_exp` (hourly $H_s$, $T_{m02}$, 1–8 January, restart at 8 January) and `runs/natl_v4_jan2026_exp` (PBS job 7951889, 1 January – 7 January 21 h) |
+| full runs against the existing explicit runs, and debugging | 3–8 | GPU, plus one WW3 run. The references are on scratch: `runs/natl_v5k4_jan2026_exp` (hourly $H_s$, $T_{m02}$, 1–8 January, restart at 8 January) and `runs/natl_v4_jan2026_exp` (PBS job 7951889, 1 January – 7 January 21 h). M2a needs one more reference: the grid v5 $K=4$ explicit run repeated with `SINTABLE = 0` and `SDSCUM = 0`, under 570 core-hours |
 | gradient checks (section 6) | 2–4 | Fortran finite differences: 3,000–6,000 core-hours |
 | total | 7–16 | |
 
@@ -207,11 +208,15 @@ and single-precision accumulation.
 
 ### 2.4 Totals
 
-| scenario | to M2: GPU forward model, finite-difference gradients | to M4: reverse mode for the fields |
-|---|---|---|
-| one developer (WW3, Rust, GPU), hand-written adjoints | 30–58 pw (7–13 months); central value about 40 | 52–97 pw (12–22 months); central value about 70 |
-| same, with Burn tensor operations for the source terms | same | 46–86 pw |
-| Jean-Marc directing coding assistants (his own time) | 11–31 pw; central value about 18 | 17–48 pw; central value about 30 |
+| scenario | to M2a: GPU forward model with the simplified ST4, finite-difference gradients | to M2b: full ST4 | to M4: reverse mode for the fields |
+|---|---|---|---|
+| one developer (WW3, Rust, GPU), hand-written adjoints | 26–52 pw (6–12 months); central value about 35 | 30–59 pw (7–14 months); central value about 40 | 52–98 pw (12–23 months); central value about 70 |
+| same, with Burn tensor operations for the source terms | same | same | 46–87 pw |
+| Jean-Marc directing coding assistants (his own time) | 10–28 pw; central value about 16 | 11–31 pw; central value about 18 | 17–48 pw; central value about 30 |
+
+Going through the simplified ST4 first costs about the same as porting the
+full ST4 at once: up to 1 pw more, for the extra reference run and the
+rework of the source kernels.
 
 The assistant scenario assumes the following share of Jean-Marc's time
 compared with the solo estimate:
@@ -221,17 +226,33 @@ compared with the solo estimate:
   of the code and he reviews it;
 - 60–80 % on validation, debugging, GPU tuning and physics decisions.
 
-Calendar time depends on his availability. At half time, M2 takes roughly
-5–14 months and M4 8–22 months.
+Calendar time depends on his availability. At half time, M2a takes roughly
+5–13 months, M2b 5–14 months and M4 8–22 months.
 
 ### 2.5 What moves the range
 
-- **Fidelity to ST4.** A port of every active branch, with the tail-stress
-  tables, the swell-dissipation switch and the cumulative term, is the upper
-  end. A simplified ST4 (analytic tail stress, no cumulative term) saves
-  4–6 pw. It loses agreement with WW3 at the centimetre level, so validation
-  could then only be against observations. Not recommended: the comparison
-  with the Fortran runs is the cheapest debugger available.
+- **Fidelity to ST4.** The decision is to port a simplified ST4 first
+  (M2a), then the full ST4 (M2b). WW3 itself runs the simplified version, so
+  the comparison with the Fortran at the centimetre level is kept at both
+  stages. The simplified version takes two namelist settings:
+  - `SINTABLE = 0` (`&SIN4`). The HWW3 runs use the tables (`SINTABLE = 1`).
+    With 0, `INSIN4` builds none of the tables `TAUT`, `TAUHFT` and
+    `TAUHFT2`. `CALC_USTAR` then finds $u_*$ by at most 10 Newton iterations
+    on the Charnock relation, and `W3SIN4` integrates the tail stress over
+    50 wavenumbers in line. Both computations are short, per node and
+    directly differentiable with respect to `BETAMAX`, `ZALP` and `ALPHA0`,
+    with no table to rebuild.
+  - `SDSCUM = 0` (`&SDS4`). This removes the cumulative breaking term of
+    `W3SDS4`. The HWW3 runs use −0.40: a negative value selects the
+    directional version, a product with the `CUMULW` matrix over the lower
+    frequencies, which dominates the flops of a source evaluation. A
+    positive value selects a cheap isotropic version, an intermediate step
+    if needed.
+
+  The simplified ST4 costs 2–5 pw instead of 6–11. The tables and the
+  directional cumulative term then add 4–6 pw at M2b. The scores of the
+  simplified configuration are not those of the calibrated one (`BETAMAX`
+  1.75 was set with the cumulative term), so scientific use starts at M2b.
 - **AD route.**
   - Stopping at forward mode (finite differences or tangent kernels for at
     most about 20 parameters) removes M4, 18–32 pw. It gives no gradients
@@ -254,12 +275,12 @@ Calendar time depends on his availability. At half time, M2 takes roughly
 
 | tool | state | use here |
 |---|---|---|
-| Burn 0.22 with the CubeCL backends | Tape-based reverse mode over tensor operations (`Autodiff<B>`). Balanced gradient checkpointing is available. Custom CubeCL kernels are opaque to the tape and need a hand-written backward. CUDA, ROCm, Vulkan and WebGPU. | tensors and tape; custom kernels for the propagation (hand backward); source terms either as tensor operations (automatic backward) or as fused kernels (hand backward) |
-| CubeCL | Rust GPU kernels (`#[cube]`), compiled just in time to CUDA, HIP or WGSL, generic over the float type (f32 or f64) | language of all kernels |
-| `std::autodiff` (Enzyme) | Nightly Rust: `rustup component add enzyme`, `lto = "fat"`, `-Zautodiff=Enable`; experimental, CPU. `std::offload` (GPU) is planned but was not confirmed in nightly. | reference derivatives of the per-node source functions in plain Rust on the CPU, to test the hand-written GPU adjoints |
+| Burn 0.22 with the CubeCL backends | Tape-based reverse mode over tensor operations (`Autodiff<B>`). Balanced gradient checkpointing is available. Custom CubeCL kernels are opaque to the tape and need a hand-written backward. CUDA, ROCm, Vulkan and WebGPU. | **chosen**: tensors and tape; custom kernels for the propagation (hand backward); source terms either as tensor operations (automatic backward) or as fused kernels (hand backward) |
+| CubeCL | Rust GPU kernels (`#[cube]`), compiled just in time to CUDA, HIP or WGSL, generic over the float type (f32 or f64) | **chosen**: language of all kernels |
+| `std::autodiff` (Enzyme) | Nightly Rust: `rustup component add enzyme`, `lto = "fat"`, `-Zautodiff=Enable`; experimental, CPU. `std::offload` (GPU) is planned but was not confirmed in nightly. | not installed for now. It could later give reference derivatives of the per-node source functions on the CPU; until then the references are finite differences in double precision |
 | `rustc_codegen_nvvm` (Rust-CUDA) | Rebooted in 2025, pinned nightly, last crates.io release 2022 | not recommended |
 | NVIDIA CUDA Rust: `cuda-oxide` (SIMT) and `cutile-rs` (tiles) | Announced September 2026, experimental. `cuda-oxide` 0.3 (October 2026) needs a pinned nightly and CUDA 12 or later; `cutile-rs` needs CUDA 13.3 (Datarmor modules stop at CUDA 12.1). Both need compute capability 8.0 (A100). | a later option for kernels in ordinary generic Rust, where dual numbers would work |
-| `cudarc` with CUDA C kernels (NVRTC) | Stable and widely used | fallback if CubeCL is too limiting |
+| `cudarc` with CUDA C kernels (NVRTC) | Stable and widely used; CubeCL's CUDA backend is built on it | fallback if M0 shows CubeCL too limiting |
 
 **What must be written by hand, in every option:**
 
@@ -334,6 +355,10 @@ Depending on how the WAM6-GPU time splits between propagation and sources
   evaluations per step.
 - **Burn tensor operations for the sources** put the speed-up nearer to the
   upper bound of 550 s per model day.
+- **The simplified ST4 of M2a** has no directional cumulative term. A source
+  evaluation is then limited by memory traffic (about 20 GB, 0.02 s) rather
+  than by flops. The bandwidth estimate falls to 17–26 s per model day on
+  grid v4, set by the propagation.
 - **A 7-day forward run on grid v5 $K=4$** should take between 2 and
   30 minutes.
 
@@ -411,14 +436,17 @@ gradient-check case; calibrating `BETAMAX` needs the whole domain.
    run for 48 h with the same currents, sea level and boundary spectra.
    Targets: $H_s$ RMS difference below 1 cm at the median node and 5 cm at
    the 99th percentile, total energy within 0.5 %.
-3. **With sources.** The GPU model is compared with the explicit runs
-   already on scratch (grid v5 $K=4$, 1–8 January; grid v4, 1 January –
-   7 January 21 h).
-   - Target: a node-by-node difference below the WW3 explicit-minus-implicit
+3. **With sources.** At M2a, the GPU model with the simplified ST4 is
+   compared with a WW3 explicit run made with the same settings
+   (`SINTABLE = 0`, `SDSCUM = 0`, grid v5 $K=4$, 1–8 January). At M2b, the
+   full model is compared with the explicit runs already on scratch (grid v5
+   $K=4$, 1–8 January; grid v4, 1 January – 7 January 21 h). The targets are
+   the same at both stages:
+   - a node-by-node difference below the WW3 explicit-minus-implicit
      difference on grid v4 (2.1 cm at the median node, 20 cm at the 99th
      percentile).
-   - The altimeter and buoy scores of `validate_altimetry.py` and
-     `validate_buoys.py` must stay within 5 mm.
+   - altimeter and buoy scores of `validate_altimetry.py` and
+     `validate_buoys.py` within 5 mm of those of the WW3 run.
 
 **Gradients.**
 
@@ -505,16 +533,17 @@ coastal-scale corrections can therefore be computed on uniform maps.
 
 | milestone | content | go if | pw (one developer) |
 |---|---|---|---|
-| M0 | Rust, CubeCL and Burn on a Datarmor A100; N-scheme sweep and its transpose on grids v4 and v5 $K=4$ with the sub-cycling of `cfl.rs` | a frequency sweep on grid v4 within twice the bandwidth estimate (about 1.3 ms); dot-product test passes; the toolchain builds on the GPU nodes. Otherwise switch the kernels to `cudarc` and CUDA C | 1–2 |
+| M0 | Rust stable with the CubeCL and Burn crates and their CUDA backend on a Datarmor A100; N-scheme sweep and its transpose on grids v4 and v5 $K=4$ with the sub-cycling of `cfl.rs` | a frequency sweep on grid v4 within twice the bandwidth estimate (about 1.3 ms); dot-product test passes; the toolchain builds on the GPU nodes with the CUDA 12.1 module. Otherwise switch the kernels to `cudarc` and CUDA C | 1–2 |
 | M1 | propagation-only model: geographic and spectral propagation, depth, currents, sea level, boundary spectra, ice mask, restart reader | the propagation-only targets of section 6 | 10–18 |
-| M2 | full forward model: ST4 and its tables, DIA, LN1, DB1, BT4, integration and limiter, outputs, observation operators | the targets with sources of section 6, and at least 10 times the Fortran explicit speed (under 430 s per model day on grid v4). **First useful gradients:** finite differences in double precision for `BETAMAX` and a few parameters, at GPU speed | 19–38 |
+| M2a | forward model with the simplified ST4 (`SINTABLE = 0`, `SDSCUM = 0`), DIA, LN1, DB1, BT4, integration and limiter, outputs, observation operators | the targets with sources of section 6 against the WW3 run with the same settings. **First gradients:** finite differences in double precision for `BETAMAX` and a few parameters, at GPU speed, to build and test the calibration chain | 15–32 |
+| M2b | full ST4: the stress tables `TAUT`, `TAUHFT`, `TAUHFT2` and the directional cumulative term (`SDSCUM = −0.40`) | the targets with sources of section 6 against the existing explicit runs, and at least 10 times the Fortran explicit speed (under 430 s per model day on grid v4). **First scientific gradients** with respect to the parameters of the calibrated configuration | 4–7 |
 | M3 | tangent kernels for parameters (sources and stress tables) | agreement with the double-precision finite differences to $10^{-4}$ where the model is smooth | 4–7 (optional) |
 | M4 | reverse mode for the fields: adjoint kernels, revolve driver, adjoint of the observation operators, PyTorch bridge | the Taylor test and the comparison with WW3 of section 6; one wind gradient over 7 days on grid v5 $K=4$ in under 3 h | 18–32 (hand-written adjoints) or 12–21 (Burn source terms) |
 | M5 | learning: HEALPix wind corrections, then hybrid source terms | an independent month improves | open |
 
 Two decision points follow from the plan:
 
-- **After M2,** decide whether gradients with respect to the parameters
+- **After M2b,** decide whether gradients with respect to the parameters
   (finite differences or M3) are enough for the first scientific results.
 - **Before M4,** choose between hand-written fused adjoints and Burn tensor
   operations for the source terms, based on the M0 and M2 timings.
@@ -647,19 +676,22 @@ Earlier work worth knowing:
 | the Rust port departs from WW3 (splitting order, boundary flags, coastal nodes, source integration) | the propagation-only test before the sources; kernel-by-kernel harness; comparison with the existing explicit runs |
 | GPU races and single-precision accumulation in the N-scheme scatter | node-centred gather formulation (no atomics) or graph colouring; double-precision build for the checks |
 | Rust GPU tools still young (CubeCL, Burn; `cuda-oxide` experimental; GPU Enzyme not available) | M0 tests the toolchain first; fallback to `cudarc` with CUDA C kernels |
-| hand-written adjoints of ST4 are long and error-prone | forward-mode tangents first; CPU `std::autodiff` derivatives of the same per-node functions as references; or Burn tensor operations for the source terms |
+| hand-written adjoints of ST4 are long and error-prone | the simplified ST4 first; forward-mode tangents first, checked against double-precision finite differences; CPU `std::autodiff` derivatives of the same per-node functions if the nightly toolchain is installed later; or Burn tensor operations for the source terms |
 | parameters and forcing compensate each other (`BETAMAX` was raised to make up for ERA5 winds that are too weak in storms) | calibrate the parameters with the forcing fixed, and the reverse, before any joint fit; $T_{m02}$ and wave-age-dependent errors; multi-scale priors |
 | memory for reverse mode on grid v4 | grid v5 $K=4$ for learning, host-memory snapshots, two GPUs (at most two per user) |
 | over-fitting January 2026 | train and test on separate halves, then other months (downloads to be agreed) |
 
-## Decisions needed
+## Decisions (21 November 2026)
 
-1. **Kernel language.** CubeCL with Burn, recommended for its tape,
-   checkpointing and multi-backend kernels, or `cudarc` with CUDA C.
-2. **Installs on the Datarmor scratch.** A Rust nightly toolchain with the
-   Enzyme component (for CPU reference derivatives) and the CUDA crates,
-   which means downloads.
-3. **Fidelity to ST4.** All active branches (recommended) or a simplified
-   version.
-4. **Stopping point.** Whether M2 with finite-difference gradients is the
-   first target, before any adjoint work.
+1. **Kernel language.** CubeCL for the kernels, with Burn for tensors, tape
+   and checkpointing. `cudarc` with CUDA C kernels remains the fallback if
+   M0 fails.
+2. **Installs on the Datarmor scratch.** The CUDA crates only: Burn, CubeCL
+   and their CUDA backend, with the stable Rust toolchain. No Rust nightly
+   with the Enzyme component for now, so the reference derivatives come from
+   finite differences in double precision.
+3. **Fidelity to ST4.** A simplified ST4 first (M2a: `SINTABLE = 0`,
+   `SDSCUM = 0`, which WW3 also runs), then the full ST4 (M2b). The aim is a
+   complete WW3.
+4. **First target.** M2, with finite-difference gradients, before any
+   adjoint work.
