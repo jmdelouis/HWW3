@@ -179,6 +179,9 @@ fn island_bathy_refinement() {
         slope_max_depth_m: 300.0,
         min_depth_m: 5.0,
         smooth_km: 0.0,
+        cfl_substeps: 0.0,
+        cfl_efficiency: 0.8,
+        cfl_passes: 0,
     });
     let (grid, s) = pipeline::build(&cfg).unwrap();
     println!("{}", serde_json::to_string_pretty(&s).unwrap());
@@ -204,6 +207,34 @@ fn island_bathy_refinement() {
     let finite = grid.target_km.iter().filter(|t| t.is_finite()).count();
     assert!(finite as f64 > 0.99 * grid.uniq.len() as f64, "{finite}");
     pipeline::write(&cfg, &grid, &s).unwrap();
+
+    // explicit-scheme limit: with a 3000 s step and at most 4 sub-steps, the
+    // finest cells go away where the long swell is fast, the mesh stays valid
+    // and (almost) no node needs more than 4 sub-steps
+    cfg.ww3.dtxy = 3000.0;
+    let (g0, _) = pipeline::build(&cfg).unwrap();
+    let k = 4.0;
+    let above0 = g0.dt_explicit.iter().filter(|&&dt| dt < 3000.0 / k).count();
+    if let Some(p) = cfg.refine_bathy.as_mut() {
+        p.cfl_substeps = k;
+        p.cfl_passes = 3;
+    }
+    let (g1, s1) = pipeline::build(&cfg).unwrap();
+    println!(
+        "explicit limit: {} -> {} nodes, {} -> {} above {k} sub-steps, {} capped blocks, {} merged cells, {} passes",
+        g0.uniq.len(),
+        g1.uniq.len(),
+        above0,
+        s1.n_cfl_above,
+        s1.n_cfl_capped_blocks,
+        s1.n_cfl_merged,
+        s1.cfl_passes
+    );
+    assert!(s1.mesh.is_valid());
+    assert!(above0 > 100, "{above0}");
+    assert!(s1.n_cfl_capped_blocks > 0);
+    assert!(g1.uniq.len() < g0.uniq.len());
+    assert!(s1.n_cfl_above * 20 < above0, "{} {above0}", s1.n_cfl_above);
 }
 
 /// Ear clipping keeps all triangles counter-clockwise.

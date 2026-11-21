@@ -31,6 +31,16 @@
 //! `[nside_min, nside_max]`, and every cell containing the block centre at a
 //! coarser depth is split. Because of the 2:1 balance of the tree, neighbouring
 //! cells still differ by up to a factor of 2 in size.
+//!
+//! **Explicit-scheme limit** (`cfl_substeps` = K > 0): the explicit WW3
+//! schemes sub-cycle every spectral component as many times as its worst
+//! node requires (see [`crate::cfl`]). A block is therefore not refined to a
+//! depth whose explicit step for the lowest model frequency at the block
+//! depth, `cfl_efficiency · cell size / c_g`, is below `DTXY / K`
+//! ([`cfl_cap_depth`]); this removes the finest levels where the group speed
+//! of the long swell is large (it peaks near `kh = 1.2`, about 180 m for
+//! 0.0373 Hz) and keeps them in shallow water. The pipeline then merges the
+//! cells of the nodes that still exceed K into their parent and rebuilds.
 
 use crate::bathy::Bathy;
 use crate::config::BathyRefine;
@@ -97,6 +107,28 @@ pub fn required_depth(earth: &Earth, target: f64, dmin: u8, dmax: u8) -> u8 {
     let mut d = dmin;
     while d < dmax && cell_size_m(earth, d) > target {
         d += 1;
+    }
+    d
+}
+
+/// Explicit-scheme limit of the refinement.
+#[derive(Clone, Copy, Debug)]
+pub struct CflCap {
+    /// lowest model frequency (Hz), the fastest component
+    pub freq: f64,
+    /// shortest explicit step allowed (s): `TIMESTEPS%DTXY / cfl_substeps`
+    pub dt_min: f64,
+    /// assumed CFL length divided by the cell size
+    pub efficiency: f64,
+}
+
+/// Finest depth in [dmin, dmax] whose explicit step at water depth `h` (m),
+/// `efficiency · cell size / c_g(freq, h)`, is at least `dt_min`.
+pub fn cfl_cap_depth(earth: &Earth, cap: &CflCap, h: f64, dmin: u8, dmax: u8) -> u8 {
+    let cg = crate::cfl::group_speed(cap.freq, h);
+    let mut d = dmax;
+    while d > dmin && cap.efficiency * cell_size_m(earth, d) / cg < cap.dt_min {
+        d -= 1;
     }
     d
 }
@@ -195,11 +227,21 @@ pub struct BathyRefinement {
     pub blocks: Vec<(u64, f32, f32)>,
     /// block size in bathymetry samples
     pub block: usize,
+    /// wet blocks whose required depth was lowered by the explicit-scheme limit
+    pub n_cfl_capped: usize,
 }
 
 /// Average the bathymetry on blocks, apply the size functions and the grade
-/// limit, and list the cells to split.
-pub fn bathy_refinement(b: &Bathy, earth: &Earth, p: &BathyRefine, dmin: u8, dmax: u8) -> BathyRefinement {
+/// limit, and list the cells to split. With `cfl`, the depth required by a
+/// block is capped by [`cfl_cap_depth`] at the block depth.
+pub fn bathy_refinement(
+    b: &Bathy,
+    earth: &Earth,
+    p: &BathyRefine,
+    dmin: u8,
+    dmax: u8,
+    cfl: Option<CflCap>,
+) -> BathyRefinement {
     let m = &b.meta;
     let smooth_km = if p.smooth_km > 0.0 { p.smooth_km } else { 0.5 * cell_size_m(earth, dmax) / 1e3 };
     let deg_km = earth.radius * std::f64::consts::PI / 180.0 / 1e3;
@@ -272,11 +314,11 @@ pub fn bathy_refinement(b: &Bathy, earth: &Earth, p: &BathyRefine, dmin: u8, dma
     grade_limit(&mut t, nx, ny, &dx, dy, p.grade);
 
     let layer = nested::get(dmax);
-    let rows: Vec<(Vec<(u64, u8)>, Vec<(u64, f32, f32)>)> = (0..ny)
+    let rows: Vec<(Vec<(u64, u8)>, Vec<(u64, f32, f32)>, usize)> = (0..ny)
         .into_par_iter()
         .map(|jb| {
             let beta = earth.to_authalic(lat_c(jb).to_radians());
-            let (mut req, mut diag) = (Vec::new(), Vec::new());
+            let (mut req, mut diag, mut capped) = (Vec::new(), Vec::new(), 0usize);
             for ib in 0..nx {
                 let k = jb * nx + ib;
                 if !hb[k].1 {
@@ -287,18 +329,27 @@ pub fn bathy_refinement(b: &Bathy, earth: &Earth, p: &BathyRefine, dmin: u8, dma
                     lon += 360.0;
                 }
                 let hash = layer.hash(lon.to_radians(), beta);
-                let r = required_depth(earth, t[k] as f64, dmin, dmax);
+                let mut r = required_depth(earth, t[k] as f64, dmin, dmax);
+                if let Some(c) = &cfl {
+                    let cap = cfl_cap_depth(earth, c, hb[k].0 as f64, dmin, dmax);
+                    if cap < r {
+                        r = cap;
+                        capped += 1;
+                    }
+                }
                 if r > dmin {
                     req.push((hash, r));
                 }
                 diag.push((hash, slope[k], t[k] / 1e3));
             }
-            (req, diag)
+            (req, diag, capped)
         })
         .collect();
     let mut splits = HashSet::new();
     let mut blocks = Vec::new();
-    for (req, diag) in rows {
+    let mut n_cfl_capped = 0;
+    for (req, diag, capped) in rows {
+        n_cfl_capped += capped;
         for (hash, r) in req {
             // split every cell containing the block from depth r-1 up to dmin;
             // ancestors of an already inserted cell are already there
@@ -310,7 +361,7 @@ pub fn bathy_refinement(b: &Bathy, earth: &Earth, p: &BathyRefine, dmin: u8, dma
         }
         blocks.extend(diag);
     }
-    BathyRefinement { splits, blocks, block }
+    BathyRefinement { splits, blocks, block, n_cfl_capped }
 }
 
 /// Mean slope and smallest required size (km) of the blocks in each leaf;
@@ -350,6 +401,9 @@ mod tests {
             slope_max_depth_m: 300.0,
             min_depth_m: 5.0,
             smooth_km: 0.0,
+            cfl_substeps: 0.0,
+            cfl_efficiency: 0.8,
+            cfl_passes: 0,
         }
     }
 
@@ -411,6 +465,25 @@ mod tests {
         assert_eq!(s.mean(2, 1, 0, 0), 7.0);
         assert_eq!(s.mean(2, 1, 1, 1), 7.0);
         assert_eq!(s.mean(0, 0, 1, 0), 0.5);
+    }
+
+    #[test]
+    fn cfl_cap_keeps_the_explicit_step() {
+        let e = Earth::new(Ellipsoid::Wgs84);
+        let cap = CflCap { freq: 0.0373, dt_min: 120.0, efficiency: 0.8 };
+        for h in [5.0, 20.0, 50.0, 180.0, 1000.0, 4000.0] {
+            let d = cfl_cap_depth(&e, &cap, h, 7, 11);
+            let cg = crate::cfl::group_speed(cap.freq, h);
+            if d > 7 {
+                assert!(0.8 * cell_size_m(&e, d) / cg >= 120.0, "{h} {d}");
+            }
+            if d < 11 {
+                assert!(0.8 * cell_size_m(&e, d + 1) / cg < 120.0, "{h} {d}");
+            }
+        }
+        // shallow water keeps the finest level, the group-speed peak (~180 m) does not
+        assert_eq!(cfl_cap_depth(&e, &cap, 5.0, 7, 11), 11);
+        assert!(cfl_cap_depth(&e, &cap, 180.0, 7, 11) < 11);
     }
 
     #[test]

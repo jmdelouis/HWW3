@@ -51,6 +51,16 @@ pub struct Summary {
     pub n_alternated: usize,
     /// edge flips made to lengthen the explicit time step
     pub n_cfl_flips: usize,
+    /// wet bathymetry blocks whose level was capped by the explicit-scheme
+    /// limit (`refine_bathy.cfl_substeps`)
+    pub n_cfl_capped_blocks: usize,
+    /// rebuilds made by the explicit-scheme limit
+    pub cfl_passes: u32,
+    /// cells merged into their parent by these rebuilds
+    pub n_cfl_merged: usize,
+    /// interior nodes still needing more than `cfl_substeps` sub-steps for the
+    /// lowest frequency (0 without the limit)
+    pub n_cfl_above: usize,
     /// bad boundary triangles removed (including pinch removal after trimming)
     pub n_trimmed: usize,
     /// nodes of the final mesh
@@ -178,7 +188,80 @@ fn find(p: &mut [u32], mut i: u32) -> u32 {
 
 /// Build the grid described by `cfg` (all steps listed in the crate
 /// documentation) and return it with its [`Summary`]. Nothing is written.
+///
+/// With the explicit-scheme limit (`refine_bathy.cfl_substeps` = K > 0),
+/// the cells of the interior nodes whose explicit step for the lowest model
+/// frequency is still below `DTXY / K` are merged into their parent (their
+/// parent is no longer split by the criteria) and the grid is rebuilt, at
+/// most `cfl_passes` times or until no cell is added. When the parent of
+/// such a node was already merged (the 2:1 balance split it again), the
+/// cells of its neighbours at the same or a finer level are merged too.
 pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
+    let (k, passes) = match &cfg.refine_bathy {
+        Some(p) if p.cfl_substeps > 0.0 => (p.cfl_substeps, p.cfl_passes),
+        _ => (0.0, 0),
+    };
+    let dt_min = if k > 0.0 { cfg.ww3.dtxy / k } else { 0.0 };
+    let dmin = cfg.dmin();
+    let mut nosplit: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut pass = 0u32;
+    loop {
+        let (grid, mut summary) = build_once(cfg, if nosplit.is_empty() { None } else { Some(&nosplit) })?;
+        let above: Vec<usize> = (0..grid.uniq.len()).filter(|&i| grid.dt_explicit[i] < dt_min).collect();
+        summary.cfl_passes = pass;
+        summary.n_cfl_merged = nosplit.len();
+        summary.n_cfl_above = above.len();
+        if pass >= passes {
+            return Ok((grid, summary));
+        }
+        let mut added = 0;
+        let mut stuck = vec![false; grid.uniq.len()];
+        let mut n_stuck = 0;
+        for &i in &above {
+            if grid.level[i] > dmin {
+                let (d, h) = nested::from_uniq(grid.uniq[i]);
+                if nosplit.insert(tree::uniq(d - 1, h >> 2)) {
+                    added += 1;
+                } else {
+                    // parent already merged but split again by the 2:1 balance
+                    stuck[i] = true;
+                    n_stuck += 1;
+                }
+            }
+        }
+        if n_stuck > 0 {
+            // merge the neighbours at the same or a finer level, which force the balance
+            for t in &grid.tris {
+                for a in 0..3 {
+                    let i = t[a] as usize;
+                    if !stuck[i] {
+                        continue;
+                    }
+                    for b in 1..3 {
+                        let j = t[(a + b) % 3] as usize;
+                        if grid.level[j] >= grid.level[i] && grid.level[j] > dmin {
+                            let (d, h) = nested::from_uniq(grid.uniq[j]);
+                            if nosplit.insert(tree::uniq(d - 1, h >> 2)) {
+                                added += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "[hww3-grid] explicit-scheme pass {}: {} nodes above {k} sub-steps ({n_stuck} split again by the balance), {added} cells merged",
+            pass + 1,
+            above.len()
+        );
+        if added == 0 {
+            return Ok((grid, summary));
+        }
+        pass += 1;
+    }
+}
+
+fn build_once(cfg: &Config, nosplit: Option<&std::collections::HashSet<u64>>) -> Result<(Grid, Summary)> {
     let mut timings = Vec::new();
     let mut t0 = Instant::now();
     let mut lap = |name: &str, t0: &mut Instant| {
@@ -202,13 +285,26 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
         lap("coast index", &mut t0);
         Some(c)
     };
-    let br = cfg.refine_bathy.as_ref().map(|p| refine::bathy_refinement(&bathy, &earth, p, dmin, dmax));
+    let br = cfg.refine_bathy.as_ref().map(|p| {
+        let cap = (p.cfl_substeps > 0.0).then(|| refine::CflCap {
+            freq: cfg.ww3.freq1,
+            dt_min: cfg.ww3.dtxy / p.cfl_substeps,
+            efficiency: p.cfl_efficiency,
+        });
+        refine::bathy_refinement(&bathy, &earth, p, dmin, dmax, cap)
+    });
+    let n_cfl_capped_blocks = br.as_ref().map_or(0, |b| b.n_cfl_capped);
     if let Some(b) = &br {
-        eprintln!("[hww3-grid] bathymetry blocks of {} samples, {} cells to split", b.block, b.splits.len());
+        eprintln!(
+            "[hww3-grid] bathymetry blocks of {} samples, {} cells to split, {} blocks capped by the explicit-scheme limit",
+            b.block,
+            b.splits.len(),
+            b.n_cfl_capped
+        );
         lap("depth and slope criteria", &mut t0);
     }
 
-    let tr = tree::build(cfg, &earth, coast.as_ref(), br.as_ref().map(|b| &b.splits));
+    let tr = tree::build(cfg, &earth, coast.as_ref(), br.as_ref().map(|b| &b.splits), nosplit);
     let leaves = tr.leaves;
     lap("refinement + 2:1 balance", &mut t0);
     let n_bathy_splits = br.as_ref().map_or(0, |b| b.splits.len());
@@ -410,6 +506,10 @@ pub fn build(cfg: &Config) -> Result<(Grid, Summary)> {
         n_flips,
         n_alternated,
         n_cfl_flips,
+        n_cfl_capped_blocks,
+        cfl_passes: 0,
+        n_cfl_merged: 0,
+        n_cfl_above: 0,
         n_trimmed,
         n_nodes: grid.uniq.len(),
         n_open_boundary: grid.obc.len(),

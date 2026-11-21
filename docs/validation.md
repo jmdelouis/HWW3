@@ -238,6 +238,68 @@ or moved one HEALPix level coarser (dashed: perfect connectivity).
 Explicit minus implicit scheme on grid v4, 4–7 January.
 ```
 
+### Grid v5: explicit sub-steps capped
+
+Grid v5 is grid v4 built with `refine_bathy.cfl_substeps` = $K$ (see
+[Algorithm](algorithm.md), section 10): the refinement stops where a cell
+would need more than $K$ sub-steps at 0.0373 Hz, and up to 10 rebuilds
+freeze the parents of the nodes still above $K$
+(`configs/natl_v5k{5,4}_datarmor.json`, PBS jobs 7958757 and 7958755,
+19.7 and 17.2 min on 8 cores). With $K=5$ the nside-2048 cells disappear at
+about 68–600 m depth, with $K=4$ beyond about 36 m; the coarser levels are
+unchanged. The runs cover 1–8 January with open-boundary spectra, implicit
+and explicit (PBS jobs 7958905, 7958906, 7958910, 7958911).
+
+| grid | nodes | nside 2048 | ITER at 0.0373 Hz | $S$ | implicit (s/day) | explicit (s/day) |
+|---|---|---|---|---|---|---|
+| v4 | 794,613 | 610,163 | 10 | 3678 | 2115 | 4318 |
+| v5, $K=5$ | 515,624 | 238,275 | 6 | 3168 | 1380 | 2988 |
+| v5, $K=4$ | 424,123 | 115,884 | 5 | 2835 | 1058 | 2601 |
+
+Wall time from 2 January 00 h to 7 January 20 h on 112 ranks. The explicit
+run on grid v5 $K=4$ costs 1.23 times the implicit run on grid v4 ($K=5$:
+1.41). The gain comes mostly from the fewer nodes: the explicit time per
+node rises from 5.4 to 6.1 ms per model day as $S$ falls, while the
+implicit time per node stays at 2.5–2.7 ms.
+
+| run | altimeter blocks | bias (m) | RMSE (m) | buoys $H_s$ bias (m) | RMSE (m) | $T_{m02}$ RMSE (s) |
+|---|---|---|---|---|---|---|
+| v4 implicit | 45,076 | −0.031 | 0.283 | −0.054 | 0.310 | 1.218 |
+| v4 explicit | 44,670 | −0.017 | 0.283 | −0.057 | 0.301 | 1.219 |
+| v5 $K=5$ implicit | 45,468 | −0.030 | 0.283 | −0.061 | 0.330 | 1.195 |
+| v5 $K=5$ explicit | 45,468 | −0.016 | 0.283 | −0.065 | 0.322 | 1.200 |
+| v5 $K=4$ implicit | 45,518 | −0.029 | 0.283 | −0.052 | 0.331 | 1.226 |
+| v5 $K=4$ explicit | 45,518 | −0.015 | 0.283 | −0.056 | 0.323 | 1.222 |
+
+4 January 00 h – 7 January 20 h, 252 buoys (PBS job 7962684). The
+altimeters do not see the change. At the buoys the $H_s$ RMSE rises by
+2 cm, but with $K=4$ it changes by less than 5 mm at 124 buoys and 10
+buoys carry 93 % of the increase of the squared error: buoys sheltered by
+islands and headlands whose 3 km cells were removed (Isles of Scilly RMSE
+0.35 → 1.09 m, Las Palmas 0.25 → 0.69 m, Basque coast, Gulf of Lion,
+western Ireland). By region (implicit, v4 → $K=5$ → $K=4$): Channel and
+Biscay 0.257 → 0.326 → 0.335 m, Iberia and Canaries 0.203 → 0.293 →
+0.298 m, Irish and Celtic seas 0.303 → 0.355 → 0.325 m, North Sea and
+America unchanged. Node by node (run v4 interpolated on the v5 nodes with
+`DIFF_TRI_A`), the implicit $H_s$ of grid v5 $K=4$ differs from grid v4
+by an RMS of 5 mm at the median node and 20 cm at the 99th percentile.
+Grid v4 remains the reference. Files: `results/natl_v5k{4,5}_explicit_cost.json`,
+`results/natl_v5k{4,5}_jan2026_{bnd,exp}_val_stats.json`,
+`results/natl_v5_jan2026_buoys_stats.json`.
+
+```{figure} _static/fig/natl_v5_level_change.png
+:width: 100%
+
+nside-2048 cells of grid v4 kept (grey) or made coarser (red, black) in
+grid v5, with the change of the buoy $H_s$ RMSE, implicit scheme.
+```
+
+```{figure} _static/fig/natl_v5k4_jan2026_diff.png
+:width: 100%
+
+Grid v5 $K=4$ minus grid v4, implicit scheme, 4–7 January.
+```
+
 ## First WW3 run
 
 12 h cold start with a homogeneous 15 m/s westerly wind

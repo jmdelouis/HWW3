@@ -29,6 +29,8 @@ struct Refiner<'a> {
     coast: Option<&'a CoastIndex>,
     /// cells that the bathymetry criteria require to split
     splits: Option<&'a HashSet<u64>>,
+    /// cells never split by the criteria (the 2:1 balance may still split them)
+    nosplit: Option<&'a HashSet<u64>>,
     /// (max angular distance, depth), sorted by decreasing depth
     rules: Vec<(f64, u8)>,
     dmin: u8,
@@ -57,6 +59,7 @@ impl<'a> Refiner<'a> {
 
     fn refine(&self, d: u8, h: u64, leaves: &mut Vec<(u8, u64)>, internal: &mut Vec<u64>) {
         let split = d < self.dmax
+            && !self.nosplit.is_some_and(|s| s.contains(&uniq(d, h)))
             && (self.splits.is_some_and(|s| s.contains(&uniq(d, h))) || self.required_depth(d, h) > d);
         if split {
             internal.push(uniq(d, h));
@@ -96,8 +99,15 @@ pub fn morton(d: u8, h: u64, dmax: u8) -> u64 {
 /// to the nearest coast point minus the cell radius) is below the rule's
 /// `max_dist_km`. Then
 /// leaves are split until no leaf has a neighbour (edge or corner) more
-/// than one level finer (2:1 balance).
-pub fn build(cfg: &Config, earth: &Earth, coast: Option<&CoastIndex>, splits: Option<&HashSet<u64>>) -> Tree {
+/// than one level finer (2:1 balance). Cells in `nosplit` are not split by
+/// the criteria, only by the balance.
+pub fn build(
+    cfg: &Config,
+    earth: &Earth,
+    coast: Option<&CoastIndex>,
+    splits: Option<&HashSet<u64>>,
+    nosplit: Option<&HashSet<u64>>,
+) -> Tree {
     let dmin = cfg.dmin();
     let dmax = cfg.dmax();
     let mut rules: Vec<(f64, u8)> = cfg
@@ -107,7 +117,7 @@ pub fn build(cfg: &Config, earth: &Earth, coast: Option<&CoastIndex>, splits: Op
         .collect();
     rules.sort_by(|a, b| b.1.cmp(&a.1));
     let max_rule_ang = rules.iter().map(|r| r.0).fold(0.0, f64::max);
-    let refiner = Refiner { coast, splits, rules, dmin, dmax, max_rule_ang };
+    let refiner = Refiner { coast, splits, nosplit, rules, dmin, dmax, max_rule_ang };
 
     // roots: cells of depth dmin whose centre lies in the domain + margin
     let omega = 4.0 * std::f64::consts::PI / (12.0 * 4f64.powi(dmin as i32));

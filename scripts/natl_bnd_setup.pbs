@@ -24,9 +24,12 @@ G=$R/${GRID:-grids/natl_v3}
 D=$R/runs/${RUN:-natl_v3_jan2026_bnd}
 mkdir -p $D; cd $D
 for f in mod_def.ww3 wind.ww3 ice.ww3 current.ww3 level.ww3 natl.msh natl.obc; do ln -sf $(readlink -f $SRC/$f) .; done
-cp $SRC/ST4TABUHF2.bin $SRC/ww3_ounf.nml .
-sed 's|^! no boundary spectra yet; cold start.|! open-boundary spectra rebuilt from the GLOBMULTI GLOB-30M partitions (nest.ww3); cold start.|' \
-  $SRC/ww3_shel.nml > ww3_shel.nml
+cp $SRC/ST4TABUHF2.bin .
+# STOP='20260108 000000' shortens the run (cost tests)
+STOP=${STOP:-20260131 230000}
+sed "s/20260131 230000/$STOP/g" $SRC/ww3_ounf.nml > ww3_ounf.nml
+sed -e 's|^! no boundary spectra yet; cold start.|! open-boundary spectra rebuilt from the GLOBMULTI GLOB-30M partitions (nest.ww3); cold start.|' \
+  -e "s/20260131 230000/$STOP/g" $SRC/ww3_shel.nml > ww3_shel.nml
 t0=$(date +%s)
 $R/venv/bin/python $R/scripts/boundary_spectra.py $G spec
 echo "boundary_spectra: $(( $(date +%s)-t0 )) s"

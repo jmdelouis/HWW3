@@ -51,6 +51,11 @@ scheme. The explicit scheme is twice as slow: its sub-cycling is global
 and set by about a thousand coastal nodes of \SI{3}{km} in fjords and
 Arctic channels, and with the nodes kept on HEALPix pixel centres a
 better grid could remove at most about a third of its propagation sweeps.
+Capping the explicit sub-steps during the grid construction (grid v5,
+424\,123 nodes for at most 4 sub-steps) brings the explicit run down to
+1.23 times the implicit run on grid v4, with unchanged altimeter scores
+but a buoy $H_s$ RMSE \SI{2}{cm} higher, lost at a few buoys sheltered by
+islands and headlands whose \SI{3}{km} cells were removed.
 \end{abstract}
 
 \section{Motivation}
@@ -217,7 +222,9 @@ the reference configuration}: it has the nodes of grid v3 and adds the
 triangle orientation and CFL steps of Section~\ref{sec:v4}. The sections
 below follow the order in which the versions were made; the reference
 results are those of grid v4 with open-boundary spectra
-(Section~\ref{sec:v4}, Table~\ref{tab:reference}).
+(Section~\ref{sec:v4}, Table~\ref{tab:reference}). Grid v5 is a cheaper
+variant of grid v4 for the explicit scheme, with fewer \SI{3}{km} cells
+(Section~\ref{sec:v5}).
 
 \begin{table}[H]
 \centering\small
@@ -229,6 +236,8 @@ v1 & \texttt{natl\_datarmor.json}    & 502\,690 & distance-to-coast refinement, 
 v2 & \texttt{natl\_v2\_datarmor.json} & 502\,408 & edge flips and boundary trimming: angles \ang{20}--\ang{130} \\
 v3 & \texttt{natl\_v3\_datarmor.json} & 794\,613 & depth, slope and Rossby-radius size functions (OceanMesh2D) \\
 \textbf{v4} & \texttt{natl\_v4\_datarmor.json} & 794\,613 & alternated diagonals, CFL-driven flips (reference) \\
+v5, $K=5$ & \texttt{natl\_v5k5\_datarmor.json} & 515\,624 & v4 with at most 5 explicit sub-steps (Sec.~\ref{sec:v5}) \\
+v5, $K=4$ & \texttt{natl\_v5k4\_datarmor.json} & 424\,123 & v4 with at most 4 explicit sub-steps \\
 \bottomrule
 \end{tabular}
 \caption{North Atlantic grid versions (\texttt{configs/}). Every version
@@ -681,6 +690,185 @@ median CFL length of its level.}
 $H_s$ and RMS of the hourly difference
 (\texttt{scripts/plot\_run\_diff.py}).}
 \label{fig:exp_diff}
+\end{figure}
+
+\subsection{Grid v5: capping the explicit sub-steps}\label{sec:v5}
+The estimates above leave one lever with the nodes kept on HEALPix pixel
+centres: making the nodes that need the most sub-steps one level coarser.
+Grid v5 does it during the construction. The option
+\texttt{cfl\_substeps} $K$ of \texttt{refine\_bathy} caps the sub-steps of
+the lowest frequency per global step, in two places
+(\texttt{hww3-grid/src/refine.rs} and \texttt{pipeline.rs}):
+\begin{itemize}
+\item during the refinement, a bathymetry block of depth $h$ is not
+  refined below the finest level whose cell of size $L_d$ satisfies
+  $\eta L_d/c_g(f_1,h)\ge\mathrm{DT}/K$, with $\eta=0.8$ the expected CFL
+  length in cell sizes (\texttt{cfl\_efficiency}). With
+  $f_1=\SI{0.0373}{Hz}$ and $\mathrm{DT}=\SI{600}{s}$, this forbids the
+  \SI{3.2}{km} cells of $\nside=2048$ where $c_g>\SI{21.2}{m/s}$ for $K=5$,
+  that is at depths of about 68 to \SI{600}{m}, and where
+  $c_g>\SI{17.0}{m/s}$ for $K=4$, that is deeper than about \SI{36}{m};
+\item after each build, the explicit step of every interior node is
+  computed with the WW3 formula, each triangle taking the mean group speed
+  of its three vertices as \texttt{W3XYPFSN2} does. For each node still
+  above $K$ sub-steps, the parent of its cell may no longer be split; when
+  it already could not (the 2:1 balance had split it again), the parents
+  of its triangle neighbours of the same or a finer level are frozen too.
+  The grid is rebuilt from the start with these constraints, here up to 10
+  times (\texttt{cfl\_passes}).
+\end{itemize}
+Two grids were built with the configuration of grid v4 plus this cap,
+$K=5$ and $K=4$ (\texttt{configs/natl\_v5k5\_datarmor.json} and
+\texttt{natl\_v5k4\_datarmor.json}; PBS jobs 7958757 and 7958755, 8 cores,
+19.7 and \SI{17.2}{min} for the 10 builds against \SI{149}{s} for the
+single build of grid v4). The first build leaves 72\,017 ($K=5$) and
+61\,992 ($K=4$) nodes above the cap and the tenth 29 and 6: the smallest
+explicit step is \SI{105.2}{s} and \SI{134.5}{s}. Of the 610\,163
+$\nside=2048$ nodes of grid v4, $K=5$ keeps 238\,124 and replaces
+366\,346 by their parent, $K=4$ keeps 115\,635 and replaces 487\,417, the
+others (5\,693 and 7\,111) becoming coarser still or dry. On the European
+shelf (Fig.~\ref{fig:v5_levels}) the \SI{3}{km} cells disappear along the
+Atlantic and Mediterranean coasts, where the depth exceeds the limit
+within a few cells of the shore, and remain in the shallow southern North
+Sea, the Wadden Sea, the Kattegat and the Baltic.
+\texttt{scripts/explicit\_cost.py} (PBS jobs 7958758 and 7958756) gives
+ITER 6 and 5 at \SI{0.0373}{Hz} instead of 10, and $S=3168$ and 2835
+sweeps per step instead of 3678 ($-14$ and $-23\,\%$, Table~\ref{tab:v5}).
+
+\paragraph{Wall time.} The run with open-boundary spectra was repeated on
+both grids, with the implicit and the explicit scheme, from 1 January
+00\,h to 8 January 00\,h, with the forcing, spectra and settings of
+Section~\ref{sec:explicit} (setup PBS jobs 7958902--7958904 and
+7958907--7958909, runs 7958905, 7958906, 7958910 and 7958911). From 2
+January 00\,h to 7 January 20\,h, the explicit scheme takes \SI{2988}{s}
+per model day on grid v5 $K=5$ and \SI{2601}{s} with $K=4$, 31 and
+40\,\% less than on grid v4 (\SI{4318}{s}), that is 1.41 and 1.23 times
+the implicit run on grid v4 (\SI{2115}{s}). The implicit runs gain as
+much: 1380 and \SI{1058}{s}, 0.65 and 0.50 times grid v4, close to the
+ratio of the nodes (0.65 and 0.53). On the same grid the explicit scheme
+therefore stays 2.2 ($K=5$) and 2.5 ($K=4$) times slower than the implicit
+one. The gain of the explicit runs is also smaller than the product of
+the sweeps by the nodes predicts ($S N$ falls by 44 and 59\,\%): the
+explicit time per node and per model day rises from \SI{5.43}{ms} (v4) to
+5.79 and \SI{6.13}{ms} as $S$ decreases, while the implicit time per node
+stays at 2.5--\SI{2.7}{ms}. Part of the explicit cost thus does not scale
+with the nodes of each rank, for example the exchange between the 112
+ranks after each sub-step; it was not profiled.
+
+\paragraph{Accuracy.} Over 4 January 00\,h -- 7 January 20\,h the
+altimeter scores do not change (Table~\ref{tab:v5val}): RMSE \SI{0.283}{m}
+and $r=0.970$ for the six runs, bias within \SI{2}{mm} of grid v4 for each
+scheme. The number of blocks grows with $K$ decreasing because a coarser
+coastal node accepts altimeter samples twice as far
+(\texttt{maxdist\_frac}); the open ocean, where most blocks lie, is not
+modified. At the 252 buoys (validation PBS job 7962684) the $H_s$ RMSE
+rises by about \SI{2}{cm} with both caps, from 0.310 to 0.330 ($K=5$) and
+\SI{0.331}{m} ($K=4$) with the implicit scheme and from 0.301 to 0.322 and
+\SI{0.323}{m} with the explicit one; the $T_{m02}$ RMSE stays within
+1.195--\SI{1.226}{s}. The loss is concentrated: with $K=4$ the RMSE
+changes by less than \SI{5}{mm} at 124 buoys, increases at 74 and
+decreases at 54 (median change 0), and 10 buoys account for 93\,\% of the
+increase of the squared error ($K=5$: 181, 44 and 27 buoys, 89\,\%). They
+are coastal buoys whose waves come through the cells that were made
+coarser: the Isles of Scilly (\ang{6.31}W, \ang{49.89}N, RMSE 0.35 to
+\SI{1.09}{m}, bias $+0.15$ to \SI{+1.02}{m}, the shelter of the islands
+being lost with the $\nside=1024$ node), Las Palmas (0.25 to
+\SI{0.69}{m}, bias $+0.22$ to \SI{-0.67}{m}, at a node still at
+$\nside=2048$ but surrounded by coarser cells), the Basque coast, the
+Gulf of Lion and western Ireland. By region (implicit, v4 / $K=5$ /
+$K=4$), the RMSE goes from 0.257 to 0.326 and \SI{0.335}{m} in the Channel
+and Biscay (34 buoys), from 0.203 to 0.293 and \SI{0.298}{m} around Iberia
+and the Canaries (10), from 0.303 to 0.355 and \SI{0.325}{m} in the Irish
+and Celtic seas (11), and from 0.396 to 0.427 and \SI{0.416}{m} in the
+Mediterranean (34), while the 90 North Sea buoys (0.368, 0.371, 0.376),
+the 63 American buoys (0.165, 0.165, 0.164) and the Baltic do not move.
+Node by node, with run v4 interpolated linearly on the v5 nodes
+(\texttt{DIFF\_TRI\_A} in \texttt{scripts/plot\_run\_diff.py},
+Fig.~\ref{fig:v5_diff}), the implicit $H_s$ of grid v5 $K=4$ differs from
+grid v4 by an RMS of \SI{5}{mm} at the median node (99th percentile
+\SI{20}{cm}; $K=5$: 4~mm and \SI{16}{cm}), \SI{4}{mm} in the open
+Atlantic, 1--\SI{2}{cm} around the Azores, the Canaries and Cape Verde,
+with streaks in the swell shadows downstream of the islands, and up to an
+RMS of \SI{3.9}{m} at coastal nodes of southern Greenland, where a node
+sheltered in a fjord of grid v4 is exposed in grid v5. The explicit minus
+implicit difference on grid v5 is close to that of grid v4 (RMS median
+\SI{2.1}{cm} for both, 99th percentile 17 against \SI{20}{cm}).
+
+\paragraph{Outcome.} With $K=4$ the explicit run costs 1.23 times the
+implicit run on grid v4, within the 1.3 aimed at, with unchanged
+altimeter scores, but it loses the buoy gain of the explicit scheme and
+\SI{1}{cm} more: its buoy RMSE (\SI{0.323}{m}) is above that of the
+implicit run on grid v4 (\SI{0.310}{m}), because the cap removes the
+\SI{3}{km} cells that shelter a few coastal buoys behind islands and
+headlands. $K=5$ costs more (1.41) for the same buoy loss. The implicit
+scheme on the same grids is 2.2 to 2.5 times cheaper again, with the same
+loss.
+Grid v4 remains the reference; grid v5 is a cheaper option when the
+coastal shelter of islands at 36--\SI{600}{m} depth is not needed. Most
+of the explicit gain comes from the smaller number of nodes, not from the
+sub-cycling, which the cap only reduces from 3.2 to 2.5 sweeps per
+component.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrrrrr}
+\toprule
+ & & \multicolumn{2}{c}{nodes at $\nside$} & ITER at & & \multicolumn{2}{c}{\texttt{ww3\_shel} per day (s)} \\
+grid & nodes & 1024 & 2048 & \SI{0.0373}{Hz} & $S$ & implicit & explicit \\
+\midrule
+v4         & 794\,613 & 119\,503 & 610\,163 & 10 & 3678 & 2115 & 4318 \\
+v5, $K=5$  & 515\,624 & 212\,402 & 238\,275 &  6 & 3168 & 1380 & 2988 \\
+v5, $K=4$  & 424\,123 & 243\,291 & 115\,884 &  5 & 2835 & 1058 & 2601 \\
+\bottomrule
+\end{tabular}
+\caption{Grids v4 and v5: nodes at the two finest levels (the coarser
+levels are unchanged), explicit sub-steps of the lowest frequency and
+sweeps per \SI{600}{s} step from \texttt{scripts/explicit\_cost.py}, and
+wall time of \texttt{ww3\_shel} per model day from 2 January 00\,h to 7
+January 20\,h on 112 ranks.}
+\label{tab:v5}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrrrrr}
+\toprule
+ & \multicolumn{3}{c}{altimeters} & \multicolumn{3}{c}{buoys, $H_s$} & $T_{m02}$ \\
+run & blocks & bias (m) & RMSE (m) & bias (m) & RMSE (m) & $r$ & RMSE (s) \\
+\midrule
+v4 implicit       & 45\,076 & $-0.031$ & 0.283 & $-0.054$ & 0.310 & 0.925 & 1.218 \\
+v4 explicit       & 44\,670 & $-0.017$ & 0.283 & $-0.057$ & 0.301 & 0.930 & 1.219 \\
+v5 $K=5$ implicit & 45\,468 & $-0.030$ & 0.283 & $-0.061$ & 0.330 & 0.916 & 1.195 \\
+v5 $K=5$ explicit & 45\,468 & $-0.016$ & 0.283 & $-0.065$ & 0.322 & 0.920 & 1.200 \\
+v5 $K=4$ implicit & 45\,518 & $-0.029$ & 0.283 & $-0.052$ & 0.331 & 0.915 & 1.226 \\
+v5 $K=4$ explicit & 45\,518 & $-0.015$ & 0.283 & $-0.056$ & 0.323 & 0.919 & 1.222 \\
+\bottomrule
+\end{tabular}
+\caption{Grids v4 and v5 against L3 altimetry and 252 moored buoys
+(22\,743 hours; $T_{m02}$ at 171 buoys), 4 January 00\,h -- 7 January
+20\,h.}
+\label{tab:v5val}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v5_level_change.png}
+\caption{Grid v5 on the European shelf: cells of grid v4 at
+$\nside=2048$ kept (grey), replaced by their parent (red) or coarser or
+dry (black), with $K=5$ (left) and $K=4$ (right). Circles: change of the
+hourly $H_s$ RMSE of each buoy from grid v4 to grid v5, implicit scheme
+(\texttt{scripts/plot\_level\_change.py}).}
+\label{fig:v5_levels}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/natl_v5k4_jan2026_diff.png}
+\caption{Grid v5 $K=4$ against grid v4, implicit scheme, 4 January 00\,h
+-- 8 January 00\,h, run v4 interpolated on the nodes of grid v5: mean
+$H_s$ of grid v5, difference of the mean $H_s$ and RMS of the hourly
+difference.}
+\label{fig:v5_diff}
 \end{figure}
 
 \subsection{WW3 build and grid preprocessing}
@@ -1170,6 +1358,14 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{explicit\_cost.py}, \texttt{plot\_explicit\_cost.py map} and
   \texttt{curves}, and \texttt{plot\_run\_diff.py}, with the arguments
   given in \texttt{docs/reproducing.md}.
+\item Tables~\ref{tab:v5}--\ref{tab:v5val}, Figures~\ref{fig:v5_levels}--\ref{fig:v5_diff}
+  (grid v5): \texttt{qsub -v CFG=configs/natl\_v5k4\_datarmor.json,GRID=grids/natl\_v5k4 scripts/natl\_grid.pbs}
+  (same for \texttt{v5k5}), \texttt{natl\_explicit\_cost.pbs}, then the
+  setups and runs used for grid v4, with \texttt{STOP='20260108 000000'}
+  given to \texttt{natl\_bnd\_setup.pbs} and \texttt{natl\_exp\_setup.pbs},
+  \texttt{validate\_altimetry.py}, \texttt{validate\_buoys.py},
+  \texttt{plot\_level\_change.py} and \texttt{plot\_run\_diff.py} with
+  \texttt{DIFF\_TRI\_A} (\texttt{docs/reproducing.md}).
 \item Table~\ref{tab:bnd}, Figure~\ref{fig:bnd_maps}:
   \texttt{qsub scripts/natl\_bnd\_setup.pbs}, then the run
   \texttt{natl\_v3\_jan2026\_bnd}, \texttt{natl\_validate.pbs} and

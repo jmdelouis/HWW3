@@ -215,6 +215,30 @@ pub struct BathyRefine {
     /// size functions (km; default 0 = half the finest cell size).
     #[serde(default)]
     pub smooth_km: f64,
+    /// Explicit-scheme limit (0 = off, default): a block is not refined to a
+    /// HEALPix level whose explicit step for the lowest model frequency,
+    /// `cfl_efficiency · cell size / c_g(SPECTRUM%FREQ1, h)`, is shorter than
+    /// `TIMESTEPS%DTXY / cfl_substeps`; then, after the triangulation, the
+    /// cells of the nodes that still need more than `cfl_substeps` sub-steps
+    /// are merged into their parent, for at most `cfl_passes` rebuilds (see
+    /// [`crate::refine`]). The nodes stay HEALPix pixel centres.
+    #[serde(default)]
+    pub cfl_substeps: f64,
+    /// CFL length divided by the cell size assumed by `cfl_substeps`
+    /// (default 0.8; the median of grid v4 is 0.81–0.85).
+    #[serde(default = "default_cfl_efficiency")]
+    pub cfl_efficiency: f64,
+    /// Rebuilds that merge the cells of the nodes above `cfl_substeps`
+    /// (default 3).
+    #[serde(default = "default_cfl_passes")]
+    pub cfl_passes: u32,
+}
+
+fn default_cfl_efficiency() -> f64 {
+    0.8
+}
+fn default_cfl_passes() -> u32 {
+    3
 }
 
 /// Source of the coastline, selected by the `"source"` key.
@@ -371,6 +395,9 @@ impl Config {
         if let Some(p) = &self.refine_bathy {
             if !(p.wave_time_s > 0.0 || p.wl > 0.0) || p.slp < 0.0 || p.grade < 0.0 || !(p.min_depth_m > 0.0) {
                 bail!("refine_bathy: wl or wave_time_s must be > 0, min_depth_m > 0, slp and grade >= 0");
+            }
+            if p.cfl_substeps < 0.0 || !(p.cfl_efficiency > 0.0) {
+                bail!("refine_bathy: cfl_substeps must be >= 0 and cfl_efficiency > 0");
             }
         }
         let d = &self.domain;

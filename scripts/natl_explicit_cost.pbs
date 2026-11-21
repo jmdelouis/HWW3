@@ -1,0 +1,16 @@
+#!/bin/bash
+#PBS -N hww3_xcost
+#PBS -q sequentiel
+#PBS -l select=1:ncpus=1:mem=40g
+#PBS -l walltime=01:00:00
+#PBS -j oe
+# Explicit sub-cycling cost of a grid (scripts/explicit_cost.py, no current):
+# results/explicit_cost/<NAME>.{json,npz}
+#   qsub -v R=/home1/scratch/jmdeloui/HWW3,GRID=grids/natl_v5,NAME=natl_v5 -o logs/xcost_v5.log scripts/natl_explicit_cost.pbs
+set -e
+R=${R:-/home1/datawork/jmdeloui/HWW3}
+cd $R
+mkdir -p results/explicit_cost
+t0=$(date +%s)
+$R/venv/bin/python scripts/explicit_cost.py $GRID results/explicit_cost/$NAME "${LABEL:-$NAME}"
+echo "explicit_cost $NAME: $(( $(date +%s)-t0 )) s"

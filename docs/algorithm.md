@@ -226,9 +226,12 @@ boundary nodes are left out unless `FSBCCFL`), and each component is
 sub-cycled `ceil(DT / min Δt_i)` times. For a speed $c$ in direction
 $\theta$, $\Delta t_i = L_i(\theta)/c$ with a CFL length $L_i(\theta)$ that
 depends only on the triangles. `hww3-grid` computes $L_i$, the minimum over
-the model directions, and $\Delta t_i = L_i / c_g$ with the linear group
-speed of the lowest model frequency (`freq1`, the fastest component) at the
-node depth, currents excluded. The summary (`cfl`) gives the smallest
+the model directions, and $\Delta t_i$ with the WW3 formula above for the
+linear group speed of the lowest model frequency (`freq1`, the fastest
+component), each triangle using the mean speed of its three vertices as
+WW3 does, currents excluded (grid v4 and earlier reported $L_i/c_g$ with
+the speed at the node; their triangles do not depend on it, since the CFL
+flips use $L_i$ only). The summary (`cfl`) gives the smallest
 step, the node that sets it, the number of sub-cycles at `dtxy` and, per
 nside, the minimum, 1 % quantile and median of $\Delta t_i$ and of
 $L_i$ divided by the cell size (the efficiency); `raw/dt_explicit.f64` and
@@ -237,6 +240,35 @@ $L_i$ divided by the cell size (the efficiency); `raw/dt_explicit.f64` and
 The fully implicit scheme used in the North Atlantic runs (`IMPTOTAL`) has
 no such limit; these numbers matter for the explicit schemes and measure
 the geometric quality of the triangles for the transport.
+
+### Capping the sub-steps (`refine_bathy.cfl_substeps`)
+
+Because WW3 sub-cycles every component with the smallest step of the whole
+domain, a few fine coastal nodes set the cost of the explicit schemes. With
+`cfl_substeps` $K > 0$, the grid is built so that the lowest frequency
+needs at most $K$ sub-steps per `dtxy`, keeping the nodes on HEALPix
+pixel centres:
+
+1. **During the refinement**, a bathymetry block of depth $h$ is not
+   refined below the finest level $d$ with
+   $\eta\, L_d / c_g(f_1, h) \ge \mathrm{dtxy}/K$, where $L_d$ is the cell
+   size and $\eta$ = `cfl_efficiency` (0.8) the expected CFL length in
+   cell sizes. For the North Atlantic ($f_1=0.0373$ Hz, 600 s, nside 2048
+   cells of 3.2 km) this forbids nside 2048 where $c_g > 21.2$ m/s for
+   $K=5$ (depths of about 68 to 600 m) and where $c_g > 17.0$ m/s for
+   $K=4$ (deeper than about 36 m).
+2. **After each build**, the explicit step of every node is computed with
+   the WW3 formula. For each interior node still above $K$ sub-steps the
+   parent of its cell is marked as not splittable; when that parent was
+   already marked (the 2:1 balance re-split it), the parents of its
+   triangle neighbours of the same or a finer level are marked too. The
+   grid is rebuilt from the start with these marks, at most `cfl_passes`
+   times (3 by default), and the passes stop when no node is left above $K$.
+
+The summary gives the number of capped blocks (`n_cfl_capped_blocks`),
+the passes made, the merged cells (`n_cfl_merged`) and the nodes still above
+$K$ (`n_cfl_above`). Each pass is a full build, so 10 passes take about
+ten times as long as one.
 
 ## 11. Validation
 

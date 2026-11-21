@@ -18,8 +18,10 @@
 //! with $L_i(\theta) = S_i / \sum_T \max(0, \tfrac12\mathbf e_\theta\cdot\mathbf n_{i,T})$
 //! a length that depends only on the geometry of the triangles. This module
 //! computes $L_i = \min_\theta L_i(\theta)$ over the model directions and
-//! $\Delta t_i = L_i / c_g$ with the group speed of the lowest model
-//! frequency at the node depth (the fastest component), currents excluded.
+//! the explicit step $\Delta t_i$ for the group speed of the lowest model
+//! frequency (the fastest component), currents excluded, with the speed of
+//! each triangle taken as the mean of its three vertices as in WW3 (so
+//! $\Delta t_i \le L_i / c_{g,i}$ next to deeper nodes).
 
 use crate::geo::{dot, tangent_basis};
 use rayon::prelude::*;
@@ -56,6 +58,26 @@ pub fn group_speed(f: f64, h: f64) -> f64 {
 /// starting at `dir_offset` (fraction of the direction step, as
 /// `SPECTRUM%THOFF`).
 pub fn cfl_length(nodes: &[[f64; 3]], tris: &[[u32; 3]], nth: u32, dir_offset: f64) -> (Vec<f64>, Vec<bool>) {
+    node_steps(nodes, tris, nth, dir_offset, None)
+}
+
+/// Explicit step per node (s) for the nodal speeds `c` (m/s), as WW3 computes
+/// it: the flux coefficient of a triangle uses the mean speed of its three
+/// vertices, so a shallow node next to deeper ones gets the faster speed of
+/// its neighbours. Also returns the interior flag.
+pub fn explicit_dt(nodes: &[[f64; 3]], tris: &[[u32; 3]], c: &[f64], nth: u32, dir_offset: f64) -> (Vec<f64>, Vec<bool>) {
+    node_steps(nodes, tris, nth, dir_offset, Some(c))
+}
+
+/// `S_i / max_θ Σ_T max(0, ½ w_T e_θ·n_{i,T})` per node, with `w_T` the mean
+/// of `speed` over the vertices of `T` (1 without `speed`: the CFL length).
+fn node_steps(
+    nodes: &[[f64; 3]],
+    tris: &[[u32; 3]],
+    nth: u32,
+    dir_offset: f64,
+    speed: Option<&[f64]>,
+) -> (Vec<f64>, Vec<bool>) {
     let n = nodes.len();
     let mut start = vec![0usize; n + 1];
     for t in tris {
@@ -105,8 +127,10 @@ pub fn cfl_length(nodes: &[[f64; 3]], tris: &[[u32; 3]], nth: u32, dir_offset: f
                 si += area / 3.0;
                 let pts = [a, b, c];
                 let (j, l) = (pts[(pos + 1) % 3], pts[(pos + 2) % 3]);
-                // inward normal of the edge opposite i (WW3: N1 = (y2 - y3, x3 - x2))
-                normals.push([j[1] - l[1], l[0] - j[0]]);
+                // mean speed of the triangle (WW3: lambda = (c1 + c2 + c3) / 3, halved below)
+                let w = speed.map_or(1.0, |s| (s[t[0] as usize] + s[t[1] as usize] + s[t[2] as usize]) / 3.0);
+                // inward normal of the edge opposite i (WW3: N1 = (y2 - y3, x3 - x2)), times w
+                normals.push([w * (j[1] - l[1]), w * (l[0] - j[0])]);
                 for o in [t[(pos + 1) % 3], t[(pos + 2) % 3]] {
                     *edge_count.entry(o).or_insert(0) += 1;
                 }
@@ -367,9 +391,9 @@ pub fn explicit_steps(
     levels: std::ops::RangeInclusive<u8>,
 ) -> (Vec<f64>, Vec<f64>, CflReport) {
     let (len, interior) = cfl_length(nodes, tris, nth, dir_offset);
-    let dt: Vec<f64> = (0..nodes.len())
-        .map(|i| if interior[i] { len[i] / group_speed(freq1, depth[i]) } else { f64::INFINITY })
-        .collect();
+    let cg: Vec<f64> = depth.par_iter().map(|&h| group_speed(freq1, h)).collect();
+    let (dtv, _) = explicit_dt(nodes, tris, &cg, nth, dir_offset);
+    let dt: Vec<f64> = (0..nodes.len()).map(|i| if interior[i] { dtv[i] } else { f64::INFINITY }).collect();
     let cell = |d: u8| R_EARTH * (std::f64::consts::PI / 3.0).sqrt() / (1u64 << d) as f64;
     let mut worst = (f64::INFINITY, 0usize);
     for i in 0..dt.len() {
@@ -417,5 +441,31 @@ mod tests {
         // shallow water: sqrt(g h)
         let h = 2.0;
         assert!((group_speed(f, h) - (G * h).sqrt()).abs() / (G * h).sqrt() < 0.01);
+    }
+
+    #[test]
+    fn explicit_dt_uses_the_triangle_mean_speed() {
+        // hexagon of unit-ish triangles around a centre node, on the unit sphere near (1, 0, 0)
+        let e = 1e-4;
+        let mut nodes = vec![[1.0, 0.0, 0.0]];
+        for k in 0..6 {
+            let a = k as f64 * std::f64::consts::PI / 3.0;
+            let v = [1.0, e * a.cos(), e * a.sin()];
+            let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            nodes.push([v[0] / n, v[1] / n, v[2] / n]);
+        }
+        let tris: Vec<[u32; 3]> = (0..6).map(|k| [0, 1 + k as u32, 1 + ((k + 1) % 6) as u32]).collect();
+        let (len, interior) = cfl_length(&nodes, &tris, 36, 0.0);
+        assert!(interior[0]);
+        // uniform speed: dt = L / c
+        let c1 = vec![10.0; 7];
+        let (dt1, _) = explicit_dt(&nodes, &tris, &c1, 36, 0.0);
+        assert!((dt1[0] - len[0] / 10.0).abs() < 1e-9 * dt1[0]);
+        // faster neighbours shorten the step of the centre node
+        let mut c2 = vec![20.0; 7];
+        c2[0] = 10.0;
+        let (dt2, _) = explicit_dt(&nodes, &tris, &c2, 36, 0.0);
+        assert!((dt2[0] - len[0] / (50.0 / 3.0)).abs() < 1e-9 * dt2[0]);
+        assert!(dt2[0] < len[0] / 10.0);
     }
 }

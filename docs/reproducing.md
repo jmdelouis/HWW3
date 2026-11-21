@@ -208,6 +208,44 @@ python scripts/plot_run_diff.py runs/natl_v4_jan2026_bnd/ww3.202601.nc "v4 impli
   runs/natl_v4_jan2026_exp/ww3.202601.nc "v4 explicit" grids/natl_v4/raw/tri.u32 natl_v4_jan2026_exp_diff.png 3
 ```
 
+### Grid v5 (explicit sub-steps capped)
+
+Grids with at most 5 and 4 explicit sub-steps (about 20 min each for 10
+builds), their explicit cost, and 7-day runs with both schemes:
+
+```bash
+S=/home1/scratch/jmdeloui/HWW3
+for k in 5 4; do
+  G=grids/natl_v5k$k
+  J=$(qsub -v R=$S,CFG=configs/natl_v5k${k}_datarmor.json,GRID=$G -o $S/logs/grid_v5k$k.log scripts/natl_grid.pbs)
+  qsub -W depend=afterok:$J -v R=$S,GRID=$G,NAME=natl_v5k$k -o $S/logs/xcost_v5k$k.log scripts/natl_explicit_cost.pbs
+  J1=$(qsub -W depend=afterok:$J -v R=$S,BETAMAX=1.75,RUN=natl_v5k${k}_jan2026_cur,GRID=$G scripts/natl_v2_setup.pbs)
+  J2=$(qsub -W depend=afterok:$J1 -v "R=$S,SRC=natl_v5k${k}_jan2026_cur,RUN=natl_v5k${k}_jan2026_bnd,GRID=$G,STOP=20260108 000000" scripts/natl_bnd_setup.pbs)
+  J3=$(qsub -W depend=afterok:$J2 -v "R=$S,SRC=natl_v5k${k}_jan2026_bnd,CUR=natl_v5k${k}_jan2026_cur,RUN=natl_v5k${k}_jan2026_exp,GRID=$G,STOP=20260108 000000" scripts/natl_exp_setup.pbs)
+  qsub -W depend=afterok:$J3 -v R=$S,RUN=natl_v5k${k}_jan2026_exp scripts/natl_v2_run.pbs
+  qsub -W depend=afterok:$J2 -v R=$S,RUN=natl_v5k${k}_jan2026_bnd scripts/natl_v2_run.pbs
+done
+```
+
+Scores on the window of the grid-v4 explicit run, the cells made coarser
+and the differences with grid v4 (run v4 interpolated on the v5 nodes):
+
+```bash
+for k in 5 4; do for s in bnd exp; do
+  VAL_END=2026-01-07T21:00 python scripts/validate_altimetry.py runs/natl_v5k${k}_jan2026_$s/ww3.202601.nc \
+    grids/natl_v5k$k/plot/nodes.npz runs/natl_v5k${k}_jan2026_$s/val/natl_v5k${k}_jan2026_$s
+done; done
+VAL_MIN_HOURS=48 python scripts/validate_buoys.py runs/natl_v5k4_jan2026_exp/val/buoys \
+  v4imp:runs/natl_v4_jan2026_bnd/ww3.202601.nc:grids/natl_v4 \
+  v5k5imp:runs/natl_v5k5_jan2026_bnd/ww3.202601.nc:grids/natl_v5k5 v5k5exp:runs/natl_v5k5_jan2026_exp/ww3.202601.nc:grids/natl_v5k5 \
+  v5k4imp:runs/natl_v5k4_jan2026_bnd/ww3.202601.nc:grids/natl_v5k4 v5k4exp:runs/natl_v5k4_jan2026_exp/ww3.202601.nc:grids/natl_v5k4 \
+  v4exp:runs/natl_v4_jan2026_exp/ww3.202601.nc:grids/natl_v4      # the last run sets the hours
+python scripts/plot_level_change.py natl_v5_level_change.png grids/natl_v4 "grid v4" grids/natl_v5k5 "v5 K=5" \
+  grids/natl_v5k4 "v5 K=4" --buoys runs/natl_v5k4_jan2026_exp/val/buoys_stats.json v4imp v5k5imp v5k4imp --box -20 15 27 62
+DIFF_TRI_A=grids/natl_v4/raw/tri.u32 python scripts/plot_run_diff.py runs/natl_v4_jan2026_bnd/ww3.202601.nc "v4 implicit" \
+  runs/natl_v5k4_jan2026_bnd/ww3.202601.nc "v5 K=4 implicit" grids/natl_v5k4/raw/tri.u32 natl_v5k4_jan2026_diff.png 3
+```
+
 ### Altimeter validation
 
 ```bash

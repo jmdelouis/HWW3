@@ -77,6 +77,9 @@ the grade limit.
 | `slope_max_depth_m` | 0 | the slope criterion applies only shallower than this; 0 = all depths |
 | `min_depth_m` | 1 | floor of $h$ in the size functions; land samples count as this depth |
 | `smooth_km` | 0 | block size for averaging the bathymetry; 0 = half the finest cell size |
+| `cfl_substeps` | 0 | cap on the explicit sub-steps of the lowest frequency per `ww3.dtxy` (see [Algorithm](algorithm.md), section 10); 0 disables it |
+| `cfl_efficiency` | 0.8 | CFL length, in cell sizes, assumed by the cap during the refinement |
+| `cfl_passes` | 3 | largest number of builds used to remove the nodes still above `cfl_substeps` |
 
 ### `quality`
 
