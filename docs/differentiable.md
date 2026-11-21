@@ -1,0 +1,665 @@
+# Differentiable WW3 on GPU in Rust: design and cost
+
+*Design note, November 2026. Nothing described here is implemented yet.*
+
+The aim is the gradient of the misfit between the HWW3 WAVEWATCH III
+configuration and the observations already used for validation: along-track
+L3 altimeter $H_s$, and moored-buoy $H_s$ and $T_{m02}$. Gradients are
+needed with respect to the forcing and to the model parameters, so that the
+wave model can sit inside a learning chain: gradient-based calibration,
+learned corrections of the forcing, and hybrid physics/ML source terms
+trained end to end.
+
+The route chosen is a re-implementation in Rust of the HWW3 configuration
+of WW3, explicit scheme only, running on one GPU on the HEALPix triangle
+mesh, with derivatives. This note estimates what it costs to develop. The
+estimates use:
+
+- the WW3 source used by HWW3 (NOAA-EMC `develop`, commit `dea641c`),
+  measured routine by routine;
+- the runs of [Validation](validation.md);
+- a sub-domain computation made for this note.
+
+## Summary
+
+| Question | Answer |
+|---|---|
+| Scope | The HWW3 explicit configuration only: N scheme (`EXPFSN`), ST4, DIA (`NL1`), `LN1`, `DB1`, `BT4`, `MLIM`, ice as an obstruction (`IC0`), currents, sea level, open-boundary spectra, on the `hww3-grid` mesh, on one A100. |
+| Fortran to port | About 7,400 active lines (19,200 raw lines) out of the 259,054 lines of `model/src`. The physics (ST4, DIA, LN1, DB1, BT4, source integration) is 2,157 active lines; the propagation is 1,432. |
+| Smallest useful version | The forward model on GPU, validated against the Fortran explicit runs. Gradients with respect to a handful of parameters (`BETAMAX` first) then come from finite differences in double precision, with no AD code. |
+| Cost to that point (milestone M2) | 30–58 person-weeks for one developer who knows WW3, Rust and GPUs (central value about 40). For Jean-Marc with coding assistants writing most of the code: 11–31 weeks of his time (central value about 18). |
+| Cost to reverse mode for the fields (milestone M4) | 52–97 person-weeks for one developer (central value about 70). For Jean-Marc with assistants: 17–48 weeks (central value about 30). |
+| AD in Rust on GPU today | No tool differentiates Rust GPU kernels automatically. The kernels are written in CubeCL, with Burn for tensors and the tape. The adjoint of the propagation is written by hand: it is the transposed operator. The adjoints of the source terms are written by hand too, or the source terms are written as Burn tensor operations so that Burn differentiates them. `std::autodiff` (Enzyme) works on the CPU only and serves for reference derivatives. |
+| Expected speed | 40–550 s per model day on one A100 for grid v4, against 4,318 s for the Fortran explicit scheme on 112 cores: 8 to 100 times faster. The micro-benchmark of milestone M0 narrows this range. |
+| Biggest cost drivers | How faithful the ST4 port must be; hand-written adjoints of the source terms; debugging against the Fortran. |
+
+## 1. Scope
+
+**What is ported.** The configuration of the explicit runs
+(`scripts/natl_exp_setup.pbs`). The switches are those of
+`ww3/switch_hww3`:
+
+- `ST4` (wind input, whitecapping, swell dissipation);
+- `NL1` (DIA);
+- `LN1` (linear wind input);
+- `DB1` (Battjes–Janssen depth-induced breaking);
+- `BT4` (SHOWEX bottom friction);
+- `MLIM` (Miche limiter);
+- `IC0` (ice as an obstruction);
+- `WNT2` and `CRT1` (time interpolation of wind and currents);
+- `RWND` (wind taken relative to the current).
+
+The namelists split the explicit step into spatial propagation, refraction
+with frequency shift, and sources (`EXPFSN = T`, everything `IMP* = F`). The
+spectrum is 36 directions by 32 frequencies from 0.0373 Hz, with a 600 s
+global step. The mesh and its arrays come from `hww3-grid` (`raw/*`).
+
+`BT4` is the bottom friction and `DB1` the depth-induced breaking; both are
+ported.
+
+**What is left out:**
+
+- the MPI and PDLIB domain decomposition (one GPU holds the whole grid);
+- the implicit scheme;
+- other physics switches;
+- structured grids;
+- WW3 output formats other than hourly $H_s$ and $T_{m02}$ (plus spectra at
+  chosen points).
+
+**Reference timings.** The Fortran explicit scheme takes 4,318 s per model
+day on grid v4 (794,613 nodes) and 2,601 s on grid v5 $K=4$ (424,123
+nodes), both on 112 cores. The explicit runs scored as well as or better
+than the implicit ones:
+
+- altimeter bias −0.017 m instead of −0.031 m;
+- buoy $H_s$ RMSE 0.301 m instead of 0.310 m (252 buoys, 4–7 January).
+
+### 1.1 Controls
+
+| input or parameter | in the HWW3 runs | size per week (v4) | differentiable? |
+|---|---|---|---|
+| 10 m wind | ERA5 hourly 0.25°, put on the nodes by `ww3_prnc`, linear in time, taken relative to the current; enters ST4 through $u_*$ | $2.7 \times 10^8$ | yes, piecewise smooth (stress table) |
+| currents, sea level | Copernicus Marine hourly 1/12° plus FES2014: advection, Doppler shift, refraction, total depth | $2.7 \times 10^8$, $1.3 \times 10^8$ | yes; the explicit sub-cycling (an integer) stays fixed |
+| sea ice | `IC0` with `CICE0 = CICEN = 0.5` | – | no: a binary mask, kept fixed |
+| open-boundary spectra | 1,341 nodes every 3 h, rebuilt from six GLOBMULTI partitions by `scripts/boundary_spectra.py` | $3.8 \times 10^8$ values, or $1.9 \times 10^6$ partition parameters | yes; partition parameters are the natural controls |
+| bathymetry | node depths | 794,613 | yes for a fixed mesh; low priority |
+| ST4 | `BETAMAX` 1.75, `ZALP` 0.006, `ALPHA0` 0.0095, `TAUWSHELTER` 0.3, `SWELLF*`, `SDSC2` $-2.2\times10^{-5}$, `SDSBR` $9\times10^{-4}$, `SDSCUM` −0.4 | `W3SIN4`, `W3SDS4`, stress tables `TAUHFT`, `TAUHFT2` | yes, if the tables are rebuilt inside the differentiated code (they depend on `BETAMAX`, `ZALP`, `ALPHA0`); the laminar/turbulent swell switch is a step |
+| DIA | `LAMBDA` 0.25, `NLPROP` $2.5\times10^7$, `KDCONV`, `KDMIN`, `SNLCS1–3` | `W3SNL1` | yes, except `LAMBDA`, which sets the interpolation indices |
+| DB1, BT4 | `BJALFA` 1, `BJGAM` 0.73; `RIPFAC1–4`, $D_{50}$ 0.2 mm | `W3SDB1`, `W3SBT4` | piecewise (branches, Shields threshold) |
+
+Values are those of `runs/natl_v4_jan2026_cur/ww3_grid.out`.
+
+The one sensitivity measured so far is the change of `BETAMAX` from 1.43 to
+1.75. It moved the altimeter bias from −0.225 to +0.005 m (331,154 blocks),
+about 7 cm per 0.1.
+
+**Non-smooth points.** These exist whatever the tool:
+
+- the per-frequency sub-cycling count (fixed);
+- the dynamic source step and the action limiter, $\Delta N_{\max} \propto
+  \mathrm{FACP}/(\sigma k^3)$ (the backward pass freezes the step count of each
+  node);
+- $\max(0, N)$;
+- the third-order limiter of the spectral advection (`W3KTP3`), which is
+  replaced by first-order upwind on the differentiated path if it gets in
+  the way;
+- the branches of ST4, DB1 and BT4.
+
+## 2. Development cost
+
+### 2.1 Size of the Fortran to port
+
+`scripts/ww3_loc.py` preprocesses each WW3 file with `cpp` and
+`-DW3_<switch>` for every switch of `ww3/switch_hww3`. It then counts the
+non-blank, non-comment lines of each routine; declarations and continuation
+lines are included. Raw lines are those between `SUBROUTINE` and
+`END SUBROUTINE` in the source. With the HWW3 switches the whole `model/src`
+has 104,908 active lines out of 259,054 raw.
+
+| component | WW3 routines | raw / active lines |
+|---|---|---|
+| mesh geometry, boundary flags | `PDLIB_INIT`, `PDLIB_MAPSTA_INIT`, `PDLIB_IOBP_INIT`, `SET_IOBDP_PDLIB`, `SET_IOBPA_PDLIB`, `SET_UG_IOBP_PDLIB_INIT`, `SPATIAL_GRID`, `NVECTRI`, `COUNT`, `COORDMAX`, `AREA_SI`, `SET_IOBP`, `SET_UG_IOBP`, `GET_BOUNDARY` | 2,077 / 848 |
+| geographic propagation (N scheme, sub-cycling) | `PDLIB_W3XYPUG`, `PDLIB_W3XYPFSN2` | 574 / 224 |
+| spectral propagation (refraction, frequency shift) | `W3KTP3`, `W3QCK1`, `W3QCK2`, `UG_GRADIENTS` | 1,318 / 360 |
+| ST4 | `W3SPR4`, `W3SIN4`, `CALC_USTAR`, `W3SDS4` | 1,604 / 737 |
+| ST4 tables | `INSIN4`, `TABU_STRESS`, `TABU_TAUHF`, `TABU_TAUHF2` | 778 / 356 |
+| DIA | `W3SNL1`, `INSNL1` | 663 / 261 |
+| LN1 | `W3SLN1` | 156 / 32 |
+| DB1 | `W3SDB1` | 287 / 97 |
+| BT4 | `INSBT4`, `TABU_ERF`, `W3SBT4` | 455 / 149 |
+| source integration, limiter, MLIM | `W3SRCE` | 2,223 / 525 |
+| forcing, ice, boundary spectra | `W3UWND`, `W3UCUR`, `W3ULEV`, `W3UICE`, `W3UBPT`, `W3IOBC` | 2,403 / 640 |
+| interpolation of the forcing on the nodes | `ww3_prnc` | 2,698 / 1,487 |
+| outputs (all fields) | `W3OUTG` | 1,180 / 665 |
+| time loop | `W3WAVE` | 2,769 / 1,039 |
+| total | | 19,185 / 7,420 |
+
+The active count still holds code that the Rust port does not need:
+
+- MPI and parallel bookkeeping;
+- the many output fields of `W3OUTG`, of which $H_s$ and $T_{m02}$ need
+  about 50 lines;
+- the general file handling of `ww3_prnc`, which reduces to bilinear
+  weights and a netCDF reader.
+
+The `hww3-grid` crate (3,828 lines of Rust) already provides much of the
+setup:
+
+- the mesh and its NESTED ids (`cdshealpix`);
+- the WW3 group speed;
+- the explicit time step of each node, computed like `PDLIB_W3XYPFSN2`
+  (`cfl.rs`), from which the sub-cycling per frequency follows.
+
+### 2.2 Effort per component
+
+A person-week is a week of focused work by someone who knows the WW3
+physics, Rust and GPU programming. Each figure includes the unit tests
+against the Fortran. The *forward* column covers the GPU forward model. The
+*derivatives* column covers tangent and adjoint kernels, with hand-written
+adjoints of fused kernels.
+
+| component | forward (pw) | derivatives (pw) | notes |
+|---|---|---|---|
+| mesh, geometry, boundary flags | 1–2 | 0 | reuses `hww3-grid`; node-to-triangle lists in compressed sparse rows for the GPU |
+| geographic propagation | 2–3 | 2–3 | per-frequency sub-cycling, open-boundary values, coastal no-inflow masks; the adjoint is the transposed sweep (1 pw); derivatives with respect to depth and currents need the sub-step states (1–2 pw) |
+| spectral propagation | 2–4 | 1–3 | 1 pw with first-order upwind (linear, transposed); 3 pw to keep the WW3 limiter |
+| ST4 and its tables | 6–11 | 5–10 | the largest item: $u_*$ iteration, tail-stress tables, swell dissipation, saturation, cumulative term on GPU; tables rebuilt in the differentiated code for `BETAMAX` |
+| DIA | 1–2 | 1 | fixed gathers and scatters; the adjoint swaps them |
+| LN1 | 0.5 | 0.2 | |
+| DB1 | 0.5–1 | 0.5 | |
+| BT4 | 1–2 | 1 | analytic erf instead of the table |
+| source integration, limiter, MLIM | 2–3 | 1–2 | dynamic step per node; the backward pass replays the recorded step count |
+| forcing, ice, boundary spectra, restart reader | 3–5 | 0.5–1 | netCDF, bilinear weights, time interpolation, relative wind; WW3 restart files as initial state |
+| outputs $H_s$, $T_{m02}$ with the tail | 0.5–1 | 0.3 | |
+| time loop, splitting, configuration | 2–3 | 2–3 | checkpointing driver (revolve), cotangents injected at the output times |
+| observation operators | 1–2 | 0.3 | the matching of the validation scripts as sparse matrices (section 7) |
+| PyTorch bridge | 1–2 | 1 | PyO3 and DLPack, the model wrapped as a `torch.autograd.Function` for FOSCAT and the networks |
+| GPU performance work | 2–4 | 1–2 | |
+| total | 25–46 | 17–28 | |
+
+The Rust code would be about 5,000–7,000 lines for the forward model,
+2,500–4,000 for the derivatives and 2,000–3,000 for the tests.
+
+With the source terms written as Burn tensor operations instead of fused
+kernels, Burn's tape differentiates them. That replaces 9–15 pw of
+hand-written adjoints (ST4, DIA, LN1, DB1, BT4, integration) by 2–3 pw of
+glue, so the derivatives column becomes 10–17 pw. The price:
+
+- unfused operations make the source terms 3–10 times slower;
+- the tape of one source evaluation holds tens of state-sized arrays, so
+  the nodes must be processed in chunks;
+- the per-node dynamic step of WW3 becomes a fixed number of sub-steps,
+  which departs from the Fortran.
+
+### 2.3 Validation
+
+| item | pw | compute |
+|---|---|---|
+| Fortran unit harness: drive `W3SIN4`, `W3SDS4`, `W3SNL1`, `W3SDB1`, `W3SBT4`, `W3SRCE` on spectra read from restart files and dump the tendencies | 1–2 | minutes |
+| propagation-only Fortran runs: sources off (`RUN%FLSOU = F` in `ww3_grid.nml`), from `restart001.ww3` of the grid v5 $K=4$ explicit run (8 January 00 h), 48 h; an idealised swell from `ww3_strt`; comparison tools | 1–2 | under 300 core-hours |
+| full runs against the existing explicit runs, and debugging | 3–8 | GPU only. The references are on scratch: `runs/natl_v5k4_jan2026_exp` (hourly $H_s$, $T_{m02}$, 1–8 January, restart at 8 January) and `runs/natl_v4_jan2026_exp` (PBS job 7951889, 1 January – 7 January 21 h) |
+| gradient checks (section 6) | 2–4 | Fortran finite differences: 3,000–6,000 core-hours |
+| total | 7–16 | |
+
+Debugging is the least predictable item. Typical causes are races in the
+scatter of the N scheme, the order of the split steps, the boundary flags,
+and single-precision accumulation.
+
+### 2.4 Totals
+
+| scenario | to M2: GPU forward model, finite-difference gradients | to M4: reverse mode for the fields |
+|---|---|---|
+| one developer (WW3, Rust, GPU), hand-written adjoints | 30–58 pw (7–13 months); central value about 40 | 52–97 pw (12–22 months); central value about 70 |
+| same, with Burn tensor operations for the source terms | same | 46–86 pw |
+| Jean-Marc directing coding assistants (his own time) | 11–31 pw; central value about 18 | 17–48 pw; central value about 30 |
+
+The assistant scenario assumes the following share of Jean-Marc's time
+compared with the solo estimate:
+
+- 25–40 % on coding tasks: porting Fortran routines that a unit harness
+  checks, writing kernels, adjoints and tests, where assistants write most
+  of the code and he reviews it;
+- 60–80 % on validation, debugging, GPU tuning and physics decisions.
+
+Calendar time depends on his availability. At half time, M2 takes roughly
+5–14 months and M4 8–22 months.
+
+### 2.5 What moves the range
+
+- **Fidelity to ST4.** A port of every active branch, with the tail-stress
+  tables, the swell-dissipation switch and the cumulative term, is the upper
+  end. A simplified ST4 (analytic tail stress, no cumulative term) saves
+  4–6 pw. It loses agreement with WW3 at the centimetre level, so validation
+  could then only be against observations. Not recommended: the comparison
+  with the Fortran runs is the cheapest debugger available.
+- **AD route.**
+  - Stopping at forward mode (finite differences or tangent kernels for at
+    most about 20 parameters) removes M4, 18–32 pw. It gives no gradients
+    with respect to the fields.
+  - Burn tensor operations for the source terms save 6–11 pw against fused
+    hand-written adjoints, at a cost in speed, memory and fidelity.
+  - GPU Enzyme through `std::autodiff` and `std::offload` would remove most
+    hand-written adjoints. As far as could be found, offload is not yet in
+    nightly Rust for NVIDIA GPUs; re-assess at M3.
+- **Sharing of the work.** Coding assistants cut Jean-Marc's time by a
+  factor of 2–3. Validation and physics judgement stay with him.
+- **Scope.** Not included, each costing extra:
+  - multi-GPU, needed for reverse mode on grid v4 at 36 × 32 without
+    host-memory snapshots: +2–4 pw;
+  - the implicit scheme with its adjoint by the implicit function theorem
+    (one transposed solve per step): +6–10 pw;
+  - other physics switches.
+
+## 3. Automatic differentiation in Rust on GPU (November 2026)
+
+| tool | state | use here |
+|---|---|---|
+| Burn 0.22 with the CubeCL backends | Tape-based reverse mode over tensor operations (`Autodiff<B>`). Balanced gradient checkpointing is available. Custom CubeCL kernels are opaque to the tape and need a hand-written backward. CUDA, ROCm, Vulkan and WebGPU. | tensors and tape; custom kernels for the propagation (hand backward); source terms either as tensor operations (automatic backward) or as fused kernels (hand backward) |
+| CubeCL | Rust GPU kernels (`#[cube]`), compiled just in time to CUDA, HIP or WGSL, generic over the float type (f32 or f64) | language of all kernels |
+| `std::autodiff` (Enzyme) | Nightly Rust: `rustup component add enzyme`, `lto = "fat"`, `-Zautodiff=Enable`; experimental, CPU. `std::offload` (GPU) is planned but was not confirmed in nightly. | reference derivatives of the per-node source functions in plain Rust on the CPU, to test the hand-written GPU adjoints |
+| `rustc_codegen_nvvm` (Rust-CUDA) | Rebooted in 2025, pinned nightly, last crates.io release 2022 | not recommended |
+| NVIDIA CUDA Rust: `cuda-oxide` (SIMT) and `cutile-rs` (tiles) | Announced September 2026, experimental. `cuda-oxide` 0.3 (October 2026) needs a pinned nightly and CUDA 12 or later; `cutile-rs` needs CUDA 13.3 (Datarmor modules stop at CUDA 12.1). Both need compute capability 8.0 (A100). | a later option for kernels in ordinary generic Rust, where dual numbers would work |
+| `cudarc` with CUDA C kernels (NVRTC) | Stable and widely used | fallback if CubeCL is too limiting |
+
+**What must be written by hand, in every option:**
+
+- **The adjoint of the geographic propagation.**
+  - For fixed velocities the N scheme is linear in $N$:
+    $N^{m+1} = L_c N^m$ for each component $c$. The $I_c$ sub-steps of a
+    600 s step use the same $L_c$, so the adjoint is $(L_c^T)^{I_c}$. It is
+    the same triangle loop with gather and scatter swapped, and it needs no
+    stored sub-steps. Dot-product tests check it to machine precision.
+  - Derivatives with respect to depth, sea level and currents go through
+    $c_g$ and need the sub-step states, which are recomputed per frequency.
+- **The adjoint of the spectral propagation.** It is linear and transposed
+  with first-order upwind; the WW3 limiter needs its own adjoint.
+- **The time-loop driver.** It handles binomial checkpointing over the
+  1,008 steps of 7 days, the cotangents of the observations at the hourly
+  outputs, and the recorded per-node source step counts.
+- **The source-term adjoints**, if they are fused kernels. They are local to
+  each node, so they are the classical case for hand derivation. Their
+  forward-mode counterparts are mechanical and come first.
+
+**Forward mode for parameters.**
+
+- Finite differences in double precision on the GPU cost no code: CubeCL
+  kernels are generic over f64. For $p$ parameters they need $p+1$ forward
+  runs.
+- Tangent kernels give the exact directional derivative in one run with
+  $p$ tangent lanes and need no checkpointing.
+- Dual numbers carried by generic kernels would avoid writing tangent
+  kernels, but need a kernel language that accepts a user-defined number
+  type: ordinary Rust through `cuda-oxide`, or a CubeCL custom type, which
+  is not verified. Hand-written tangent kernels cost about half of the
+  forward effort of the source terms.
+
+**Reverse mode for the fields** (wind at every node and time step) is the
+only way to get gradients with respect to $10^8$ controls. It needs the
+adjoints above and checkpointing (section 5).
+
+## 4. Expected speed
+
+All estimates assume one A100 80 GB, single precision and fused kernels.
+The A100 has a peak bandwidth of 2.0 TB/s; the estimates take 1.0 TB/s as
+the effective bandwidth for gather-heavy kernels, and 8 TFLOP/s of FP32
+(19.5 peak).
+
+| per 600 s step, grid v4 | work | time |
+|---|---|---|
+| geographic propagation | $\sum_f \max_\theta I = 110$ frequency sweeps × 794,613 nodes × about 800 B (row of 36 directions read and written, neighbour rows, coefficients) = 70 GB | 0.07 s |
+| spectral propagation | about four passes over the state, 30 GB | 0.03 s |
+| one source evaluation | about $1.5 \times 10^6$ flop per node, dominated by the ST4 cumulative term (a matrix product over the lower frequencies, circulant in direction) = 1.2 TFLOP | 0.15 s |
+| sources | 1 to 4 evaluations per step on average (WW3's dynamic step) | 0.15–0.6 s |
+| total | | 0.25–0.7 s, i.e. 40–100 s per model day |
+
+A second estimate scales the measured WAM6-GPU timing (Yuan et al. 2024):
+65.2 s per model day on eight A100 for 2,923,286 grid points with
+24 directions × 25 frequencies, a 43 s propagation step and a 5 min source
+step. That is 522 A100-seconds per model day. Per model day, grid v4 needs:
+
+- 0.12 times the WAM6 propagation work: 460 full-state sweeps of
+  $9.15 \times 10^8$ values, against 2,009 steps of $1.75 \times 10^9$;
+- 0.26 to 1.05 times its source work: 144 to 576 evaluations against 288.
+
+Depending on how the WAM6-GPU time splits between propagation and sources
+(not given in its text), this gives 60–550 s per model day.
+
+**Result.**
+
+- **Grid v4:** 40–550 s per model day on one A100, against 4,318 s for the
+  Fortran explicit scheme on 112 cores: 8–100 times faster.
+- **Grid v5 $K=4$:** about half of the v4 figure (fewer nodes, 83 frequency
+  sweeps instead of 110), against 2,601 s.
+- **The lower end** is reached with fused kernels and one or two source
+  evaluations per step.
+- **Burn tensor operations for the sources** put the speed-up nearer to the
+  upper bound of 550 s per model day.
+- **A 7-day forward run on grid v5 $K=4$** should take between 2 and
+  30 minutes.
+
+## 5. Memory and checkpointing
+
+| configuration | values per state | single precision | all 1,008 steps of 7 days |
+|---|---|---|---|
+| grid v4, 36 × 32 | $9.15 \times 10^8$ | 3.66 GB | 3.7 TB |
+| grid v5 $K=4$, 36 × 32 | $4.89 \times 10^8$ | 1.95 GB | 2.0 TB |
+| grid v5 $K=4$, 24 × 30 | $3.05 \times 10^8$ | 1.22 GB | 1.2 TB |
+| Channel–Biscay box (v4), 36 × 32 | $2.47 \times 10^7$ | 0.099 GB | 100 GB |
+
+**Forward model.** The state, the forcing of two hours and the coefficients
+take 10–15 GB on grid v4, so the forward model fits easily.
+
+**Reverse mode.** Binomial checkpointing (revolve) with $s$ snapshots over
+$n = 1{,}008$ steps uses the smallest $r$ with $\binom{s+r}{s} \ge n$ and
+needs $r\,n - \binom{s+r}{r-1}$ forward steps:
+
+| snapshots $s$ | $r$ | forward steps / $n$ | v4 36 × 32 | v5 $K=4$ 36 × 32 |
+|---|---|---|---|---|
+| 8 | 5 | 4.29 | 29 GB | 16 GB |
+| 15 | 4 | 3.04 | 55 GB | 29 GB |
+| 30 | 3 | 2.48 | 110 GB | 59 GB |
+
+The working set of one step is 3–6 states. Grid v4 at 36 × 32 therefore
+reaches about 75 GB with 15 snapshots: at the limit. It needs 8 snapshots,
+snapshots in host memory (3.66 GB over PCIe in about 0.15 s, overlapped with
+the next step), or two GPUs. Grid v5 $K=4$ fits with 15–30 snapshots.
+
+A gradient costs about 3 recomputations plus a backward pass of about twice
+a forward run, i.e. 5–6 forward runs: 10 min to 3 h on grid v5 $K=4$ for
+7 days.
+
+### Test case: the Channel–Biscay box
+
+`scripts/subdomain.py` keeps the triangles of grid v4 with all three nodes
+in 13°W–2.5°E, 42.5°–51.5°N (PBS job 7963807); `scripts/explicit_cost.py`
+then gives the sweeps per step:
+
+```bash
+python scripts/subdomain.py grids/natl_v4 sub_v4 -13 2.5 42.5 51.5
+python scripts/explicit_cost.py sub_v4 sub_v4_cost "v4 Channel-Biscay 36x32"
+python scripts/subdomain.py grids/natl_v4 sub_v4_s2430 -13 2.5 42.5 51.5 30 24   # 30 frequencies, 24 directions
+python scripts/explicit_cost.py sub_v4_s2430 sub_v4_s2430_cost "v4 Channel-Biscay 24x30"
+```
+
+| | grid v4 | grid v5 $K=4$ |
+|---|---|---|
+| nodes (nside 128 / 256 / 512 / 1024 / 2048) | 21,425 (19 / 281 / 1,211 / 5,211 / 14,703) | 11,492 (19 / 281 / 1,211 / 8,558 / 1,423) |
+| triangles | 41,313 | 21,796 |
+| open-boundary / coastal boundary nodes | 195 / 1,358 | 146 / 1,050 |
+| $S$ per 600 s step, 36 × 32 (ITER at 0.0373 Hz) | 3,080 (8) | 2,619 (5) |
+| $S$ per 600 s step, 24 × 30 | 2,006 | 1,698 |
+
+The box holds 58 of the 268 buoys (46 Channel and Biscay, 9 southern North
+Sea, 3 Celtic Sea; 49 with $T_{m02}$). This is where the buoy errors are
+largest ($H_s$ RMSE 0.535 m, $T_{m02}$ RMSE 1.436 s with the tide) and the
+tidal currents strongest. A state takes 99 MB, so a 7-day trajectory needs
+no special checkpointing.
+
+Its boundary spectra come from a full-domain run with point output at the
+195 nodes. Since the swell enters through the boundary, the box tests the
+local wind sea and the coastal physics. It is the development and
+gradient-check case; calibrating `BETAMAX` needs the whole domain.
+
+## 6. Validation and gradient checks
+
+**Forward.**
+
+1. **Kernels.** Each kernel is checked against the Fortran routine on the
+   same spectra, through the unit harness (section 2.3).
+2. **Propagation alone.** Starting from `restart001.ww3` of the grid v5
+   $K=4$ explicit run, with sources off (`RUN%FLSOU = F`), the GPU model is
+   run for 48 h with the same currents, sea level and boundary spectra.
+   Targets: $H_s$ RMS difference below 1 cm at the median node and 5 cm at
+   the 99th percentile, total energy within 0.5 %.
+3. **With sources.** The GPU model is compared with the explicit runs
+   already on scratch (grid v5 $K=4$, 1–8 January; grid v4, 1 January –
+   7 January 21 h).
+   - Target: a node-by-node difference below the WW3 explicit-minus-implicit
+     difference on grid v4 (2.1 cm at the median node, 20 cm at the 99th
+     percentile).
+   - The altimeter and buoy scores of `validate_altimetry.py` and
+     `validate_buoys.py` must stay within 5 mm.
+
+**Gradients.**
+
+1. **Dot-product tests** for each linear kernel and its adjoint,
+   $\langle L\,\delta x, \bar y\rangle = \langle \delta x, L^T\bar y\rangle$.
+2. **Tangent against finite differences** of the GPU model in double
+   precision, for `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM` and a wind factor.
+3. **Taylor test** of the reverse mode on the box in double precision:
+   $|J(x+\varepsilon d) - J(x) - \varepsilon\, g\cdot d|$ must fall as
+   $\varepsilon^2$ over three decades.
+4. **Comparison with WW3.** Central finite differences of Fortran runs,
+   with two step sizes and the noise floor of a repeated run:
+   - for parameters, the parameter is perturbed;
+   - for fields, a smooth wind perturbation (one nside-32 cell over the Bay
+     of Biscay, 6 h) is added to `wind.nc` before `ww3_prnc`. The WW3
+     `WCOR` correction is not compiled in.
+
+   The comparison uses the response of every buoy-hour and altimeter block,
+   not only $J$. Target: correlation above 0.9 and regression slope within
+   20 %.
+5. **Large step.** The measured `BETAMAX` change from 1.43 to 1.75 shows
+   how far the linearisation holds.
+
+## 7. Observation operators
+
+The validation scripts define linear operators on the hourly fields:
+
+- **Altimetry.** In `validate_altimetry.py`, each sample takes the nearest
+  wet, ice-free node within 0.75 pixel and is interpolated linearly in time;
+  blocks are means of 7 samples. This gives a fixed sparse matrix
+  $\mathbf{A}$ with at most 14 non-zeros per row: 45,493 rows over 4–7
+  January on grid v4, 328,902 over 4–31 January.
+- **Buoys.** In `validate_buoys.py`, each buoy takes the nearest wet node
+  within 10 km and the hourly bins: matrices $\mathbf{B}$ for $H_s$ (268
+  buoys, 167,298 hours) and $\mathbf{B}'$ for $T_{m02}$ (180 buoys, 113,744
+  hours).
+
+$H_s = 4\sqrt{m_0}$ and $T_{m02} = \sqrt{m_0/m_2}$, with the tail of
+`W3OUTG`. Their derivatives are
+
+$$
+\frac{\partial H_s}{\partial E_{kj}} = \frac{8}{H_s}\,w_{kj}, \qquad
+\frac{\partial T_{m02}}{\partial E_{kj}} = \frac{T_{m02}}{2}\Big(\frac{1}{m_0} - \frac{f_k^2}{m_2}\Big) w_{kj}.
+$$
+
+The loss is a weighted sum of squares, or a Huber loss, with the known
+exclusions: the nine buoys whose $T_{m02}$ RMSE exceeds 3 s. The matching is
+computed once and stays fixed. A test applies the matrices to the stored
+`ww3.202601.nc` and must reproduce `results/natl_v4_jan2026_tide_*_stats.json`.
+
+A week holds about 85,000 observations against $2.7 \times 10^8$ wind
+values, so corrections of the forcing must be low-dimensional (section 8).
+
+## 8. HEALPix structure for learned corrections
+
+Every node is a NESTED pixel $(d_i, p_i)$ (`raw/uniq.u64`, `raw/level.u8`).
+A field $c$ on a uniform NESTED map at depth $d_c$ reaches the nodes through
+an exact sparse operator: the parent value
+$c[p_i \gg 2(d_i - d_c)]$ for nodes finer than $d_c$, and the mean of the
+$4^{d_c-d_i}$ children for coarser nodes. Only integer shifts are involved:
+there is no interpolation, and the transpose brings node gradients back to
+the map.
+
+The wet domain covers 9.9 % of the sphere: 78,000 pixels at nside 256 (the
+ERA5 scale) and $5.0 \times 10^6$ at nside 2048 (20 MB per field). Even
+coastal-scale corrections can therefore be computed on uniform maps.
+
+- **Multi-scale fields.** $\delta u = \sum_l P_l\,c_l$ with penalties
+  growing with the level: about $4 \times 10^6$ coefficients per week from
+  nside 16 to 256 at 6-hourly knots, instead of $2.7 \times 10^8$.
+- **Learned corrections.** FOSCAT operators on the uniform map
+  (convolutions on the pixel and its eight neighbours, NESTED 4-to-1
+  pooling, `HealpixUNet`), mapped to the nodes by $P$, through the PyTorch
+  bridge of section 2.2.
+- **Statistical prior.** The scattering covariance of FOSCAT can keep the
+  multi-scale statistics of the corrected wind close to those of ERA5 or of
+  scatterometer winds.
+- **Spectral corrections** (hybrid source terms) act per node along the
+  spectral axes: circular convolutions in $\theta$, conditioned on $u_*$,
+  $kd$ and the wave age, with zero net energy and momentum for a correction
+  of $S_{nl}$.
+
+## 9. Staged plan with go/no-go milestones
+
+| milestone | content | go if | pw (one developer) |
+|---|---|---|---|
+| M0 | Rust, CubeCL and Burn on a Datarmor A100; N-scheme sweep and its transpose on grids v4 and v5 $K=4$ with the sub-cycling of `cfl.rs` | a frequency sweep on grid v4 within twice the bandwidth estimate (about 1.3 ms); dot-product test passes; the toolchain builds on the GPU nodes. Otherwise switch the kernels to `cudarc` and CUDA C | 1–2 |
+| M1 | propagation-only model: geographic and spectral propagation, depth, currents, sea level, boundary spectra, ice mask, restart reader | the propagation-only targets of section 6 | 10–18 |
+| M2 | full forward model: ST4 and its tables, DIA, LN1, DB1, BT4, integration and limiter, outputs, observation operators | the targets with sources of section 6, and at least 10 times the Fortran explicit speed (under 430 s per model day on grid v4). **First useful gradients:** finite differences in double precision for `BETAMAX` and a few parameters, at GPU speed | 19–38 |
+| M3 | tangent kernels for parameters (sources and stress tables) | agreement with the double-precision finite differences to $10^{-4}$ where the model is smooth | 4–7 (optional) |
+| M4 | reverse mode for the fields: adjoint kernels, revolve driver, adjoint of the observation operators, PyTorch bridge | the Taylor test and the comparison with WW3 of section 6; one wind gradient over 7 days on grid v5 $K=4$ in under 3 h | 18–32 (hand-written adjoints) or 12–21 (Burn source terms) |
+| M5 | learning: HEALPix wind corrections, then hybrid source terms | an independent month improves | open |
+
+Two decision points follow from the plan:
+
+- **After M2,** decide whether gradients with respect to the parameters
+  (finite differences or M3) are enough for the first scientific results.
+- **Before M4,** choose between hand-written fused adjoints and Burn tensor
+  operations for the source terms, based on the M0 and M2 timings.
+
+## 10. Other routes, briefly
+
+| route | effort | why not the main route |
+|---|---|---|
+| Tapenade or Enzyme on the Fortran | 6–12 person-months for a specialist | pointer aliasing of the WW3 data modules, MPI halo exchanges, Enzyme needs LLVM Flang (assumed-shape arrays not supported); the adjoint runs on CPU at 3–10 forward runs per gradient (12–40 h on 112 cores for 7 days on grid v4) |
+| the same twin in PyTorch or JAX | about 20–30 % less than the Rust route, mostly in the adjoints, which the framework provides | slower kernels and more memory for the same model; the Rust route keeps one language with `hww3-grid` and full control of the kernels |
+| neural emulator of WW3 | 2–4 person-months plus many training runs | Jacobians not trustworthy for forcing corrections; useful as a component (for example an $S_{nl}$ network) |
+| finite differences and ensembles with the Fortran | days | at most about 20 scalars, 263 core-hours per 8-day run on grid v5 $K=4$; still worth running now, as reference gradients |
+
+**Implicit scheme.** If the implicit scheme were kept: with
+`JGS_SOURCE_NONLINEAR = F`, each step solves a linear system
+$A(N^n, F, \theta)\,N^{n+1} = b(N^n, F, \theta)$. The sources are
+linearised once per step in `CALCARRAY_JACOBI_SOURCE_2`. Its adjoint is one
+transposed solve per step, by the implicit function theorem (Christianson
+1994; Giles and Pierce 2000), not the derivative of the block Gauss–Seidel
+iterations. On a GPU, though, the explicit scheme costs fewer sweeps: 3.2
+full-spectrum sweeps per step on grid v4.
+
+## 11. Prior work
+
+The literature search of November 2026 found:
+
+- **No WAVEWATCH III adjoint.** Only a tangent-linear model exists, at the
+  Naval Research Laboratory (Orzech et al. 2025).
+- **No end-to-end differentiable phase-averaged wave model**, and no hybrid
+  wave model trained through its solver.
+- **No complete GPU port of WW3.**
+
+Earlier work worth knowing:
+
+- **Wave-model adjoints.**
+  - Hersbach (1998) generated the adjoint of the full WAM from its Fortran
+    and estimated source-term parameters (weaker wind input and
+    whitecapping).
+  - de las Heras et al. (1995) and Bauer et al. (1996) corrected the wind.
+  - SWAN adjoints use the boundary spectrum or the wind as controls
+    (Veeramony et al. 2010; Orzech et al. 2013, 2014; Muscarella
+    et al. 2021).
+  - Panteleev et al. (2015) did adjoint-free 4D-Var.
+  - WW3 parameters have been calibrated without adjoints (Timmermans 2015;
+    Goeury et al. 2026; Li et al. 2026). Green's functions calibrate ocean
+    models in the same spirit (Menemenlis et al. 2005).
+- **Algorithmic differentiation.**
+  - TAF and Tapenade adjoints of MITgcm (Giering and Kaminski 1998;
+    Heimbach et al. 2005; Hascoët and Pascual 2013; Gaikwad et al. 2025).
+  - NEMOTAM (Vidard et al. 2015).
+  - Enzyme (Moses and Churavy 2020; Moses et al. 2021, 2022).
+  - Differentiable Earth-system models in Julia (Moses et al. 2026) and JAX
+    (Häfner et al. 2021; Kochkov et al. 2024).
+  - Revolve (Griewank and Walther 2000).
+  - Implicit differentiation (Christianson 1994; Giles and Pierce 2000;
+    Blondel et al. 2022).
+- **GPU wave models.**
+  - The OpenACC port of the WW3 source terms was limited by CPU–GPU
+    transfers (Ikuyajolu et al. 2023).
+  - WAM6-GPU runs 7 days of a global 1/10° model in 7.6 min on eight A100,
+    37 times a 32-core node, in single precision (Yuan et al. 2024).
+- **Machine learning.**
+  - $S_{nl}$ networks: Krasnopolsky et al. 2002; Tolman et al. 2005;
+    Puscasu 2014; Chen et al. 2025; NLML, which runs inside WW3 through
+    FTorch (Ikuyajolu et al. 2026).
+  - Data-driven forecasts (James et al. 2018; Zhang et al. 2025; Wang
+    et al. 2025) and output bias correction (Sun et al. 2022).
+  - Adjoints of networks (Hatfield et al. 2021).
+- **HEALPix networks.** Perraudin et al. 2019; Krachmalnicoff and Tomasi
+  2019; Karlbauer et al. 2024; Cresswell-Clay et al. 2025; Delouis
+  et al. 2022; FOSCAT, whose only active backend is PyTorch.
+
+### References
+
+- Bauer, E., Hasselmann, K., Young, I. R., Hasselmann, S. (1996). Assimilation of wave data into the wave model WAM using an impulse response function method. *J. Geophys. Res.* 101(C2), 3801–3816. doi:10.1029/95JC03306
+- Blondel, M., et al. (2022). Efficient and modular implicit differentiation. *NeurIPS* 35. arXiv:2105.15183
+- Burn, deep-learning framework in Rust, version 0.22 (custom CubeCL kernels with hand-written backward; gradient checkpointing). https://burn.dev
+- Chen, J., Adcock, T. A. A., Liu, Q., Clark, R., Tang, T. (2025). Machine learning approximation for fast and accurate prediction of nonlinear four-wave interactions in spectral wave models. *JGR Mach. Learn. Comput.* 3(1), e2025JH000864. doi:10.1029/2025JH000864
+- Christianson, B. (1994). Reverse accumulation and attractive fixed points. *Optim. Methods Softw.* 3(4), 311–326. doi:10.1080/10556789408805572
+- Cresswell-Clay, N., et al. (2025). DLESyM. *AGU Advances* 6, e2025AV001706. doi:10.1029/2025AV001706
+- CubeCL, GPU kernels in Rust. https://github.com/tracel-ai/cubecl
+- CUDA Rust (`cuda-oxide`, `cutile-rs`), NVIDIA, September 2026. https://developer.nvidia.com/cuda/rust
+- de las Heras, M. M., Burgers, G., Janssen, P. A. E. M. (1995). Wave data assimilation in the WAM wave model. *J. Mar. Syst.* 6(1–2), 77–85. doi:10.1016/0924-7963(94)00019-8
+- Delouis, J.-M., Allys, E., Gauvrit, E., Boulanger, F. (2022). Non-Gaussian modelling and statistical denoising of Planck dust polarisation full-sky maps using scattering transforms. *A&A* 668, A122. doi:10.1051/0004-6361/202244566
+- FOSCAT. https://github.com/jmdelouis/FOSCAT
+- Gaikwad, S. S., et al. (2025). MITgcm-AD v2: open source tangent linear and adjoint modeling framework for the oceans and atmosphere enabled by the AD tool Tapenade. *Future Gener. Comput. Syst.* 163, 107512. doi:10.1016/j.future.2024.107512
+- Giering, R., Kaminski, T. (1998). Recipes for adjoint code construction. *ACM Trans. Math. Softw.* 24(4), 437–474. doi:10.1145/293686.293695
+- Giles, M. B., Pierce, N. A. (2000). An introduction to the adjoint approach to design. *Flow Turbul. Combust.* 65, 393–415. doi:10.1023/A:1011430410075
+- Goeury, C., Fouquet, T., Teles, M., Benoit, M. (2026). Bayesian optimization for reanalysis and calibration of highly energetic sea state events simulated with a spectral third-generation wave model. *Appl. Ocean Res.* 173, 105144. doi:10.1016/j.apor.2026.105144
+- Griewank, A., Walther, A. (2000). Algorithm 799: revolve. *ACM Trans. Math. Softw.* 26(1), 19–45. doi:10.1145/347837.347846
+- Häfner, D., Nuterman, R., Jochum, M. (2021). Fast, cheap, and turbulent—global ocean modeling with GPU acceleration in Python. *JAMES* 13. doi:10.1029/2021MS002717
+- Hascoët, L., Pascual, V. (2013). The Tapenade automatic differentiation tool: principles, model, and specification. *ACM Trans. Math. Softw.* 39(3). doi:10.1145/2450153.2450158
+- Hatfield, S., Chantry, M., Dueben, P., Lopez, P., Geer, A., Palmer, T. (2021). Building tangent-linear and adjoint models for data assimilation with neural networks. *JAMES* 13, e2021MS002521. doi:10.1029/2021MS002521
+- Heimbach, P., Hill, C., Giering, R. (2005). An efficient exact adjoint of the parallel MIT general circulation model, generated via automatic differentiation. *Future Gener. Comput. Syst.* 21(8), 1356–1371. doi:10.1016/j.future.2004.11.010
+- Hersbach, H. (1998). Application of the adjoint of the WAM model to inverse wave modeling. *J. Geophys. Res.* 103(C5), 10469–10487. doi:10.1029/97JC03554
+- Ikuyajolu, O. J., Van Roekel, L., Brus, S. R., Thomas, E. E., Deng, Y., Sreepathi, S. (2023). Porting the WAVEWATCH III (v6.07) wave action source terms to GPU. *Geosci. Model Dev.* 16, 1445–1458. doi:10.5194/gmd-16-1445-2023
+- Ikuyajolu, O. J., Van Roekel, L., Brus, S. R., Thomas, E. E. (2026). NLML: a deep neural network emulator for the exact nonlinear interactions in a wind wave model. *JGR Mach. Learn. Comput.* 3(1), e2025JH000699. doi:10.1029/2025JH000699
+- James, S. C., Zhang, Y., O'Donncha, F. (2018). A machine learning framework to forecast wave conditions. *Coast. Eng.* 137, 1–10. doi:10.1016/j.coastaleng.2018.03.004
+- Karlbauer, M., et al. (2024). Advancing parsimonious deep learning weather prediction using the HEALPix mesh. *JAMES* 16, e2023MS004021. doi:10.1029/2023MS004021
+- Kochkov, D., et al. (2024). Neural general circulation models for weather and climate. *Nature* 632, 1060–1066. doi:10.1038/s41586-024-07744-y
+- Krachmalnicoff, N., Tomasi, M. (2019). Convolutional neural networks on the HEALPix sphere. *A&A* 628, A129. doi:10.1051/0004-6361/201935211
+- Krasnopolsky, V. M., Chalikov, D. V., Tolman, H. L. (2002). A neural network technique to improve computational efficiency of numerical oceanic models. *Ocean Model.* 4, 363–383. doi:10.1016/S1463-5003(02)00010-0
+- Li, Z., et al. (2026). A generalized framework for multi-parameter optimization of numerical wind–wave model. *EGUsphere* preprint. doi:10.5194/egusphere-2026-895
+- Menemenlis, D., Fukumori, I., Lee, T. (2005). Using Green's functions to calibrate an ocean general circulation model. *Mon. Weather Rev.* 133, 1224–1240. doi:10.1175/MWR2912.1
+- Moses, W. S., Churavy, V. (2020). Instead of rewriting foreign code for machine learning, automatically synthesize fast gradients. *NeurIPS* 33. arXiv:2010.01709
+- Moses, W. S., et al. (2021). Reverse-mode automatic differentiation and optimization of GPU kernels via Enzyme. *SC'21*. doi:10.1145/3458817.3476165
+- Moses, W. S., et al. (2022). Scalable automatic differentiation of multiple parallel paradigms through compiler augmentation. *SC22*. doi:10.1109/SC41404.2022.00065
+- Moses, W. S., et al. (2026). DJ4Earth: differentiable, and performance-portable Earth system modeling via program transformations. *JAMES* 18, e2025MS005615. doi:10.1029/2025MS005615
+- Muscarella, P., Brunner, K., Walker, D. (2021). Estimating coastal winds by assimilating high-frequency radar spectrum data in SWAN. *Sensors* 21, 7811. doi:10.3390/s21237811
+- Orzech, M. D., Veeramony, J., Ngodock, H. (2013). A variational assimilation system for nearshore wave modeling. *J. Atmos. Oceanic Technol.* 30, 953–970. doi:10.1175/JTECH-D-12-00097.1
+- Orzech, M., Veeramony, J., Flampouris, S. (2014). Optimizing spectral wave estimates with adjoint-based sensitivity maps. *Ocean Dyn.* 64, 487–505. doi:10.1007/s10236-014-0700-2
+- Orzech, M., et al. (2025). Development and testing of tangent linear model for WAVEWATCH III. NRL Memorandum Report NRL/7320/MR--2025/2.
+- Panteleev, G., Yaremchuk, M., Rogers, W. E. (2015). Adjoint-free variational data assimilation into a regional wave model. *J. Atmos. Oceanic Technol.* 32, 1386–1399. doi:10.1175/JTECH-D-14-00174.1
+- Perraudin, N., Defferrard, M., Kacprzak, T., Sgier, R. (2019). DeepSphere. *Astron. Comput.* 27, 130–146. doi:10.1016/j.ascom.2019.03.004
+- Puscasu, R. M. (2014). Integration of artificial neural networks into operational ocean wave prediction models for fast and accurate emulation of exact nonlinear interactions. *Procedia Comput. Sci.* 29, 1156–1170. doi:10.1016/j.procs.2014.05.104
+- Rust automatic differentiation (`std::autodiff`), rustc development guide. https://rustc-dev-guide.rust-lang.org/autodiff/installation.html
+- Sun, D., et al. (2022). A deep learning-based bias correction method for predicting ocean surface waves in the Northwest Pacific Ocean. *Geophys. Res. Lett.* 49, e2022GL100916. doi:10.1029/2022GL100916
+- Timmermans, B. (2015). *Uncertainty in numerical wind-wave models.* PhD thesis, University of Southampton.
+- Tolman, H. L., Krasnopolsky, V. M., Chalikov, D. V. (2005). Neural network approximations for nonlinear interactions in wind wave spectra: direct mapping for wind seas in deep water. *Ocean Model.* 8, 253–278. doi:10.1016/j.ocemod.2003.12.008
+- Veeramony, J., Walker, D., Hsu, L. (2010). A variational data assimilation system for nearshore applications of SWAN. *Ocean Model.* 35, 206–214. doi:10.1016/j.ocemod.2010.07.008
+- Vidard, A., Bouttier, P.-A., Vigilant, F. (2015). NEMOTAM: tangent and adjoint models for the ocean modelling platform NEMO. *Geosci. Model Dev.* 8, 1245–1257. doi:10.5194/gmd-8-1245-2015
+- Wang, X., et al. (2025). Data-driven rolling model for global wave height. *Geosci. Model Dev.* 18, 5101–5114. doi:10.5194/gmd-18-5101-2025
+- Yuan, Y., et al. (2024). Towards a real-time modeling of global ocean waves by the fully GPU-accelerated spectral wave model WAM6-GPU v1.0. *Geosci. Model Dev.* 17, 6123–6136. doi:10.5194/gmd-17-6123-2024
+- Zhang, Z., et al. (2025). Ocean wave forecasting with deep learning as alternative to conventional models. *JAMES* 17, e2025MS005285. doi:10.1029/2025MS005285
+
+## Risks
+
+| risk | mitigation |
+|---|---|
+| the Rust port departs from WW3 (splitting order, boundary flags, coastal nodes, source integration) | the propagation-only test before the sources; kernel-by-kernel harness; comparison with the existing explicit runs |
+| GPU races and single-precision accumulation in the N-scheme scatter | node-centred gather formulation (no atomics) or graph colouring; double-precision build for the checks |
+| Rust GPU tools still young (CubeCL, Burn; `cuda-oxide` experimental; GPU Enzyme not available) | M0 tests the toolchain first; fallback to `cudarc` with CUDA C kernels |
+| hand-written adjoints of ST4 are long and error-prone | forward-mode tangents first; CPU `std::autodiff` derivatives of the same per-node functions as references; or Burn tensor operations for the source terms |
+| parameters and forcing compensate each other (`BETAMAX` was raised to make up for ERA5 winds that are too weak in storms) | calibrate the parameters with the forcing fixed, and the reverse, before any joint fit; $T_{m02}$ and wave-age-dependent errors; multi-scale priors |
+| memory for reverse mode on grid v4 | grid v5 $K=4$ for learning, host-memory snapshots, two GPUs (at most two per user) |
+| over-fitting January 2026 | train and test on separate halves, then other months (downloads to be agreed) |
+
+## Decisions needed
+
+1. **Kernel language.** CubeCL with Burn, recommended for its tape,
+   checkpointing and multi-backend kernels, or `cudarc` with CUDA C.
+2. **Installs on the Datarmor scratch.** A Rust nightly toolchain with the
+   Enzyme component (for CPU reference derivatives) and the CUDA crates,
+   which means downloads.
+3. **Fidelity to ST4.** All active branches (recommended) or a simplified
+   version.
+4. **Stopping point.** Whether M2 with finite-difference gradients is the
+   first target, before any adjoint work.
