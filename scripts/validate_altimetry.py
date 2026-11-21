@@ -151,7 +151,8 @@ def main():
            "levels": {str(int(lv)): stats(o[lvl == lv], m[lvl == lv]) for lv in np.unique(lvl)}}
     # Regions: open Atlantic, North Sea, Mediterranean.
     ns = (bla > 51) & (bla < 61) & (blo > -4) & (blo < 10)
-    med = (bla > 30) & (bla < 46) & (blo > -5.5) & (blo < 37)
+    # the Mediterranean box without the Bay of Biscay south of 46N
+    med = (bla > 30) & (bla < 46) & (blo > -5.5) & (blo < 37) & ~((bla > 43) & (blo < 2))
     res["regions"] = {"north_sea": stats(o[ns], m[ns]), "mediterranean": stats(o[med], m[med]),
                       "other": stats(o[~ns & ~med], m[~ns & ~med])}
     res["days"] = {str(k): stats(o[day == k], m[day == k]) for k in np.unique(day)}

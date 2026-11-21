@@ -49,10 +49,12 @@ EARTH_KM = 6371.0
 BUOY_DEFAULT = ("/home/ref-copernicus-insitu/INSITU_GLO_PHYBGCWAV_DISCRETE_MYNRT_013_030/"
                 "cmems_obs-ins_glo_phybgcwav_mynrt_na_irr_202311/monthly/MO/202601")
 REGIONS = [  # (name, lon0, lon1, lat0, lat1), first match wins
+    # Channel and Biscay before the Mediterranean box, which also covers the
+    # Bay of Biscay south of 46N (the Basque and Landes coasts)
+    ("Channel and Biscay", -10.0, 2.0, 43.0, 51.0),
     ("Mediterranean", -5.6, 45.0, 30.0, 46.0),
     ("Baltic", 13.0, 31.0, 53.0, 66.0),
     ("North Sea", -4.0, 13.0, 51.0, 62.0),
-    ("Channel and Biscay", -10.0, 2.0, 43.0, 51.0),
     ("Iberia and Canaries", -20.0, -5.6, 26.0, 43.0),
     ("Norwegian and Arctic", -10.0, 45.0, 62.0, 80.0),
     ("Irish and Celtic seas", -12.0, -4.0, 51.0, 56.0),

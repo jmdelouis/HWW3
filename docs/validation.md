@@ -264,27 +264,30 @@ implicit time per node stays at 2.5–2.7 ms.
 
 | run | altimeter blocks | bias (m) | RMSE (m) | buoys $H_s$ bias (m) | RMSE (m) | $T_{m02}$ RMSE (s) |
 |---|---|---|---|---|---|---|
-| v4 implicit | 45,076 | −0.031 | 0.283 | −0.054 | 0.310 | 1.218 |
+| v4 implicit | 45,493 | −0.031 | 0.283 | −0.054 | 0.310 | 1.218 |
 | v4 explicit | 44,670 | −0.017 | 0.283 | −0.057 | 0.301 | 1.219 |
 | v5 $K=5$ implicit | 45,468 | −0.030 | 0.283 | −0.061 | 0.330 | 1.195 |
 | v5 $K=5$ explicit | 45,468 | −0.016 | 0.283 | −0.065 | 0.322 | 1.200 |
 | v5 $K=4$ implicit | 45,518 | −0.029 | 0.283 | −0.052 | 0.331 | 1.226 |
 | v5 $K=4$ explicit | 45,518 | −0.015 | 0.283 | −0.056 | 0.323 | 1.222 |
 
-4 January 00 h – 7 January 20 h, 252 buoys (PBS job 7962684). The
-altimeters do not see the change. At the buoys the $H_s$ RMSE rises by
+Altimeters 4 January 00 h – 7 January 21 h (19 h for the explicit run on
+grid v4, whose output stops there); 252 buoys, 4 January 00 h – 7 January
+19 h (PBS job 7962684). The altimeters do not see the change; the three
+grids match almost the same blocks. At the buoys the $H_s$ RMSE rises by
 2 cm, but with $K=4$ it changes by less than 5 mm at 124 buoys and 10
 buoys carry 93 % of the increase of the squared error: buoys sheltered by
 islands and headlands whose 3 km cells were removed (Isles of Scilly RMSE
 0.35 → 1.09 m, Las Palmas 0.25 → 0.69 m, Basque coast, Gulf of Lion,
 western Ireland). By region (implicit, v4 → $K=5$ → $K=4$): Channel and
-Biscay 0.257 → 0.326 → 0.335 m, Iberia and Canaries 0.203 → 0.293 →
+Biscay 0.306 → 0.368 → 0.374 m (44 buoys), Mediterranean 0.377 → 0.398 → 0.381 m (24), Iberia and Canaries 0.203 → 0.293 →
 0.298 m, Irish and Celtic seas 0.303 → 0.355 → 0.325 m, North Sea and
 America unchanged. Node by node (run v4 interpolated on the v5 nodes with
 `DIFF_TRI_A`), the implicit $H_s$ of grid v5 $K=4$ differs from grid v4
 by an RMS of 5 mm at the median node and 20 cm at the 99th percentile.
 Grid v4 remains the reference. Files: `results/natl_v5k{4,5}_explicit_cost.json`,
 `results/natl_v5k{4,5}_jan2026_{bnd,exp}_val_stats.json`,
+`results/natl_v4_jan2026_bnd_to21h_val_stats.json` (grid v4 on the same window),
 `results/natl_v5_jan2026_buoys_stats.json`.
 
 ```{figure} _static/fig/natl_v5_level_change.png
@@ -332,7 +335,7 @@ if it lies within 0.75 of that node's pixel size, linear in time; days 1–3
 | nside 1024 | 29,615 | 2.05 | −0.14 | 0.36 | 0.16 | 0.968 |
 | nside 2048 | 3,326 | 1.82 | −0.12 | 0.33 | 0.17 | 0.967 |
 | North Sea | 5,567 | 2.90 | −0.31 | 0.53 | 0.15 | 0.978 |
-| Mediterranean | 14,539 | 2.19 | −0.20 | 0.40 | 0.16 | 0.967 |
+| Mediterranean | 13,923 | 2.12 | −0.21 | 0.39 | 0.16 | 0.967 |
 
 The ten missions agree within 0.08 m in bias. The negative bias comes from
 the missing South Atlantic swell at the equatorial open boundary and from
@@ -361,7 +364,7 @@ ST4 `BETAMAX` 1.75 instead of 1.43, PBS job 7899026: 41,927 s on 112 ranks,
 | nside 1024 | −0.175 / 0.370 / 0.159 / 0.9701 | −0.016 / 0.313 / 0.153 / 0.9714 |
 | nside 2048 | −0.143 / 0.337 / 0.168 / 0.9679 | −0.000 / 0.299 / 0.164 / 0.9690 |
 | North Sea | −0.347 / 0.557 / 0.150 / 0.9787 | −0.126 / 0.373 / 0.121 / 0.9805 |
-| Mediterranean | −0.225 / 0.405 / 0.154 / 0.9689 | −0.054 / 0.330 / 0.148 / 0.9697 |
+| Mediterranean | −0.229 / 0.398 / 0.154 / 0.9686 | −0.065 / 0.311 / 0.144 / 0.9698 |
 
 Grid v2 differs from v1 only by the triangle-quality step (282 fewer
 nodes), so the change is the effect of `BETAMAX`: the bias is removed at
@@ -382,7 +385,7 @@ compared.
 |---|---|---|---|---|---|
 | all | 331,154 / 328,902 | +0.005 / +0.005 | 0.384 / 0.376 | 0.131 / 0.129 | 0.9748 / 0.9758 |
 | North Sea | 5,567 / 5,629 | −0.126 / −0.139 | 0.373 / 0.380 | 0.121 / 0.123 | 0.9805 / 0.9800 |
-| Mediterranean | 14,539 / 14,454 | −0.054 / −0.054 | 0.330 / 0.331 | 0.148 / 0.149 | 0.9697 / 0.9695 |
+| Mediterranean | 13,923 / 13,857 | −0.065 / −0.066 | 0.311 / 0.313 | 0.144 / 0.144 | 0.9698 / 0.9697 |
 
 At the 50 km scale of the altimeter blocks the grid hardly matters: the
 whole-domain RMSE improves by 0.008 m and the shelf seas do not change
@@ -401,7 +404,13 @@ distributed by several networks is kept once (same position to 0.01°); a
 buoy is kept with at least 100 hours and a wet node within 10 km in every
 run, so both runs use the same 267 buoys and 166,626 hours. The model is
 taken at the nearest node, linear in time. 178 buoys are at nside 2048 in
-both grids, 44 move from nside 1024 (v2) to 2048 (v3).
+both grids, 44 move from nside 1024 (v2) to 2048 (v3). The regions of the
+buoys and of the altimeter blocks are longitude–latitude boxes
+(`REGIONS` in `validate_buoys.py`, `regions` in `validate_altimetry.py`);
+the Mediterranean box first also took the Bay of Biscay south of 46°N
+(10 buoys, about 600 altimeter blocks). All regional scores here and the
+`results/*_stats.json` files were recomputed without it (PBS jobs
+7963515–7963517 and 7963558).
 
 | subset | buoys | bias v2 / v3 (m) | RMSE v2 / v3 (m) | SI v2 / v3 | r v2 / v3 |
 |---|---|---|---|---|---|
@@ -412,8 +421,8 @@ both grids, 44 move from nside 1024 (v2) to 2048 (v3).
 | depth 50–200 m | 58 | +0.002 / +0.002 | 0.459 / 0.457 | 0.225 / 0.224 | 0.9493 / 0.9500 |
 | depth ≥ 200 m | 23 | −0.079 / −0.081 | 0.403 / 0.405 | 0.170 / 0.171 | 0.9747 / 0.9745 |
 | North Sea | 95 | −0.050 / −0.052 | 0.288 / 0.286 | 0.285 / 0.283 | 0.9396 / 0.9419 |
-| Channel and Biscay | 36 | +0.101 / +0.177 | 0.522 / 0.556 | 0.277 / 0.285 | 0.9452 / 0.9410 |
-| Mediterranean | 35 | −0.108 / −0.111 | 0.440 / 0.441 | 0.240 / 0.240 | 0.9528 / 0.9528 |
+| Channel and Biscay | 46 | +0.066 / +0.126 | 0.514 / 0.541 | 0.244 / 0.252 | 0.9488 / 0.9448 |
+| Mediterranean | 25 | −0.125 / −0.128 | 0.423 / 0.426 | 0.310 / 0.312 | 0.9101 / 0.9094 |
 | US and Canada coasts | 68 | −0.001 / −0.007 | 0.233 / 0.233 | 0.215 / 0.215 | 0.9476 / 0.9475 |
 
 The buoy scatter index is twice the altimeter one: most buoys are in less
@@ -478,7 +487,7 @@ same 328,902 altimeter blocks (PBS job 7920776) and 268 buoys (PBS job
 | nside 1024 | 30,714 | −0.019 / +0.002 | 0.350 / 0.333 | 0.147 / 0.140 |
 | nside 2048 | 20,601 | −0.026 / −0.005 | 0.299 / 0.283 | 0.165 / 0.156 |
 | North Sea | 5,629 | −0.139 / −0.139 | 0.381 / 0.381 | 0.123 / 0.123 |
-| Mediterranean | 14,454 | −0.054 / −0.054 | 0.331 / 0.331 | 0.149 / 0.149 |
+| Mediterranean | 13,857 | −0.066 / −0.066 | 0.313 / 0.313 | 0.144 / 0.144 |
 | buoys, hourly $H_s$ | 167,298 h | −0.004 / −0.004 | 0.375 / 0.375 | – |
 
 The correlation rises from 0.9758 to 0.9794 and the regression slope is
@@ -524,11 +533,11 @@ the tide. Without / with tide, 4–31 January (validation jobs 7962685 and
 | nside 2048 | 20,601 | −0.005 / −0.005 | 0.283 / 0.282 | 0.9706 / 0.9709 |
 | North Sea | 5,629 | −0.139 / −0.138 | 0.381 / 0.379 | 0.9799 / 0.9802 |
 | buoys $H_s$, all (268) | 167,298 | −0.005 / −0.003 | 0.373 / 0.372 | 0.9526 / 0.9531 |
-| Channel and Biscay (36) | 23,337 | +0.175 / +0.184 | 0.553 / 0.550 | 0.9414 / 0.9428 |
+| Channel and Biscay (46) | 29,471 | +0.124 / +0.131 | 0.538 / 0.535 | 0.9452 / 0.9460 |
 | North Sea (96) | 60,924 | −0.054 / −0.052 | 0.289 / 0.286 | 0.9441 / 0.9452 |
 | buoys $T_{m02}$ (s), all (180) | 113,744 | −0.10 / −0.12 | 1.316 / 1.263 | 0.783 / 0.798 |
 | depth < 50 m (119) | 74,473 | 0.00 / −0.04 | 1.484 / 1.414 | 0.690 / 0.711 |
-| Channel and Biscay (32) | 20,896 | +0.67 / +0.61 | 1.622 / 1.489 | 0.736 / 0.770 |
+| Channel and Biscay (42) | 27,030 | +0.62 / +0.56 | 1.545 / 1.436 | 0.786 / 0.813 |
 | North Sea (39) | 24,752 | +0.05 / +0.01 | 1.469 / 1.387 | 0.384 / 0.413 |
 
 The altimeter scores change by less than 3 mm. The hourly $H_s$ difference
@@ -541,7 +550,7 @@ falls by more at 62 and rises by more at 13; the largest gains are on the
 English coast of the Channel (6201012: 0.313 → 0.260 m), where the model
 now follows the semi-diurnal modulation of $H_s$. The $T_{m02}$ RMSE falls
 at 47 of 180 buoys by more than 0.02 s and rises by as much at 3; in the
-Channel and Biscay 25 of 32 buoys improve and none degrades. Nine buoys
+Channel and Biscay 26 of 42 buoys improve and none degrades. Nine buoys
 have a $T_{m02}$ RMSE above 3 s without tide: five in harbours and
 estuaries (Le Havre, the Elbe, the Maeslantkering, the Wadden Sea), where
 the model has the offshore swell that the buoy does not see and the tide
