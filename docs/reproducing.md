@@ -79,6 +79,13 @@ done
 qsub scripts/build_ww3.pbs        # 5.5 min, 8 cores
 ```
 
+On the Ifremer hpc cluster, from `/scratch/jmdeloui/HWW3` with the WW3
+source cloned at `dea641c` and `parmetis-4.0.3.tar.gz` in `src/`:
+
+```bash
+sbatch scripts/build_ww3_hpc.slurm   # 2.3 min, 8 cores
+```
+
 See [WW3 setup](ww3.md) for the toolchain and switches.
 
 ## 4. WW3 grid preprocessing

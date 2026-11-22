@@ -19,6 +19,44 @@ WW3 `develop` (NOAA-EMC, commit `dea641c`) is built with CMake by
 The binaries are in `$R/opt/ww3/bin` (`ww3_grid`, `ww3_prnc`, `ww3_shel`,
 `ww3_ounf`, ...).
 
+### Ifremer hpc cluster
+
+`scripts/build_ww3_hpc.slurm` builds the same source (commit `dea641c`,
+cloned from GitHub) with the same switches on the Ifremer hpc cluster
+(RHEL 9.4, Slurm), in `R=/scratch/jmdeloui/HWW3`. It was set up on
+22 November 2026, when the Datarmor scratch refused every write.
+
+- Compilers: oneAPI 2025.2.1, i.e. `ifx` 2025.2.1 with Intel MPI
+  (`mpiifx`). netCDF comes from the system modules `hdf5/1.14.6`,
+  `netcdf-c/4.9.3-parallel` and `netcdf-fortran/4.6.2-parallel`.
+- Flags: CMake identifies `ifx` as IntelLLVM, for which WW3 sets no
+  compiler flags. The script therefore passes the ifort flags of the
+  Datarmor build that `ifx` accepts:
+  `-no-fma -g -traceback -i4 -real-size 32 -fp-model precise -assume byterecl`,
+  plus `-O3`.
+- ParMETIS 4.0.3 and METIS 5.1.0 come from the same tarball as on
+  Datarmor. They are compiled with gcc through Intel MPI's `mpicc`.
+- `FILE_ENDIAN` is hard-coded, as on Datarmor.
+
+The build takes 2 min 19 s on 8 cores (Slurm job 4115990).
+
+**Check against Datarmor.** Two tests on the grid v5 $K=4$ explicit
+configuration:
+
+- `ww3_grid` (13 s, job 4116028):
+  - `mapsta.ww3` and `mask.ww3` are identical to Datarmor's, byte for byte;
+  - `mod_def.ww3` and the ST4 table `ST4TABUHF2.bin` keep their sizes but
+    differ by rounding: 36 % of the table values differ, by at most
+    8 × 10⁻⁷ relative.
+- `ww3_shel`: the first 6 hours of run `natl_v5k4_jan2026_exp` from the
+  same cold start, forcing and open-boundary spectra (job 4116085):
+  - run time 939 s on 32 ranks of one node;
+  - over the 371,278 wet nodes, at every hour up to 6 h, the Datarmor
+    output is matched to within 1.4 mm in $H_s$ (RMS difference at most
+    3.3 × 10⁻⁶ m) and 4.7 ms in $T_{m02}$;
+  - wind, currents and sea level read from the same `ww3_prnc` files are
+    identical.
+
 ## Switches (`ww3/switch_hww3`)
 
 ```text

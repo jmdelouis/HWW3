@@ -29,7 +29,7 @@ warnings as errors).
 | `natl_grid.pbs` / `.slurm` | build the North Atlantic grid (Datarmor / hpc) |
 | `natl_extract.sh`, `extract_zoom.py` | plotting subsets of a grid |
 | `plot_levels.py`, `plot_cells_tris.py`, `plot_mesh.py` | grid figures |
-| `build_ww3.pbs` | build WW3 and its dependencies |
+| `build_ww3.pbs` / `build_ww3_hpc.slurm` | build WW3 and its dependencies (Datarmor / hpc) |
 | `natl_ww3_grid.pbs` | run `ww3_grid` |
 | `natl_test.pbs`, `plot_hs.py` | homogeneous-wind test and $H_s$ map |
 | `get_era5.py`, `prep_era5.py` | ERA5 download and `ww3_prnc` input |

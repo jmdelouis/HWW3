@@ -34,8 +34,9 @@ $R/venv/bin/pip install cdsapi numpy netCDF4
 ## WAVEWATCH III
 
 WW3 is built from the NOAA-EMC `develop` branch with the switches of
-`ww3/switch_hww3`; see [WW3 setup](ww3.md) and the build script
-`scripts/build_ww3.pbs`.
+`ww3/switch_hww3`; see [WW3 setup](ww3.md) and the build scripts
+`scripts/build_ww3.pbs` (Datarmor) and `scripts/build_ww3_hpc.slurm`
+(Ifremer hpc cluster).
 
 ## Documentation
 
