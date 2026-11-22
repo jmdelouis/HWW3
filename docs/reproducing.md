@@ -308,7 +308,56 @@ from the Copernicus Marine moored buoys of January 2026
 166,626 hours, $H_s$ bias −0.015 / −0.004 m and RMSE 0.368 / 0.375 m for
 v2 / v3 (see Validation).
 
-## 8. Note
+## 8. GPU wave model
+
+The GPU model runs on the A100s of the Ifremer hpc cluster (Slurm), where
+WW3 is also built (section 3). There `R=/scratch/jmdeloui/HWW3`, holding
+the repository scripts, the grids and the WW3 build. See
+[GPU wave model](wave_model.md) for the programs and
+[GPU model results](wave_results.md) for the expected numbers.
+
+```bash
+cd hww3-wave && cargo test --no-default-features     # unit tests, any machine, under a minute
+module load cuda/13.0.0
+CARGO_TARGET_DIR=$R/target_wave cargo build --release
+```
+
+### Milestone M0: sweep times and dot-product tests
+
+```bash
+sbatch scripts/wave_m0_hpc.slurm     # one A100, 30 min at most: box, v4, v5 K=4
+```
+
+Writes `$R/results/wave_m0_{box_v4,v4,v5k4}_<job>.json`. Expected:
+0.93 ms per frequency sweep on grid v4 with `two_phase_x4`, dot-product
+tests to round-off. On Datarmor, the CUDA C backend is built with
+`CUDARC_CUDA_VERSION=11040 cargo build --release --no-default-features --features cuda-c`
+and run by `qsub scripts/wave_m0.pbs`.
+
+### Milestone M1: propagation-only runs against WW3
+
+The inputs are those of the grid v5 $K=4$ explicit run of Datarmor:
+`restart001.ww3` (8 January 2026 00 h), `current.ww3`, `level.ww3`,
+`ice.ww3` and `nest.ww3`, copied to `$R/m1/v5k4`, and the `ww3_grid`
+inputs of the hpc check of section 3 in `$R/runs/test_grid_v5k4`.
+
+```bash
+# WW3 references, 32 cores, 12-15 min each; ideal first, it writes the ww3_strt restart
+for m in ideal prop geo; do sbatch --export=ALL,MODE=$m scripts/m1_ww3_prop_hpc.slurm; done
+# GPU model, one A100, 25-33 s each
+for m in ideal prop geo; do sbatch --export=ALL,MODE=$m scripts/m1_prop_hpc.slurm; done
+# comparison (no numpy needed), with the GPU output directory of each job
+python3 scripts/m1_compare_nc.py $R/runs/m1_prop/ww3.202601.nc $R/m1/out_<job> --out m1_prop.json
+python3 scripts/m1_compare_nc.py $R/runs/m1_ideal/ww3.202601.nc $R/m1/out_<job> --hs-min 0.5
+python3 scripts/m1_compare_nc.py $R/runs/m1_prop/ww3.202601.nc $R/m1/out_<job> --worst 20 --grid $R/grids/natl_v5k4
+```
+
+`CHECK=1` adds the `check-ktp3` and `check-geo` comparisons with the CPU
+transcriptions, `NORUN=1` skips the run, `HOURS` sets its length and
+`EXTRA='--profile'` times each part of a step:
+`sbatch --export=ALL,MODE=prop,HOURS=6,CHECK=1 scripts/m1_prop_hpc.slurm`.
+
+## 9. Note
 
 ```bash
 cd tex/hww3 && latexmk -pdf main.tex

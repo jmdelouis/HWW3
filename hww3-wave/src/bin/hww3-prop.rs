@@ -1,22 +1,23 @@
 //! M1 driver: the propagation-only WW3 model on one GPU, started from a WW3
 //! restart, with the currents, levels, ice and boundary spectra of a WW3 run.
 //!
-//! usage:
-//!   hww3-prop restart-hs <grid dir> --restart FILE --out FILE.f32
-//!       H_s and T_m02 of the restart spectra (CPU), to check the reader
-//!       against the WW3 output at the restart time.
-//!   hww3-prop run <grid dir> --restart FILE [--current FILE] [--level FILE]
-//!       [--ice FILE] [--nest FILE] [--start YYYYMMDDHHMMSS] --hours H --out DIR [--f64] [--block B]
-//!       [--itstep0 N] [--no-cx] [--no-cth] [--no-ck] [--host-level] [--profile]
-//!       Hourly H_s and T_m02 (little-endian f32, one value per node,
-//!       UNDEF = -999.9 where MAPSTA <= 0) in DIR/hs_YYYYMMDDHH.f32 and
-//!       DIR/t02_YYYYMMDDHH.f32, and DIR/summary.json.
-//!   hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
-//!       One step's forcing, then one W3KTP3 call on the GPU compared with
-//!       the CPU transcription of W3KTP3 (hww3_wave::cpu) on a sample of nodes.
-//!   hww3-prop check-geo <grid dir> --restart FILE [forcing as for run]
-//!       One step's forcing, then the geographic step of frequencies 1, 17
-//!       and 32 on the GPU against the CPU transcription of PDLIB_W3XYPUG.
+//! ```text
+//! hww3-prop restart-hs <grid dir> --restart FILE --out FILE.f32
+//!     H_s and T_m02 of the restart spectra (CPU), to check the reader
+//!     against the WW3 output at the restart time.
+//! hww3-prop run <grid dir> --restart FILE [--current FILE] [--level FILE]
+//!     [--ice FILE] [--nest FILE] [--start YYYYMMDDHHMMSS] --hours H --out DIR [--f64] [--block B]
+//!     [--itstep0 N] [--no-cx] [--no-cth] [--no-ck] [--host-level] [--profile]
+//!     Hourly H_s and T_m02 (little-endian f32, one value per node,
+//!     UNDEF = -999.9 where MAPSTA <= 0) in DIR/hs_YYYYMMDDHH.f32 and
+//!     DIR/t02_YYYYMMDDHH.f32, and DIR/summary.json.
+//! hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
+//!     One step's forcing, then one W3KTP3 call on the GPU compared with
+//!     the CPU transcription of W3KTP3 (hww3_wave::cpu) on a sample of nodes.
+//! hww3-prop check-geo <grid dir> --restart FILE [forcing as for run]
+//!     One step's forcing, then the geographic step of frequencies 1, 17
+//!     and 32 on the GPU against the CPU transcription of PDLIB_W3XYPUG.
+//! ```
 
 use anyhow::{bail, Result};
 use burn::tensor::Device;

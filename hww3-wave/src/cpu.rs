@@ -1,25 +1,37 @@
 //! CPU transcription of `W3KTP3`, `W3QCK1` and `W3QCK2` (WW3 `w3pro3md`,
 //! `w3uqckmd`) in single precision, keeping WW3's storage (`VQ` with the
 //! ghost bins, `MAPTH2`, `MAPWN2`, 1-based offsets), to check the GPU
-//! kernels of [`crate::prop`], which are written differently (one unit per
-//! line of the spectrum).
+//! kernels of the `prop` module, which are written differently (one unit per
+//! line of the spectrum), and of `PDLIB_W3XYPUG` with currents and
+//! open-boundary spectra.
 
 use crate::spec::Spec;
 
 /// Inputs of `W3KTP3` for one node.
 pub struct Ktp3Node<'a> {
-    /// `CG(0:NK+1)`, `WN(0:NK+1)`.
+    /// Group speeds `CG(0:NK+1)` (m/s).
     pub cg: &'a [f32],
+    /// Wavenumbers `WN(0:NK+1)` (rad/m).
     pub wn: &'a [f32],
+    /// Water depth (m).
     pub depth: f32,
+    /// Great-circle turning factor `CTHG0` (`-tan(lat) / RADIUS`, 1/m).
     pub cthg0: f32,
+    /// Depth gradient `∂d/∂x` (m/m).
     pub dddx: f32,
+    /// Depth gradient `∂d/∂y` (m/m).
     pub dddy: f32,
+    /// Eastward current (m/s).
     pub cx: f32,
+    /// Northward current (m/s).
     pub cy: f32,
+    /// Current gradient `∂u/∂x` (1/s).
     pub dcxdx: f32,
+    /// Current gradient `∂u/∂y` (1/s).
     pub dcxdy: f32,
+    /// Current gradient `∂v/∂x` (1/s).
     pub dcydx: f32,
+    /// Current gradient `∂v/∂y` (1/s).
     pub dcydy: f32,
 }
 
@@ -146,6 +158,12 @@ fn w3qck2(my: usize, velo: &[f32], dt: f32, dx1: &[f32], dx2: &[f32], q: &mut [f
 }
 
 /// `W3KTP3` for one node; `va` in WW3 order (`isp = ith + ik nth`).
+///
+/// `facth` and `fack` are WW3's `FACTH` and `FACK` (time step over the
+/// direction and frequency increments), `ctmax` the CFL cap, `flcur`,
+/// `flcth` and `flck` the switches of the current terms, of refraction and
+/// of the frequency shift, and `itstep` the step counter whose parity sets
+/// the order of the two advections.
 #[allow(clippy::too_many_arguments)]
 pub fn ktp3(sp: &Spec, n: &Ktp3Node, va: &mut [f32], facth: f32, fack: f32, ctmax: f32, flcur: bool, flcth: bool, flck: bool, itstep: u64) {
     let (nk, nth) = (sp.nk, sp.nth);
@@ -259,28 +277,46 @@ pub fn ktp3(sp: &Spec, n: &Ktp3Node, va: &mut [f32], facth: f32, fack: f32, ctma
 /// Inputs of the CPU transcription of `PDLIB_W3XYPUG` / `PDLIB_W3XYPFSN2`
 /// for one frequency.
 pub struct GeoFreq<'a> {
+    /// Vertices per triangle (`3 ne`, counter-clockwise).
     pub ine: &'a [u32],
+    /// `PDLIB_IEN` (`6 ne`).
     pub ien: &'a [f64],
+    /// `PDLIB_SI` per node.
     pub si: &'a [f64],
+    /// `IOBP` per node.
     pub iobp: &'a [u8],
+    /// `IOBPA` per node.
     pub iobpa: &'a [u8],
-    /// `IOBPD` bits per node and `IOBDP` (0/1).
+    /// `IOBPD` bits per node (bit k for direction k).
     pub iobpd: &'a [u64],
+    /// `IOBDP` per node (0 dry, 1 wet).
     pub iobdp: &'a [u8],
-    /// `CG(IK, node)`, `CLATS`, currents `CX`, `CY` (m/s).
+    /// `CG(IK, node)` (m/s).
     pub cg: &'a [f32],
+    /// `CLATS`: cosine of the latitude per node.
     pub clats: &'a [f32],
+    /// Eastward current `CX` per node (m/s).
     pub cx: &'a [f32],
+    /// Northward current `CY` per node (m/s).
     pub cy: &'a [f32],
+    /// `ECOS` of the directions.
     pub ecos: &'a [f32],
+    /// `ESIN` of the directions.
     pub esin: &'a [f32],
+    /// `FACX = 1 / (DERA RADIUS)`.
     pub facx: f32,
+    /// Global time step (s).
     pub dt: f32,
     /// Boundary: node of each point, `BBPI0`, `BBPIN` of this frequency (`nbnd nth`).
     pub bnode: &'a [u32],
+    /// `BBPI0`: boundary spectra at the start of the boundary interval.
     pub bb0: &'a [f32],
+    /// `BBPIN`: boundary spectra at the end of the boundary interval.
     pub bbn: &'a [f32],
+    /// `RD10`: time from the start of the boundary interval to the end of
+    /// the step (s).
     pub rd10: f32,
+    /// `RD20`: length of the boundary interval (s).
     pub rd20: f32,
 }
 
@@ -388,4 +424,128 @@ pub fn geo_freq(g: &GeoFreq, va: &mut [f32], nth: usize) -> Vec<u32> {
         }
     }
     iters
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geom::{group_speed, Geometry};
+    use crate::spec::{node_wavenumbers, DERA, RADIUS};
+    use crate::testgrid::{lattice, uniform};
+
+    fn node<'a>(cg: &'a [f32], wn: &'a [f32], depth: f32, dddx: f32) -> Ktp3Node<'a> {
+        Ktp3Node {
+            cg,
+            wn,
+            depth,
+            cthg0: 0.0,
+            dddx,
+            dddy: 0.0,
+            cx: 0.0,
+            cy: 0.0,
+            dcxdx: 0.0,
+            dcxdy: 0.0,
+            dcydx: 0.0,
+            dcydy: 0.0,
+        }
+    }
+
+    /// A smooth positive spectrum in WW3 order (`isp = ith + ik nth`).
+    fn spectrum(sp: &Spec) -> Vec<f32> {
+        let mut va = vec![0f32; sp.nk * sp.nth];
+        for ik in 0..sp.nk {
+            for ith in 0..sp.nth {
+                let th = ith as f32 * sp.dth;
+                va[ith + ik * sp.nth] = (1.0 + 0.6 * (th - 0.8).cos()) * (1.0 + ik as f32) / sp.nk as f32;
+            }
+        }
+        va
+    }
+
+    #[test]
+    fn ktp3_leaves_deep_still_water_unchanged() {
+        let sp = Spec::new(8, 12, 0.0373, 1.1, 0.0);
+        let (mut wn, mut cg) = (vec![0f32; sp.nk + 2], vec![0f32; sp.nk + 2]);
+        node_wavenumbers(&sp, 4000.0, -4000.0, 1.0, &mut wn, &mut cg);
+        let n = node(&cg, &wn, 4000.0, 1e-3);
+        let va0 = spectrum(&sp);
+        for itstep in [0, 1] {
+            let mut va = va0.clone();
+            ktp3(&sp, &n, &mut va, 300.0 / sp.dth, 1.0, 0.7, false, true, true, itstep);
+            assert_eq!(va, va0);
+        }
+    }
+
+    #[test]
+    fn refraction_conserves_the_energy_of_each_frequency() {
+        let sp = Spec::new(8, 12, 0.0373, 1.1, 0.0);
+        let (mut wn, mut cg) = (vec![0f32; sp.nk + 2], vec![0f32; sp.nk + 2]);
+        let depth = 15.0;
+        node_wavenumbers(&sp, depth, -depth, 1.0, &mut wn, &mut cg);
+        let n = node(&cg, &wn, depth, 5e-4);
+        let va0 = spectrum(&sp);
+        let mut va = va0.clone();
+        ktp3(&sp, &n, &mut va, 300.0 / sp.dth, 1.0, 0.7, false, true, false, 0);
+        let mut changed = 0f32;
+        for ik in 0..sp.nk {
+            let line = |v: &[f32]| v[ik * sp.nth..(ik + 1) * sp.nth].iter().sum::<f32>();
+            let (before, after) = (line(&va0), line(&va));
+            assert!((after / before - 1.0).abs() < 1e-5, "frequency {ik}: {before} -> {after}");
+            for ith in 0..sp.nth {
+                changed = changed.max((va[ith + ik * sp.nth] - va0[ith + ik * sp.nth]).abs());
+            }
+        }
+        assert!(changed > 1e-3, "refraction should turn the spectrum");
+        assert!(va.iter().all(|&v| v >= 0.0));
+    }
+
+    #[test]
+    fn geographic_step_matches_the_reference() {
+        // PDLIB_W3XYPUG (single-precision state, no current, no boundary
+        // spectra) against PDLIB_W3XYPFSN2 in double precision
+        let grid = lattice(12, 10, 20.0, 15.0, false);
+        let geo = Geometry::new(&grid);
+        let (np, nth) = (geo.np, geo.nth);
+        let clats: Vec<f32> = grid.lat.iter().map(|&y| (y as f32 * DERA).cos()).collect();
+        let ecos: Vec<f32> = geo.ecos.iter().map(|&v| v as f32).collect();
+        let esin: Vec<f32> = geo.esin.iter().map(|&v| v as f32).collect();
+        let zero = vec![0f32; np];
+        let u = uniform(np * nth, 7);
+        for ik in 0..geo.nk {
+            let cg: Vec<f32> =
+                grid.depth.iter().map(|&d| group_speed(geo.freqs[ik], d.max(grid.spec.dmin)) as f32).collect();
+            let g = GeoFreq {
+                ine: &geo.ine,
+                ien: &geo.ien,
+                si: &geo.si,
+                iobp: &geo.iobp,
+                iobpa: &geo.iobpa,
+                iobpd: &geo.iobpd,
+                iobdp: &geo.iobdp,
+                cg: &cg,
+                clats: &clats,
+                cx: &zero,
+                cy: &zero,
+                ecos: &ecos,
+                esin: &esin,
+                facx: 1.0 / (DERA * RADIUS),
+                dt: crate::geom::DT as f32,
+                bnode: &[],
+                bb0: &[],
+                bbn: &[],
+                rd10: 0.0,
+                rd20: 0.0,
+            };
+            // W3XYPUG propagates VA CLATS / CG: start it from u
+            let mut va: Vec<f32> = (0..np * nth).map(|j| (u[j] * cg[j / nth] as f64 / clats[j / nth] as f64) as f32).collect();
+            let iters = geo_freq(&g, &mut va, nth);
+            assert_eq!(iters, geo.iter[ik * nth..(ik + 1) * nth].to_vec(), "ITER of frequency {ik}");
+            let want = crate::reference::step(&geo, &u, ik, true);
+            let scale = want.iter().fold(0f64, |m, &x| m.max(x));
+            for j in 0..np * nth {
+                let got = va[j] as f64 * clats[j / nth] as f64 / cg[j / nth] as f64;
+                assert!((got - want[j]).abs() < 1e-5 * scale, "frequency {ik}, value {j}: {got} against {}", want[j]);
+            }
+        }
+    }
 }

@@ -33,18 +33,26 @@ use rayon::prelude::*;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
+/// Output value where a field is undefined (WW3 `UNDEF`).
 pub const UNDEF: f32 = -999.9;
 
+/// The WW3 files a run starts from and reads.
 pub struct Inputs {
+    /// Restart file (`FULL` from `ww3_shel`, or `COLD` from `ww3_strt`).
     pub restart: PathBuf,
+    /// Currents written by `ww3_prnc` (`current.ww3`).
     pub current: Option<PathBuf>,
+    /// Water levels written by `ww3_prnc` (`level.ww3`).
     pub level: Option<PathBuf>,
+    /// Ice concentrations written by `ww3_prnc` (`ice.ww3`).
     pub ice: Option<PathBuf>,
+    /// Open-boundary spectra written by `ww3_bounc` (`nest.ww3`).
     pub nest: Option<PathBuf>,
     /// Start time, required for a COLD restart (`ww3_strt`), which has none.
     pub start: Option<Time>,
 }
 
+/// Time steps, switches and launch parameters of a run.
 #[derive(Clone)]
 pub struct Config {
     /// Global step `DTMAX` (s).
@@ -53,11 +61,15 @@ pub struct Config {
     pub dtkth: f32,
     /// `CFLTM`, the CFL limit of the spectral propagation.
     pub ctmax: f32,
+    /// `RUN%FLCX` (and `FLCY`): geographic propagation.
     pub flcx: bool,
+    /// `RUN%FLCTH`: refraction (direction shift).
     pub flcth: bool,
+    /// `RUN%FLCK`: frequency shift.
     pub flck: bool,
     /// `ITSTEP` before the first step (parity of the k/theta order of `W3KTP3`).
     pub itstep0: u64,
+    /// Units per cube of the 1D launches.
     pub block: u32,
     /// Units per (frequency, direction group) for the sub-cycling count.
     pub lanes: usize,
@@ -114,38 +126,64 @@ impl Fields {
 /// Timers of the parts of a step (s, after device synchronisation when profiling).
 #[derive(Default, Clone, Debug)]
 pub struct Timers {
+    /// Reading and applying the forcing fields and boundary spectra.
     pub forcing: f64,
     /// Host part of the level updates (included in `forcing`).
     pub level_host: f64,
+    /// Sub-cycling count.
     pub iter: f64,
+    /// Spectral propagation (`W3KTP3`).
     pub ktp3: f64,
     /// Theta part of `ktp3` (profiling only).
     pub ktp3_theta: f64,
+    /// Geographic propagation.
     pub geographic: f64,
+    /// Outputs (H_s, T_m02).
     pub outputs: f64,
+    /// Number of frequency sweeps of the geographic propagation.
     pub sweeps: u64,
 }
 
+/// The propagation-only model on the GPU: grid, spectral grid, forcing
+/// readers and device state.
 pub struct Model<F: Real> {
+    /// CubeCL client of the device.
     pub client: Client,
+    /// Number of nodes.
     pub np: usize,
+    /// Number of triangles.
     pub ne: usize,
+    /// Number of frequencies.
     pub nk: usize,
+    /// Number of directions.
     pub nth: usize,
+    /// Spectral grid.
     pub sp: Spec,
+    /// Run configuration.
     pub cfg: Config,
+    /// Model time (end of the last step).
     pub time: Time,
+    /// Step counter `ITSTEP`.
     pub itstep: u64,
+    /// Minimum depth `DMIN` (m).
     pub dmin: f32,
+    /// Time spent in each part of the steps.
     pub timers: Timers,
+    /// Synchronise the device after each part, so that the timers are exact.
     pub profile: bool,
+    /// `ITER(ik, ith)` of the current step, copied from the device.
     pub iter_host: Vec<u32>,
     // host copies
+    /// Latitude of the nodes (degrees).
     pub lat: Vec<f32>,
     zb: Vec<f32>,
+    /// Water depth `DW` (m): bathymetric depth plus water level.
     pub dw: Vec<f32>,
+    /// Water level `WLV` (m).
     pub wlv: Vec<f32>,
+    /// `MAPSTA` per node.
     pub mapsta: Vec<i32>,
+    /// `MAPST2` per node.
     pub mapst2: Vec<i32>,
     iobp: Vec<u8>,
     iobpd: Vec<u64>,
@@ -155,6 +193,7 @@ pub struct Model<F: Real> {
     /// update (default) they stay those of the restart, the device holds the
     /// current ones.
     pub wn: Vec<f32>,
+    /// See [`Model::wn`].
     pub cg: Vec<f32>,
     // forcing
     cur: Option<Fields>,
@@ -176,6 +215,7 @@ pub struct Model<F: Real> {
     pub bnode: Vec<u32>,
     ipbpi: Vec<i32>,
     rdbpi: Vec<f32>,
+    /// Number of open-boundary points.
     pub nbnd: usize,
     // device: static
     d_ine: Handle,
@@ -208,7 +248,9 @@ pub struct Model<F: Real> {
     d_nflag: Handle,
     d_mlo: Handle,
     d_mhi: Handle,
+    /// Depth gradient `dd/dx` per node on the device (`UG_GRADIENTS`).
     pub d_dddx: Handle,
+    /// Depth gradient `dd/dy` per node on the device.
     pub d_dddy: Handle,
     d_bb0: Handle,
     d_bbn: Handle,
@@ -217,19 +259,26 @@ pub struct Model<F: Real> {
     d_cai: Handle,
     d_cd0: Handle,
     d_cdi: Handle,
+    /// Eastward current per node on the device (m/s).
     pub d_cx: Handle,
+    /// Northward current per node on the device (m/s).
     pub d_cy: Handle,
     d_ux: Handle,
     d_uy: Handle,
+    /// Current gradient `du/dx` per node on the device.
     pub d_dcxdx: Handle,
+    /// Current gradient `du/dy` per node on the device.
     pub d_dcxdy: Handle,
+    /// Current gradient `dv/dx` per node on the device.
     pub d_dcydx: Handle,
+    /// Current gradient `dv/dy` per node on the device.
     pub d_dcydy: Handle,
     d_ccoef: Handle,
     d_partial: Handle,
     d_iter: Handle,
     d_dtk: Handle,
     // state
+    /// Action spectra `VA` on the device, `[(ik np + i) nth + ith]`.
     pub d_va: Handle,
     d_ac: Handle,
     d_ac2: Handle,
@@ -249,6 +298,8 @@ fn sca<F: Real>(x: f32) -> F {
 }
 
 impl<F: Real> Model<F> {
+    /// Read the restart and open the forcing files, copy the grid to the
+    /// device and set the state at the restart time.
     pub fn new(client: Client, grid: &Grid, geo: &Geometry, inp: &Inputs, cfg: Config) -> Result<Model<F>> {
         let (np, ne, nk, nth) = (geo.np, geo.ne, geo.nk, geo.nth);
         let nspec = nk * nth;
@@ -491,6 +542,7 @@ impl<F: Real> Model<F> {
         (CubeCount::Static((n as u32).div_ceil(b).max(1), 1, 1), CubeDim::new_1d(b))
     }
 
+    /// Wait for the launched kernels to finish.
     pub fn sync(&self) {
         futures_lite::future::block_on(self.client.sync()).expect("device sync");
     }
@@ -500,11 +552,13 @@ impl<F: Real> Model<F> {
         self.client.create_from_slice(F::as_bytes(&w))
     }
 
+    /// Copy a float buffer to the host, as `f32`.
     pub fn download(&self, h: &Handle) -> Vec<f32> {
         let b = self.client.read_one(h.clone()).expect("device read");
         F::from_bytes(&b).iter().map(|&x| <F as crate::backend::Scalar>::as_f64(x) as f32).collect()
     }
 
+    /// Copy a `u32` buffer to the host.
     pub fn download_u32(&self, h: &Handle) -> Vec<u32> {
         let b = self.client.read_one(h.clone()).expect("device read");
         u32::from_bytes(&b).to_vec()
@@ -1106,6 +1160,7 @@ impl<F: Real> Model<F> {
         self.iter_host = self.download_u32(&self.d_iter);
     }
 
+    /// Frequency sweeps of frequency `ik` in the current step: `max_θ ITER`.
     pub fn max_iter(&self, ik: usize) -> u32 {
         *self.iter_host[ik * self.nth..(ik + 1) * self.nth].iter().max().unwrap()
     }
@@ -1135,6 +1190,7 @@ impl<F: Real> Model<F> {
         self.timers.ktp3_theta += t.elapsed().as_secs_f64();
     }
 
+    /// Refraction part of `W3KTP3` (`W3QCK1` in direction, periodic).
     pub fn ktp3_theta(&self, facth: f32) {
         if !self.cfg.flcth {
             return;
@@ -1183,6 +1239,7 @@ impl<F: Real> Model<F> {
         }
     }
 
+    /// Frequency-shift part of `W3KTP3` (`W3QCK2` in wavenumber).
     pub fn ktp3_k(&self, fack: f32) {
         if !self.cfg.flck {
             return;
@@ -1478,6 +1535,7 @@ impl<F: Real> Model<F> {
         }
     }
 
+    /// H_s and T_m02 of every node (`UNDEF` where `MAPSTA <= 0`).
     pub fn outputs(&mut self) -> (Vec<f32>, Vec<f32>) {
         let mut t = std::time::Instant::now();
         self.launch_outputs();

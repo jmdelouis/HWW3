@@ -1,13 +1,22 @@
 # HWW3: HEALPix unstructured grids for WAVEWATCH III
 
+[![CI](https://github.com/jmdelouis/HWW3/actions/workflows/ci.yml/badge.svg)](https://github.com/jmdelouis/HWW3/actions/workflows/ci.yml)
+[![Documentation](https://github.com/jmdelouis/HWW3/actions/workflows/docs.yml/badge.svg)](https://jmdelouis.github.io/HWW3/)
+
 HWW3 builds unstructured (UNST) WAVEWATCH III grids whose nodes are the centres
 of multi-resolution HEALPix cells. Each node is a NESTED HEALPix pixel, so the
 model output is already a HEALPix map: you can write it as a GRID4EARTH
 Zarr V3 dataset and view it in gridlook without any interpolation.
 
 The WAVEWATCH III code is not modified. The grid is a standard Gmsh triangle
-mesh read by `ww3_grid` (`GRID%TYPE = 'UNST'`) and run with the implicit
-PDLIB scheme.
+mesh read by `ww3_grid` (`GRID%TYPE = 'UNST'`) and run with the PDLIB
+schemes, implicit or explicit.
+
+The `hww3-wave` crate rewrites the explicit configuration in Rust for one
+GPU, towards a differentiable WW3 for learning chains. Its
+propagation-only model runs 48 h of grid v5 K=4 in 32 s on one A100 and
+agrees with WW3 to about 1 mm in H_s at the median node (see
+[hww3-wave/README.md](hww3-wave/README.md)).
 
 ## How the grid is built (`hww3-grid`, Rust)
 
@@ -57,10 +66,13 @@ characteristic, angle statistics and level jump across edges.
 ## Documentation
 
 - Sphinx site (`docs/`, built and published by the CI on GitHub Pages,
-  https://jmdelouis.github.io/HWW3/): installation, configuration, algorithm, outputs, validation, WW3 setup and
-  a step-by-step [reproduction guide](docs/reproducing.md).
-- Rust API: https://jmdelouis.github.io/HWW3/rust/hww3_grid/ (or
-  `cd hww3-grid && cargo doc --no-deps --open`).
+  https://jmdelouis.github.io/HWW3/): installation, configuration,
+  algorithm, outputs, validation, WW3 setup, the GPU wave model, a
+  step-by-step [reproduction guide](docs/reproducing.md) and the
+  [tests and CI](docs/development.md).
+- Rust API: https://jmdelouis.github.io/HWW3/rust/hww3_grid/ and
+  https://jmdelouis.github.io/HWW3/rust-wave/hww3_wave/ (or
+  `cargo doc --no-deps --open` in `hww3-grid` and `hww3-wave`).
 - Internal note (LaTeX): `tex/hww3/main.tex`, mirrored on Overleaf
   (https://www.overleaf.com/project/6af6a96c4ed66a0cad905cb6) with
   `scripts/sync_overleaf.sh`.
@@ -84,6 +96,8 @@ python scripts/prep_gebco.py GEBCO_2024.nc data/gebco/natl -100 45 0 80
 | Path | Content |
 |---|---|
 | `hww3-grid/` | Rust crate: grid generator |
+| `hww3-wave/` | Rust crate: GPU wave model (differentiable WW3, milestones M0 and M1) |
+| `docs/` | Sphinx documentation |
 | `configs/` | grid configurations (`natl.json`: North Atlantic + Mediterranean + North Sea) |
 | `scripts/` | data preparation and plotting |
 | `tex/hww3/` | internal note (LaTeX) |

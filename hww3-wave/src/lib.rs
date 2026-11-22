@@ -1,12 +1,36 @@
-//! Differentiable WAVEWATCH III on GPU. Milestone M0: the PDLIB explicit
-//! N scheme of the geographic propagation and its transpose on HWW3 grids.
-//! Milestone M1: the propagation-only model (geographic and spectral
-//! propagation, currents, water levels, ice, boundary spectra, WW3 restart).
+//! Propagation model of the differentiable WAVEWATCH III (WW3), on one GPU,
+//! for the HEALPix unstructured grids of HWW3.
 //!
-//! Two backends share the geometry, the driver and the CPU reference:
-//! - `cubecl` (default): CubeCL kernels on the client of Burn's CUDA device,
-//!   with the sub-step as an operation of Burn's autodiff tape;
-//! - `cuda-c`: the same kernels in CUDA C through `cudarc` and NVRTC.
+//! The crate rewrites in Rust the parts of WW3 that the HWW3 explicit
+//! configuration runs, so that the model can sit inside a learning chain and
+//! return gradients:
+//!
+//! - **Milestone M0**: the PDLIB explicit N scheme of the geographic
+//!   propagation (`PDLIB_W3XYPFSN2`) and its transpose, as GPU kernels, with
+//!   dot-product tests and a sub-step that is an operation of Burn's autodiff
+//!   tape;
+//! - **Milestone M1**: the propagation-only model (`hww3-prop`): geographic
+//!   and spectral propagation (`W3KTP3`), currents, water levels, ice and
+//!   open-boundary spectra, started from a WW3 restart.
+//!
+//! # Backends
+//!
+//! - `cubecl` (default feature): CubeCL kernels on the client of Burn's CUDA
+//!   device (modules `kernels`, `prop`, `device`, `burn_ext`, `model`).
+//!   Building it needs glibc 2.34 or later (`cubecl-llvm`).
+//! - `cuda-c`: the M0 kernels in CUDA C, compiled by NVRTC and launched
+//!   through `cudarc` (module `cuda_c`), for GPUs whose driver predates
+//!   CUDA 12.
+//!
+//! The modules without a GPU ([`grid`], [`geom`], [`spec`], [`ww3io`],
+//! [`mod@reference`], [`cpu`], [`backend`]) build with
+//! `--no-default-features` and hold the CPU references the kernels are
+//! checked against; their unit tests run without a GPU.
+//!
+//! The design, the cost and the results are described in the HWW3
+//! documentation (pages *GPU wave model* and *Differentiable WW3*).
+
+#![warn(missing_docs)]
 
 pub mod backend;
 pub mod cpu;
@@ -29,3 +53,6 @@ pub mod prop;
 
 #[cfg(feature = "cuda-c")]
 pub mod cuda_c;
+
+#[cfg(test)]
+mod testgrid;

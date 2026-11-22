@@ -25,12 +25,22 @@
 //! per triangle for the current (`ccoef`: `d_q` of `K_q`, then `D_q` of
 //! `FLALL_q`).
 
+// The `#[cube]` macro generates, for every kernel, a launch struct and
+// functions that carry no documentation; the kernels themselves are
+// documented below.
+#![allow(missing_docs)]
+
 use cubecl::prelude::*;
 
+/// Node flag: `IOBP = 1` (interior node).
 pub const FLAG_INTERIOR: u32 = 1;
+/// Node flag: `IOBDP = 1` (wet).
 pub const FLAG_WET: u32 = 2;
+/// Node flag: `MAPSTA = 1` (sea point, neither ice nor dry).
 pub const FLAG_SEA: u32 = 4;
+/// Node flag: `IOBP > 0` (not on the coast; currents are applied).
 pub const FLAG_NOTCOAST: u32 = 8;
+/// Node flag: `MAPSTA > 0` (H_s is output).
 pub const FLAG_OUTPUT: u32 = 16;
 
 // ---------------------------------------------------------------------------
@@ -491,6 +501,8 @@ pub fn geo_node_x4<F: Float>(
 // Conversions between VA and the propagated AC = VA / CG CLATS
 // ---------------------------------------------------------------------------
 
+/// `AC = VA CLATS / CG` for frequency `ik` (the quantity `PDLIB_W3XYPUG`
+/// propagates).
 #[cube(launch_unchecked)]
 pub fn va_to_ac<F: Float>(va: &[F], ac: &mut [F], cg: &[F], clats: &[F], np: usize, ik: usize, #[comptime] nth: usize) {
     let g = ABSOLUTE_POS;
@@ -500,6 +512,7 @@ pub fn va_to_ac<F: Float>(va: &[F], ac: &mut [F], cg: &[F], clats: &[F], np: usi
     }
 }
 
+/// `VA = max(0, CG / CLATS AC)` for frequency `ik`.
 #[cube(launch_unchecked)]
 pub fn ac_to_va<F: Float>(ac: &[F], va: &mut [F], cg: &[F], clats: &[F], np: usize, ik: usize, #[comptime] nth: usize) {
     let g = ABSOLUTE_POS;
@@ -1130,7 +1143,7 @@ pub fn ulev_node<F: Float>(
     }
 }
 
-// Zero the spectra of the listed nodes (ice or drying transitions).
+/// Zero the spectra of the listed nodes (ice or drying transitions).
 #[cube(launch_unchecked)]
 pub fn zero_nodes<F: Float>(va: &mut [F], nodes: &[u32], np: usize, nlist: usize, #[comptime] nk: usize, #[comptime] nth: usize) {
     let g = ABSOLUTE_POS;
@@ -1148,6 +1161,8 @@ pub fn zero_nodes<F: Float>(va: &mut [F], nodes: &[u32], np: usize, nlist: usize
 // Outputs (W3OUTG): H_s and T_m02 with the tail
 // ---------------------------------------------------------------------------
 
+/// `W3OUTG`: H_s, T_m02 and the energy of every node, with the
+/// high-frequency tail; `UNDEF` where `MAPSTA <= 0`.
 #[cube(launch_unchecked)]
 pub fn outputs<F: Float>(
     va: &[F],

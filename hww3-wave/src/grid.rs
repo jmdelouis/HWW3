@@ -6,23 +6,34 @@ use std::path::Path;
 /// Spectral discretisation read from `ww3_grid.nml`.
 #[derive(Clone, Debug)]
 pub struct Spectrum {
+    /// Number of frequencies (`SPECTRUM%NK`, default 32).
     pub nk: usize,
+    /// Number of directions (`SPECTRUM%NTH`, default 36).
     pub nth: usize,
+    /// Lowest frequency (Hz, `SPECTRUM%FREQ1`, default 0.0373).
     pub freq1: f64,
+    /// Frequency increment factor (`SPECTRUM%XFR`, default 1.1).
     pub xfr: f64,
+    /// Direction offset as a fraction of the increment (`SPECTRUM%THOFF`).
     pub thoff: f64,
+    /// Minimum depth (m, `GRID%DMIN`, default 1).
     pub dmin: f64,
 }
 
 /// Nodes (degrees, depth in m, positive down), triangles and open-boundary nodes.
 #[derive(Clone, Debug)]
 pub struct Grid {
+    /// Longitude of the nodes (degrees).
     pub lon: Vec<f64>,
+    /// Latitude of the nodes (degrees).
     pub lat: Vec<f64>,
+    /// Depth of the nodes (m, positive down).
     pub depth: Vec<f64>,
+    /// Triangles, as 0-based node indices.
     pub tri: Vec<[u32; 3]>,
     /// 0-based open-boundary node indices (WW3 `IOBP = 2`, `MAPSTA = 2`).
     pub obc: Vec<u32>,
+    /// Spectral discretisation of `ww3_grid.nml`.
     pub spec: Spectrum,
 }
 
@@ -145,4 +156,72 @@ pub fn boundary_nodes(tri: &[[u32; 3]], n: usize) -> Vec<bool> {
         i = j;
     }
     b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testgrid::lattice;
+
+    #[test]
+    fn boundary_of_a_lattice() {
+        let (nx, ny) = (7, 5);
+        let g = lattice(nx, ny, 10.0, 0.0, false);
+        let b = boundary_nodes(&g.tri, nx * ny);
+        for j in 0..ny {
+            for i in 0..nx {
+                assert_eq!(b[j * nx + i], i == 0 || j == 0 || i == nx - 1 || j == ny - 1);
+            }
+        }
+    }
+
+    #[test]
+    fn read_raw_arrays_and_namelist() {
+        let g = lattice(6, 4, 10.0, 2.0, true);
+        let dir = std::env::temp_dir().join(format!("hww3_wave_grid_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("raw")).unwrap();
+        let put_f64 = |name: &str, v: &[f64]| {
+            std::fs::write(dir.join("raw").join(name), v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()).unwrap()
+        };
+        let put_u32 = |name: &str, v: &[u32]| {
+            std::fs::write(dir.join("raw").join(name), v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()).unwrap()
+        };
+        put_f64("lon.f64", &g.lon);
+        put_f64("lat.f64", &g.lat);
+        put_f64("depth.f64", &g.depth);
+        put_u32("tri.u32", &g.tri.concat());
+        put_u32("obc.u32", &g.obc);
+        let nml = "&SPECTRUM_NML\n  SPECTRUM%XFR = 1.1\n  SPECTRUM%FREQ1 = 0.035\n  SPECTRUM%NK = 30\n  SPECTRUM%NTH = 24\n/\n&GRID_NML\n  GRID%DMIN = 2.5\n/\n";
+        std::fs::write(dir.join("ww3_grid.nml"), nml).unwrap();
+        let r = Grid::read(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((r.lon, r.lat, r.depth, r.tri, r.obc), (g.lon, g.lat, g.depth, g.tri, g.obc));
+        assert_eq!((r.spec.nk, r.spec.nth), (30, 24));
+        assert_eq!((r.spec.freq1, r.spec.xfr, r.spec.dmin, r.spec.thoff), (0.035, 1.1, 2.5, 0.0));
+    }
+
+    #[test]
+    fn cut_box_opens_the_cut_edges() {
+        // 9 x 7 lattice with an open western column; the box drops the two
+        // eastern columns and the top row
+        let (nx, ny) = (9, 7);
+        let g = lattice(nx, ny, 10.0, 0.0, true);
+        let (x0, y0, d) = (-10.0, 45.0, crate::testgrid::STEP);
+        let sub = g.cut_box(x0 - 0.01, x0 + 6.0 * d + 0.01, y0 - 0.01, y0 + 5.0 * d + 0.01);
+        let (mx, my) = (7, 6);
+        assert_eq!(sub.lon.len(), mx * my);
+        assert_eq!(sub.tri.len(), 2 * (mx - 1) * (my - 1));
+        let mut open = vec![false; mx * my];
+        for &o in &sub.obc {
+            open[o as usize] = true;
+        }
+        for j in 0..my {
+            for i in 0..mx {
+                // open: the western column (open in the full grid) and the
+                // cut edges (east and north), except the coastal corner nodes
+                let expect = i == 0 || ((i == mx - 1 || j == my - 1) && j != 0);
+                assert_eq!(open[j * mx + i], expect, "node ({i}, {j})");
+            }
+        }
+    }
 }

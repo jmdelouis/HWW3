@@ -26,6 +26,8 @@ html_static_path = ["_static"]
 html_theme_options = {
     "github_url": "https://github.com/jmdelouis/HWW3",
     "show_toc_level": 2,
+    "header_links_before_dropdown": 6,
+    "navigation_with_keys": False,
 }
 
 # The figures live once, in tex/hww3/fig (shared with the LaTeX note);

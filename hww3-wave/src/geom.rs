@@ -32,10 +32,17 @@ const DERA: f64 = PI / 180.0;
 /// WW3 `THR = TINY(1.)`.
 const THR: f64 = f32::MIN_POSITIVE as f64;
 
+/// What WW3 builds from an unstructured grid for the PDLIB explicit scheme
+/// (`PDLIB_INIT`, `SET_UG_IOBP_PDLIB_INIT`), plus the nodal advection
+/// velocities and the sub-cycling of every spectral component.
 pub struct Geometry {
+    /// Number of nodes.
     pub np: usize,
+    /// Number of triangles.
     pub ne: usize,
+    /// Number of frequencies.
     pub nk: usize,
+    /// Number of directions (at most 63).
     pub nth: usize,
     /// Vertices per triangle, counter-clockwise in (lon, lat), `3 ne`.
     pub ine: Vec<u32>,
@@ -43,8 +50,11 @@ pub struct Geometry {
     pub ien: Vec<f64>,
     /// `PDLIB_SI` (degree²).
     pub si: Vec<f64>,
+    /// `IOBP`: 0 on the coast, 1 inside, 2 on the open boundary.
     pub iobp: Vec<u8>,
+    /// `IOBPA`: 1 on the open boundary, where the scheme does not update.
     pub iobpa: Vec<u8>,
+    /// `IOBDP`: 0 where the depth is below `DMIN + 1e-5` (dry), else 1.
     pub iobdp: Vec<u8>,
     /// `IOBPD` as a bit mask per node (bit k for direction k), times `IOBDP`.
     pub mask: Vec<u64>,
@@ -55,12 +65,17 @@ pub struct Geometry {
     /// Triangles around each node: `slot[start[i]..start[i+1]]` = `3 t + p`,
     /// `p` the position of the node in triangle `t`.
     pub start: Vec<u32>,
+    /// See [`Geometry::start`].
     pub slot: Vec<u32>,
+    /// `cos θ` of the directions (`ECOS`, values below 1e-5 set to zero).
     pub ecos: Vec<f64>,
+    /// `sin θ` of the directions (`ESIN`, values below 1e-5 set to zero).
     pub esin: Vec<f64>,
+    /// Frequencies (Hz), `FREQ1 XFR^k`.
     pub freqs: Vec<f64>,
     /// `FACX cg / CLATS` and `FACY cg` per frequency and node (`nk np`), times `IOBDP`.
     pub cx: Vec<f64>,
+    /// See [`Geometry::cx`].
     pub cy: Vec<f64>,
     /// `ITER(ik, ith)`, `nk nth`.
     pub iter: Vec<u32>,
@@ -86,6 +101,8 @@ pub fn group_speed(f: f64, h: f64) -> f64 {
 }
 
 impl Geometry {
+    /// Build the geometry, the boundary flags, the velocities at rest (no
+    /// current, bathymetric depth) and `ITER` of a grid.
     pub fn new(g: &Grid) -> Geometry {
         let np = g.lon.len();
         let nk = g.spec.nk;
@@ -284,5 +301,159 @@ impl Geometry {
             .map(|i| ((self.mask[i] >> 32) as u32 & 0x7fff_ffff) | ((self.iobpa[i] as u32) << 31))
             .collect();
         (si_inv, dtk, mlo, mhi)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testgrid::{lattice, STEP};
+
+    #[test]
+    fn group_speed_limits() {
+        // deep water: cg = g / (2 ω)
+        let (f, h) = (0.2, 5000.0);
+        let deep = GRAV / (2.0 * 2.0 * PI * f);
+        assert!((group_speed(f, h) / deep - 1.0).abs() < 1e-12);
+        // shallow water: cg -> sqrt(g h)
+        let (f, h) = (0.005, 2.0);
+        assert!((group_speed(f, h) / (GRAV * h).sqrt() - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn triangles_areas_and_normals() {
+        let g = lattice(12, 10, 20.0, 15.0, true);
+        let geo = Geometry::new(&g);
+        assert_eq!((geo.np, geo.ne), (120, 2 * 11 * 9));
+        // every triangle counter-clockwise, even those listed clockwise
+        assert!(geo.tria.iter().all(|&a| a > 0.0));
+        let total = 11.0 * 9.0 * STEP * STEP;
+        let sum_tria: f64 = geo.tria.iter().sum();
+        let sum_si: f64 = geo.si.iter().sum();
+        assert!((sum_tria / total - 1.0).abs() < 1e-12);
+        assert!((sum_si / total - 1.0).abs() < 1e-12);
+        for e in 0..geo.ne {
+            let n = &geo.ien[6 * e..6 * e + 6];
+            // the three edge normals of a triangle sum to zero
+            assert!((n[0] + n[2] + n[4]).abs() < 1e-14 && (n[1] + n[3] + n[5]).abs() < 1e-14);
+            // the normal of the edge opposite vertex q points towards q
+            let v = &geo.ine[3 * e..3 * e + 3];
+            for q in 0..3 {
+                let (a, b) = (v[q] as usize, v[(q + 1) % 3] as usize);
+                let d = (g.lon[a] - g.lon[b]) * n[2 * q] + (g.lat[a] - g.lat[b]) * n[2 * q + 1];
+                assert!(d > 0.0, "triangle {e}, vertex {q}");
+            }
+        }
+        // the node -> triangle table lists each (triangle, vertex) once
+        let mut seen = vec![false; 3 * geo.ne];
+        for i in 0..geo.np {
+            for s in geo.start[i]..geo.start[i + 1] {
+                let code = geo.slot[s as usize] as usize;
+                assert_eq!(geo.ine[code] as usize, i);
+                assert!(!seen[code]);
+                seen[code] = true;
+            }
+        }
+        assert!(seen.iter().all(|&s| s));
+    }
+
+    #[test]
+    fn boundary_flags() {
+        let (nx, ny) = (12, 10);
+        let geo = Geometry::new(&lattice(nx, ny, 20.0, 15.0, true));
+        let full = (1u64 << geo.nth) - 1;
+        for j in 0..ny {
+            for i in 0..nx {
+                let n = j * nx + i;
+                let expect = if i == 0 {
+                    2
+                } else if j == 0 || j == ny - 1 || i == nx - 1 {
+                    0
+                } else {
+                    1
+                };
+                assert_eq!(geo.iobp[n], expect, "node ({i}, {j})");
+                assert_eq!(geo.iobpa[n], (expect == 2) as u8);
+                assert_eq!(geo.iobdp[n], 1);
+                if expect != 0 {
+                    assert_eq!(geo.mask[n], full);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn coast_node_takes_waves_from_the_sea_only() {
+        // a node of the southern coast (sea to the north) takes the
+        // directions whose opposite points into the sea: sin θ <= 0
+        let nx = 12;
+        let geo = Geometry::new(&lattice(nx, 10, 20.0, 15.0, true));
+        let n = 5;
+        assert_eq!(geo.iobp[n], 0);
+        for k in 0..geo.nth {
+            let set = (geo.iobpd[n] >> k) & 1 == 1;
+            assert_eq!(set, geo.esin[k] <= 0.0, "direction {k}");
+            assert_eq!(geo.m(n, k), set as u8 as f64);
+        }
+        // a node of the eastern coast (sea to the west) takes cos θ >= 0
+        let n = 4 * nx + nx - 1;
+        assert_eq!(geo.iobp[n], 0);
+        for k in 0..geo.nth {
+            assert_eq!((geo.iobpd[n] >> k) & 1 == 1, geo.ecos[k] >= 0.0, "direction {k}");
+        }
+    }
+
+    #[test]
+    fn dry_node_is_masked() {
+        let mut g = lattice(12, 10, 20.0, 15.0, true);
+        let n = 4 * 12 + 6;
+        g.depth[n] = 0.5 * g.spec.dmin;
+        let geo = Geometry::new(&g);
+        assert_eq!(geo.iobdp[n], 0);
+        assert_eq!(geo.mask[n], 0);
+        assert!((0..geo.nk).all(|ik| geo.cx[ik * geo.np + n] == 0.0 && geo.cy[ik * geo.np + n] == 0.0));
+    }
+
+    #[test]
+    fn sub_cycling_keeps_the_interior_cfl_below_one() {
+        let geo = Geometry::new(&lattice(12, 10, 20.0, 15.0, true));
+        let (np, nth) = (geo.np, geo.nth);
+        for ik in 0..geo.nk {
+            assert_eq!(geo.max_iter(ik), *geo.iter[ik * nth..(ik + 1) * nth].iter().max().unwrap());
+            for k in 0..nth {
+                let it = geo.iter[ik * nth + k];
+                assert_eq!(it, (geo.cflxy[ik * nth + k].ceil() as u32).max(1));
+                let mut worst = 0.0f64;
+                for i in (0..np).filter(|&i| geo.iobp[i] == 1) {
+                    let mut kk = 0.0;
+                    for s in geo.start[i]..geo.start[i + 1] {
+                        let code = geo.slot[s as usize] as usize;
+                        let (t, p) = (code / 3, code % 3);
+                        let v = &geo.ine[3 * t..3 * t + 3];
+                        let sx: f64 = v.iter().map(|&n| geo.cx[ik * np + n as usize]).sum::<f64>() / 6.0;
+                        let sy: f64 = v.iter().map(|&n| geo.cy[ik * np + n as usize]).sum::<f64>() / 6.0;
+                        let kt = sx * geo.ecos[k] * geo.ien[6 * t + 2 * p] + sy * geo.esin[k] * geo.ien[6 * t + 2 * p + 1];
+                        kk += kt.max(0.0);
+                    }
+                    worst = worst.max(DT / it as f64 * kk / geo.si[i]);
+                }
+                assert!(worst <= 1.0 + 1e-12, "frequency {ik}, direction {k}: CFL {worst}");
+                assert!(worst > 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn host_arrays_pack_the_masks() {
+        let geo = Geometry::new(&lattice(12, 10, 20.0, 15.0, true));
+        let (si_inv, dtk, mlo, mhi) = geo.host_arrays();
+        for i in 0..geo.np {
+            assert_eq!(si_inv[i], 1.0 / geo.si[i]);
+            assert_eq!(mlo[i] as u64, geo.mask[i] & 0xffff_ffff);
+            assert_eq!(mhi[i] >> 31, geo.iobpa[i] as u32);
+        }
+        for (d, &it) in dtk.iter().zip(&geo.iter) {
+            assert_eq!(*d, DT / it as f64);
+        }
     }
 }

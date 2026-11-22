@@ -31,6 +31,36 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps
 
+  wave:
+    # GPU wave model. The runners have no GPU, CUDA toolkit or LLVM bundle:
+    # the CPU modules are tested, the GPU backends type-checked and
+    # documented, nothing is linked.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hww3-wave
+    env:
+      # cudarc: the CUDA version nvcc would report
+      CUDARC_CUDA_VERSION: "13000"
+      # cubecl-llvm: skip the LLVM shims, only needed by the final link
+      DOCS_RS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: hww3-wave
+      - name: Unit tests (modules without a GPU)
+        run: cargo test --locked --no-default-features -- --nocapture
+      - name: Type check of the GPU backends (CubeCL with Burn, CUDA C)
+        run: cargo check --locked --all-targets --features cuda-c
+      - name: Type check of the CUDA C backend alone
+        run: cargo check --locked --all-targets --no-default-features --features cuda-c
+      - name: Documentation of both backends (warnings are errors)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps --features cuda-c
+
   python:
     runs-on: ubuntu-latest
     steps:

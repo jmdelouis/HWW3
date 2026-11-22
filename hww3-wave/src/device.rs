@@ -9,21 +9,30 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 use std::marker::PhantomData;
 
+/// Float type of the CubeCL kernels: `f32` or `f64`.
 pub trait Real: Scalar + Float + CubeElement {}
 impl Real for f32 {}
 impl Real for f64 {}
 
+/// A [`Geometry`] on the GPU, with the launchers of the M0 kernels; the
+/// CubeCL implementation of [`Sweeper`].
 pub struct DeviceGrid<F: Real> {
+    /// CubeCL client of the device (from Burn's CUDA device).
     pub client: Client,
+    /// Number of nodes.
     pub np: usize,
+    /// Number of frequencies.
     pub nk: usize,
+    /// Number of directions.
     pub nth: usize,
+    /// Number of triangles.
     pub ne: usize,
     /// Units per cube (1D launches).
     pub block: u32,
     /// Kernel variant: 0 fused node gather, 1 two-phase, 2 two-phase with
     /// four directions per unit.
     pub variant: usize,
+    /// `ITER(ik, ith)`.
     pub iter: Vec<u32>,
     /// Time of the twelve coefficients per triangle and frequency (s).
     pub coef_seconds: f64,
@@ -52,6 +61,7 @@ fn bf(h: &Handle, n: usize) -> BufferArg {
 }
 
 impl<F: Real> DeviceGrid<F> {
+    /// Copy a geometry to the device and compute the two-phase coefficients.
     pub fn new(client: Client, g: &Geometry, block: u32) -> Self {
         let upf = |v: &[f64]| {
             let w: Vec<F> = v.iter().map(|&x| <F as Scalar>::of_f64(x)).collect();

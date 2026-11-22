@@ -32,8 +32,16 @@
 //! Per-node masks: bit `k` of `mlo` (k < 32) or `mhi` (k >= 32) is
 //! `IOBPD(k, i) IOBDP_i`; bit 31 of `mhi` is `IOBPA_i`.
 
+// The `#[cube]` macro generates, for every kernel, a launch struct and
+// functions that carry no documentation; the kernels themselves are
+// documented below.
+#![allow(missing_docs)]
+
 use cubecl::prelude::*;
 
+/// Fused forward sub-step: one unit per (node, direction), gathering over
+/// the triangles around the node and recomputing `K`, `NM` and `FLALL` of
+/// each of them.
 #[cube(launch_unchecked)]
 pub fn nscheme_forward<F: Float>(
     u: &[F],
@@ -131,6 +139,8 @@ pub fn nscheme_forward<F: Float>(
     }
 }
 
+/// Fused transposed sub-step: one unit per (node, direction), gathering
+/// over the triangles around the node (formula of the module documentation).
 #[cube(launch_unchecked)]
 pub fn nscheme_transpose<F: Float>(
     y: &[F],
@@ -255,6 +265,8 @@ pub fn nscheme_transpose<F: Float>(
 // (node, direction), still without atomics.
 // ---------------------------------------------------------------------------
 
+/// Twelve coefficients per triangle and frequency, `(a, b, A, B)` of its
+/// three vertices, from which `K` and `FLALL` of any direction follow.
 #[cube(launch_unchecked)]
 pub fn nscheme_coef<F: Float>(
     cx: &[F],
@@ -537,6 +549,8 @@ fn mask_bit<F: Float>(wlo: u32, whi: u32, k: usize) -> F {
     F::cast_from((w >> ((k % 32) as u32)) & 1u32)
 }
 
+/// Phase 1 of the forward sub-step, four directions per unit:
+/// `ut[t nth + k] = Ũ_T`.
 #[cube(launch_unchecked)]
 pub fn nscheme_tri_forward_x4<F: Float>(
     u: &[F],
@@ -603,6 +617,8 @@ fn finish_forward<F: Float>(ui: F, st: F, dt: F, sa: F, m: F, active: bool, #[co
     select(active, v * m, ui)
 }
 
+/// Phase 2 of the forward sub-step, four directions per unit: gather and
+/// update.
 #[cube(launch_unchecked)]
 pub fn nscheme_node_forward_x4<F: Float>(
     u: &[F],
@@ -679,6 +695,7 @@ pub fn nscheme_node_forward_x4<F: Float>(
     }
 }
 
+/// Phase 1 of the transposed sub-step, four directions per unit.
 #[cube(launch_unchecked)]
 pub fn nscheme_tri_transpose_x4<F: Float>(
     y: &[F],
@@ -744,6 +761,7 @@ pub fn nscheme_tri_transpose_x4<F: Float>(
     }
 }
 
+/// Phase 2 of the transposed sub-step, four directions per unit.
 #[cube(launch_unchecked)]
 pub fn nscheme_node_transpose_x4<F: Float>(
     y: &[F],

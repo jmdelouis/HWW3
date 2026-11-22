@@ -20,6 +20,32 @@ warnings as errors).
 | `ww3` | Gmsh, open-boundary, namelist and raw writers |
 | `geo` | ellipsoid (authalic latitude) and vector helpers |
 
+## Rust crate `hww3_wave`
+
+The GPU wave model ([GPU wave model](wave_model.md)). Its API reference is
+published with this site:
+<a href="rust-wave/hww3_wave/index.html">Rust API reference of hww3-wave</a>,
+built with both backends. As for `hww3_grid`, every public item is
+documented and the CI builds the documentation with warnings as errors.
+
+| Module | GPU | Role |
+|---|---|---|
+| `grid` | no | HWW3 grid reader (`Grid`, `Spectrum`), lon/lat box cut |
+| `geom` | no | `Geometry`: normals, `PDLIB_SI`, boundary flags, velocities, `ITER` |
+| `spec` | no | `Spec` (spectral grid of `W3GRID`), `wavnu3`, `node_wavenumbers` |
+| `ww3io` | no | `Restart`, `FieldFile`, `NestFile`, `SeqFile`, `Time` |
+| `reference` | no | `step`: `PDLIB_W3XYPFSN2` on the CPU in double precision |
+| `cpu` | no | `ktp3` (`W3KTP3`) and `geo_freq` (`PDLIB_W3XYPUG`) on the CPU |
+| `backend` | no | `Sweeper` (forward and transposed sub-steps), `Scalar`, `Dims` |
+| `kernels` | CubeCL | N-scheme kernels: `fused`, `two_phase`, `two_phase_x4`, forward and transpose |
+| `device` | CubeCL | `DeviceGrid`: the CubeCL `Sweeper` |
+| `burn_ext` | CubeCL | `substep`: a sub-step on Burn's autodiff tape |
+| `prop` | CubeCL | kernels of the propagation-only model |
+| `model` | CubeCL | `Model`, `Config`, `Inputs`: the propagation-only time loop |
+| `cuda_c` | CUDA C | `CudaGrid`: the `cudarc` `Sweeper` |
+
+Programs: `hww3-wave` (M0 timings and checks) and `hww3-prop` (M1 model).
+
 ## Scripts (`scripts/`)
 
 | Script | Role |
@@ -40,3 +66,8 @@ warnings as errors).
 | `validate_altimetry.py`, `validate_buoys.py`, `natl_validate.pbs`, `natl_buoys.pbs` | $H_s$ against L3 altimetry, $H_s$ and $T_{m02}$ against moored buoys |
 | `explicit_cost.py`, `natl_explicit_cost.pbs`, `plot_explicit_cost.py` | sub-cycling of the explicit scheme per node and component |
 | `plot_run_diff.py`, `plot_level_change.py` | differences between two runs (same or different grids) and between two grids |
+| `ww3_loc.py`, `subdomain.py` | Fortran lines of the routines to port; Channel–Biscay test box cut from a grid |
+| `wave_m0_hpc.slurm` / `wave_m0.pbs` | GPU model, milestone M0: sweep times and dot-product tests (CubeCL on hpc / CUDA C on Datarmor) |
+| `m1_ww3_prop_hpc.slurm`, `natl_prop_run.pbs` | propagation-only WW3 references (hpc / Datarmor) |
+| `m1_prop_hpc.slurm` | GPU model, milestone M1: propagation-only runs and checks |
+| `m1_compare_nc.py`, `m1_compare.py` | hourly $H_s$ and $T_{m02}$ of the GPU model against a WW3 run (without numpy / with numpy) |

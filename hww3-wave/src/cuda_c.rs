@@ -1,5 +1,7 @@
-//! Fallback backend: the same two kernels in CUDA C, compiled at run time
-//! with NVRTC and launched through `cudarc` (no CubeCL, no Burn).
+//! Fallback backend: the M0 kernels in CUDA C (the three variants of the
+//! `kernels` module, same arithmetic), compiled at run time with NVRTC and
+//! launched through `cudarc`, without CubeCL or Burn. It runs on GPUs whose
+//! driver only supports CUDA 11 (the Datarmor A100s).
 
 use crate::backend::{Dims, Scalar, Sweeper};
 use crate::geom::Geometry;
@@ -8,7 +10,7 @@ use cudarc::driver::{CudaContext, CudaFunction, CudaSlice, CudaStream, DeviceRep
 use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 use std::sync::Arc;
 
-/// Kernels of [`crate::kernels`], written in CUDA C (same arithmetic).
+/// CUDA C source of the kernels (same arithmetic as the `kernels` module).
 pub const SRC: &str = r#"
 #ifndef REAL
 #define REAL float
@@ -390,7 +392,9 @@ extern "C" __global__ void nscheme_node_transpose_v(const REAL *__restrict__ y, 
 /// Directions per unit of the `two_phase_x4` kernels.
 const DPT: usize = 4;
 
+/// Float type of the CUDA C kernels: `f32` or `f64`.
 pub trait CReal: Scalar + DeviceRepr + ValidAsZeroBits + Default {
+    /// C type name, `float` or `double`.
     const C_NAME: &'static str;
 }
 impl CReal for f32 {
@@ -400,6 +404,8 @@ impl CReal for f64 {
     const C_NAME: &'static str = "double";
 }
 
+/// A [`Geometry`] on the GPU with the CUDA C kernels compiled by NVRTC;
+/// the `cudarc` implementation of [`Sweeper`].
 pub struct CudaGrid<F: CReal> {
     stream: Arc<CudaStream>,
     fwd: CudaFunction,
@@ -437,11 +443,14 @@ pub struct CudaGrid<F: CReal> {
     scratch: CudaSlice<F>,
     /// Kernel variant: 0 fused, 1 two-phase, 2 two-phase with four directions per unit.
     variant: usize,
+    /// NVRTC compilation time of the kernels (s).
     pub compile_seconds: f64,
     coef_seconds: f64,
 }
 
 impl<F: CReal> CudaGrid<F> {
+    /// Compile the kernels for `g.nth` directions, copy the geometry to the
+    /// device and compute the two-phase coefficients.
     pub fn new(ctx: &Arc<CudaContext>, g: &Geometry, block: u32) -> Result<Self> {
         let t = std::time::Instant::now();
         let opts = CompileOptions {

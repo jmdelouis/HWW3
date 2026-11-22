@@ -3,8 +3,8 @@
 docs/differentiable.md (section 6) are defined.
 
 The fields are little-endian float32 files with one value per node and
--999.9 where undefined (hww3-prop writes them; scripts/nc_slice.py extracts
-them from a WW3 netCDF output). For each node the RMS difference over the
+-999.9 where undefined, as hww3-prop writes them. To compare with a WW3
+netCDF output directly, use scripts/m1_compare_nc.py. For each node the RMS difference over the
 hours is computed; the targets are an H_s RMS difference below 1 cm at the
 median node and below 5 cm at the 99th percentile.
 

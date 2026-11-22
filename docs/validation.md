@@ -7,7 +7,9 @@ cd hww3-grid
 cargo test --release -- --nocapture     # prints the JSON summaries
 ```
 
-They run in the CI on every push (`.github/workflows/ci.yml`).
+They run in the CI on every push (`.github/workflows/ci.yml`); the tests
+of the GPU wave model are listed in
+[Tests and continuous integration](development.md).
 
 | Test | What it checks |
 |---|---|

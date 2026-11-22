@@ -553,7 +553,7 @@ coastal-scale corrections can therefore be computed on uniform maps.
 | milestone | content | go if | pw (one developer) |
 |---|---|---|---|
 | M0 | Rust stable with the CubeCL and Burn crates and their CUDA backend on one A100; N-scheme sweep and its transpose on grids v4 and v5 $K=4$ with the sub-cycling of `cfl.rs` | a frequency sweep on grid v4 within twice the bandwidth estimate (about 1.3 ms); dot-product test passes; the toolchain builds and runs on the GPU nodes. Otherwise switch the kernels to `cudarc` and CUDA C. **Done: go** (section 9.1) | 1–2 |
-| M1 | propagation-only model: geographic and spectral propagation, depth, currents, sea level, boundary spectra, ice mask, restart reader | the propagation-only targets of section 6 | 10–18 |
+| M1 | propagation-only model: geographic and spectral propagation, depth, currents, sea level, boundary spectra, ice mask, restart reader | the propagation-only targets of section 6. **Targets met** on 22 November 2026, coast-node differences under diagnosis ([GPU model results](wave_results.md)) | 10–18 |
 | M2a | forward model with the simplified ST4 (`SINTABLE = 0`, `SDSCUM = 0`), DIA, LN1, DB1, BT4, integration and limiter, outputs, observation operators | the targets with sources of section 6 against the WW3 run with the same settings. **First gradients:** finite differences in double precision for `BETAMAX` and a few parameters, at GPU speed, to build and test the calibration chain | 15–32 |
 | M2b | full ST4: the stress tables `TAUT`, `TAUHFT`, `TAUHFT2` and the directional cumulative term (`SDSCUM = −0.40`) | the targets with sources of section 6 against the existing explicit runs, and at least 10 times the Fortran explicit speed (under 430 s per model day on grid v4). **First scientific gradients** with respect to the parameters of the calibrated configuration | 4–7 |
 | M3 | tangent kernels for parameters (sources and stress tables) | agreement with the double-precision finite differences to $10^{-4}$ where the model is smooth | 4–7 (optional) |
@@ -569,7 +569,9 @@ Two decision points follow from the plan:
 
 ### 9.1 Result of M0 (21–22 November 2026)
 
-**Go: the three criteria are met.** M1 started on 22 November 2026.
+**Go: the three criteria are met.** M1 started on 22 November 2026. The
+code is described in [GPU wave model](wave_model.md) and all the results,
+M1 included, in [GPU model results](wave_results.md).
 
 **What was built.** The crate `hww3-wave` reads an HWW3 grid and builds
 what WW3 builds for `PDLIB_W3XYPFSN2`: inward normals, the boundary flags,

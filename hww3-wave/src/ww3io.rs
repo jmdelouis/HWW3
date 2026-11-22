@@ -32,6 +32,7 @@ impl Time {
         days * 86400 + hh * 3600 + mm * 60 + ss
     }
 
+    /// Inverse of [`Time::secs`].
     pub fn from_secs(t: i64) -> Time {
         let days = t.div_euclid(86400);
         let sod = t.rem_euclid(86400);
@@ -48,6 +49,8 @@ impl Time {
         Time((y * 10000 + m * 100 + d) as i32, ((sod / 3600) * 10000 + ((sod / 60) % 60) * 100 + sod % 60) as i32)
     }
 
+    /// Parse `yyyymmdd[hhmmss]`; other characters are ignored, so
+    /// `2026-01-08 00:00:00` is accepted.
     pub fn parse(s: &str) -> Result<Time> {
         let s: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
         if s.len() < 8 {
@@ -73,10 +76,12 @@ fn be_f32(b: &[u8]) -> f32 {
     f32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
 
+/// Big-endian `f32` values of a byte buffer.
 pub fn be_f32s(b: &[u8]) -> Vec<f32> {
     b.chunks_exact(4).map(be_f32).collect()
 }
 
+/// Big-endian `i32` values of a byte buffer.
 pub fn be_i32s(b: &[u8]) -> Vec<i32> {
     b.chunks_exact(4).map(be_i32).collect()
 }
@@ -88,6 +93,7 @@ pub struct SeqFile {
 }
 
 impl SeqFile {
+    /// Open a file for reading its records in order.
     pub fn open(p: &Path) -> Result<SeqFile> {
         let f = File::open(p).with_context(|| format!("open {}", p.display()))?;
         Ok(SeqFile { r: BufReader::with_capacity(1 << 22, f), name: p.display().to_string() })
@@ -126,16 +132,25 @@ impl SeqFile {
 
 /// The fields of a `FULL` WW3 restart that the propagation needs.
 pub struct Restart {
+    /// Model time of the restart.
     pub time: Time,
+    /// Number of sea points (all nodes on an HWW3 grid).
     pub nsea: usize,
+    /// Values per spectrum, `NK NTH`.
     pub nspec: usize,
     /// `VA(isp, isea)` as written, `nsea nspec`, spectrum of each sea point contiguous.
     pub va: Vec<f32>,
+    /// Time of the water levels (`TLEV`).
     pub tlev: Time,
+    /// Time of the ice concentrations (`TICE`).
     pub tice: Time,
+    /// Water levels per sea point (m).
     pub wlv: Vec<f32>,
+    /// Ice concentrations per sea point.
     pub ice: Vec<f32>,
+    /// `MAPSTA` per node (1 sea, 2 open boundary, negative when masked by ice or drying).
     pub mapsta: Vec<i32>,
+    /// `MAPST2` per node (reasons for masking).
     pub mapst2: Vec<i32>,
     /// `COLD` restart (`ww3_strt`): spectra only; `time` is zero, levels
     /// and ice are zero and `mapsta` is 1 (the caller sets the grid's).
@@ -219,16 +234,22 @@ impl Restart {
 // Forcing fields (current.ww3, level.ww3, ice.ww3)
 // ---------------------------------------------------------------------------
 
+/// A forcing file written by `ww3_prnc` (`current.ww3`, `level.ww3`,
+/// `ice.ww3`, `wind.ww3`), read one time at a time.
 pub struct FieldFile {
     f: SeqFile,
+    /// Field identifier: `CUR`, `WND`, `LEV` or `ICE`.
     pub id: String,
+    /// First dimension of the fields (the number of nodes on an HWW3 grid).
     pub nx: usize,
+    /// Second dimension of the fields (1 on an unstructured grid).
     pub ny: usize,
     /// Fields per time: 2 for currents, 1 for levels and ice.
     pub nfield: usize,
 }
 
 impl FieldFile {
+    /// Open a forcing file and read its header.
     pub fn open(p: &Path) -> Result<FieldFile> {
         let mut f = SeqFile::open(p)?;
         let h = f.need("header")?;
@@ -269,22 +290,34 @@ impl FieldFile {
 // Boundary spectra (nest.ww3)
 // ---------------------------------------------------------------------------
 
+/// An open-boundary file written by `ww3_bounc` (`nest.ww3`), read one
+/// time at a time.
 pub struct NestFile {
     f: SeqFile,
+    /// Number of frequencies of the spectra.
     pub nk: usize,
+    /// Number of directions of the spectra.
     pub nth: usize,
+    /// Frequency increment factor.
     pub xfr: f32,
+    /// Lowest frequency (Hz).
     pub fr1: f32,
+    /// First direction (rad).
     pub th1: f32,
+    /// Number of boundary points.
     pub nbi: usize,
+    /// Longitude of the boundary points (degrees).
     pub xbpi: Vec<f32>,
+    /// Latitude of the boundary points (degrees).
     pub ybpi: Vec<f32>,
     /// `IPBPI(i, j)`, `nbi * 4`, row i: the 4 spectra of boundary point i (1-based, 0 = none).
     pub ipbpi: Vec<i32>,
+    /// `RDBPI(i, j)`, `nbi * 4`: interpolation weights of those spectra.
     pub rdbpi: Vec<f32>,
 }
 
 impl NestFile {
+    /// Open a boundary file and read its header and boundary points.
     pub fn open(p: &Path) -> Result<NestFile> {
         let mut f = SeqFile::open(p)?;
         let h = f.need("header")?;
@@ -338,6 +371,173 @@ impl NestFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn tmp(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("hww3_wave_{name}_{}", std::process::id()))
+    }
+
+    fn i32s(v: &[i32]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_be_bytes()).collect()
+    }
+
+    fn f32s(v: &[f32]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_be_bytes()).collect()
+    }
+
+    /// Append a Fortran sequential record with big-endian markers.
+    fn rec(out: &mut Vec<u8>, body: &[u8]) {
+        out.extend((body.len() as i32).to_be_bytes());
+        out.extend(body);
+        out.extend((body.len() as i32).to_be_bytes());
+    }
+
+    #[test]
+    fn sequential_records() {
+        let p = tmp("seq");
+        let mut b = vec![];
+        rec(&mut b, b"abc");
+        rec(&mut b, &[1, 2, 3, 4, 5]);
+        std::fs::write(&p, &b).unwrap();
+        let mut f = SeqFile::open(&p).unwrap();
+        assert_eq!(f.record().unwrap().unwrap(), b"abc");
+        assert_eq!(f.record().unwrap().unwrap(), vec![1, 2, 3, 4, 5]);
+        assert!(f.record().unwrap().is_none());
+        // markers that differ are an error
+        let n = b.len();
+        b[n - 1] = 9;
+        std::fs::write(&p, &b).unwrap();
+        let mut f = SeqFile::open(&p).unwrap();
+        f.record().unwrap();
+        assert!(f.record().is_err());
+        std::fs::remove_file(&p).unwrap();
+    }
+
+    #[test]
+    fn forcing_file() {
+        let p = tmp("cur");
+        let mut b = vec![];
+        let mut head = b"WAVEWATCH IIICUR".to_vec();
+        head.extend(i32s(&[4, 1, -1]));
+        rec(&mut b, &head);
+        for (t, s) in [(20260108, 0), (20260108, 3000)] {
+            rec(&mut b, &i32s(&[t, s]));
+            rec(&mut b, &f32s(&[0.1, 0.2, 0.3, s as f32]));
+            rec(&mut b, &f32s(&[-0.1, -0.2, -0.3, -0.4]));
+        }
+        std::fs::write(&p, &b).unwrap();
+        let mut f = FieldFile::open(&p).unwrap();
+        assert_eq!((f.id.as_str(), f.nx, f.ny, f.nfield), ("CUR", 4, 1, 2));
+        let (t, v) = f.next().unwrap().unwrap();
+        assert_eq!(t, Time(20260108, 0));
+        assert_eq!(v, vec![vec![0.1, 0.2, 0.3, 0.0], vec![-0.1, -0.2, -0.3, -0.4]]);
+        let (t, v) = f.next().unwrap().unwrap();
+        assert_eq!((t, v[0][3]), (Time(20260108, 3000), 3000.0));
+        assert!(f.next().unwrap().is_none());
+        std::fs::remove_file(&p).unwrap();
+    }
+
+    /// A restart of `nsea` points and `nspec` values per spectrum, in the
+    /// layout of `W3IORS`: fixed records of `LRECL` bytes.
+    fn restart_bytes(typ: &str, nsea: usize, nspec: usize, maptmp: &[i32]) -> Vec<u8> {
+        let lrecl = 4 * nspec.max(21);
+        let mut recs: Vec<Vec<u8>> = vec![];
+        let mut head = b"WAVEWATCH III RESTART FILE2021-04-06".to_vec();
+        head.extend(format!("{:30}", "test grid").bytes());
+        head.extend(typ.bytes());
+        head.extend(i32s(&[nsea as i32, nspec as i32]));
+        recs.push(head);
+        recs.push(i32s(&[20260108, 0]));
+        for s in 0..nsea {
+            recs.push(f32s(&(0..nspec).map(|j| (s * 1000 + j) as f32).collect::<Vec<f32>>()));
+        }
+        if typ == "FULL" {
+            recs.push(i32s(&[20260108, 3000, 20260101, 0]));
+            let nsize = lrecl / 4;
+            let wlv: Vec<f32> = (0..nsea).map(|s| 0.25 * s as f32).collect();
+            let ice: Vec<f32> = (0..nsea).map(|s| if s % 7 == 0 { 0.5 } else { 0.0 }).collect();
+            for part in [f32s(&wlv), f32s(&ice), i32s(maptmp)] {
+                for chunk in part.chunks(4 * nsize) {
+                    recs.push(chunk.to_vec());
+                }
+            }
+        }
+        recs.iter_mut().flat_map(|r| {
+            r.resize(lrecl, 0);
+            r.clone()
+        }).collect()
+    }
+
+    #[test]
+    fn cold_and_full_restarts() {
+        let (nsea, nspec) = (30, 24);
+        let p = tmp("restart");
+        std::fs::write(&p, restart_bytes("COLD", nsea, nspec, &[])).unwrap();
+        let r = Restart::read(&p).unwrap();
+        assert!(r.cold);
+        assert_eq!((r.nsea, r.nspec, r.time), (nsea, nspec, Time(20260108, 0)));
+        assert_eq!((r.va[0], r.va[nspec + 3], r.va[nsea * nspec - 1]), (0.0, 1003.0, 29023.0));
+        assert!(r.mapsta.iter().all(|&m| m == 1));
+        // MAPSTA and MAPST2 are stored together as MAPSTA + 8 MAPST2
+        let mut maptmp = vec![1i32; nsea];
+        maptmp[3] = 2;
+        maptmp[4] = -1 + 8;
+        maptmp[5] = -2 + 16;
+        std::fs::write(&p, restart_bytes("FULL", nsea, nspec, &maptmp)).unwrap();
+        let r = Restart::read(&p).unwrap();
+        std::fs::remove_file(&p).unwrap();
+        assert!(!r.cold);
+        assert_eq!((r.tlev, r.tice), (Time(20260108, 3000), Time(20260101, 0)));
+        assert_eq!((r.wlv[29], r.ice[7], r.ice[8]), (7.25, 0.5, 0.0));
+        assert_eq!(&r.mapsta[2..6], &[1, 2, -1, -2]);
+        assert_eq!(&r.mapst2[2..6], &[0, 0, 1, 2]);
+        assert_eq!(r.va[2 * nspec + 5], 2005.0);
+    }
+
+    #[test]
+    fn boundary_file() {
+        let (nk, nth, nbi) = (2usize, 3usize, 3usize);
+        let p = tmp("nest");
+        let mut b = vec![];
+        let mut head = b"WAVEWATCH III BOUNDARY DATA FILE2021-04-06".to_vec();
+        head.extend(i32s(&[nk as i32, nth as i32]));
+        head.extend(f32s(&[1.1, 0.0373, 0.0]));
+        head.extend(i32s(&[nbi as i32]));
+        rec(&mut b, &head);
+        // IPBPI and RDBPI are written column-major: IPBPI(i, j) at j nbi + i
+        let mut pts = f32s(&[-10.0, -10.0, -10.0]);
+        pts.extend(f32s(&[45.0, 45.1, 45.2]));
+        pts.extend(i32s(&(0..4 * nbi).map(|c| (10 * (c % nbi) + c / nbi) as i32).collect::<Vec<i32>>()));
+        pts.extend(f32s(&(0..4 * nbi).map(|c| if c < nbi { 1.0 } else { 0.0 }).collect::<Vec<f32>>()));
+        rec(&mut b, &pts);
+        rec(&mut b, &i32s(&[20260108, 0, 2]));
+        rec(&mut b, &f32s(&vec![1.0; nk * nth]));
+        rec(&mut b, &f32s(&vec![2.0; nk * nth]));
+        std::fs::write(&p, &b).unwrap();
+        let mut f = NestFile::open(&p).unwrap();
+        assert_eq!((f.nk, f.nth, f.nbi, f.xfr, f.fr1), (nk, nth, nbi, 1.1, 0.0373));
+        assert_eq!(f.ybpi, vec![45.0, 45.1, 45.2]);
+        for i in 0..nbi {
+            for j in 0..4 {
+                assert_eq!(f.ipbpi[4 * i + j], (10 * i + j) as i32);
+                assert_eq!(f.rdbpi[4 * i + j], if j == 0 { 1.0 } else { 0.0 });
+            }
+        }
+        let (t, s) = f.next().unwrap().unwrap();
+        assert_eq!((t, s.len(), s[1][0]), (Time(20260108, 0), 2, 2.0));
+        assert!(f.next().unwrap().is_none());
+        std::fs::remove_file(&p).unwrap();
+    }
+
+    #[test]
+    fn time_parse_and_display() {
+        let t = Time::parse("2026-01-08 06:30:00").unwrap();
+        assert_eq!(t, Time(20260108, 63000));
+        assert_eq!(t.to_string(), "20260108 063000");
+        assert_eq!(Time::parse("20260108").unwrap(), Time(20260108, 0));
+        assert!(Time::parse("2026").is_err());
+        assert_eq!(Time::parse("19700101").unwrap().secs(), 0);
+    }
 
     #[test]
     fn time_roundtrip() {

@@ -18,6 +18,27 @@ Dependencies (from crates.io): `cdshealpix` 0.7 (HEALPix), `rayon`
 The number of threads is set with `RAYON_NUM_THREADS`. The North Atlantic
 grid (502,690 nodes) takes about 2.5 min and 6 GB of memory on 8 cores.
 
+## GPU wave model (`hww3-wave`, Rust)
+
+The same stable Rust toolchain (tested with 1.99). The modules without a
+GPU build and test anywhere:
+
+```bash
+cd HWW3/hww3-wave
+cargo test --no-default-features     # unit tests, no GPU
+```
+
+The GPU backends need an NVIDIA GPU and the CUDA toolkit for NVRTC:
+
+- `cubecl` (default feature): CubeCL 0.11 and Burn 0.22 with their CUDA
+  backend. The build of `cubecl-llvm` downloads an LLVM bundle that needs
+  glibc 2.34 or later (Ifremer hpc cluster, RHEL 9.4,
+  `module load cuda/13.0.0`).
+- `cuda-c`: CUDA C kernels through `cudarc`, for older systems and drivers
+  (`CUDARC_CUDA_VERSION=11040` on Datarmor).
+
+See [GPU wave model](wave_model.md) for the build commands.
+
 ## Python scripts
 
 The data-preparation and plotting scripts in `scripts/` need Python ≥ 3.7

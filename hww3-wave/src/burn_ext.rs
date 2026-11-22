@@ -20,7 +20,9 @@ use cubecl::client::Client;
 use cubecl::server::Handle;
 use std::sync::Arc;
 
+/// Burn backend of the kernels: CubeCL on CUDA.
 pub type B = CubeBackend;
+/// The same backend with Burn's autodiff tape.
 pub type Ad = Autodiff<CubeBackend>;
 
 /// The CubeCL client behind a Burn device (plain or autodiff).
@@ -56,8 +58,11 @@ pub fn transpose_primitive(dg: &DeviceGrid<f32>, y: &CubeTensor, ik: usize, sub:
 /// One sub-step of frequency `ik` as an operation of the tape.
 #[derive(Clone)]
 pub struct SubStep {
+    /// Grid on the device.
     pub dg: Arc<DeviceGrid<f32>>,
+    /// Frequency index.
     pub ik: usize,
+    /// Sub-step index (directions with `ITER <= sub` are copied).
     pub sub: u32,
 }
 

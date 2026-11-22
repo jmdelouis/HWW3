@@ -3,10 +3,18 @@
 //! against the CPU reference of the WW3 loop and, with the CubeCL backend,
 //! the same dot-product test through Burn's autodiff tape.
 //!
-//! usage:
-//!   hww3-wave info  <grid dir> [--box lon0 lon1 lat0 lat1]
-//!   hww3-wave bench <grid dir> [--box lon0 lon1 lat0 lat1] [--backend cubecl|cuda-c]
-//!                   [--reps N] [--block B] [--f64] [--reference] [--burn] [--out results.json]
+//! ```text
+//! hww3-wave info  <grid dir> [--box lon0 lon1 lat0 lat1]
+//! hww3-wave bench <grid dir> [--box lon0 lon1 lat0 lat1] [--backend cubecl|cuda-c]
+//!                 [--reps N] [--block B] [--f64] [--reference] [--burn] [--out results.json]
+//! ```
+
+// Built without a GPU backend, the driver only has `info`, and the timing
+// and test helpers are unused.
+#![cfg_attr(
+    not(any(feature = "cubecl", feature = "cuda-c")),
+    allow(dead_code, unused_imports, unused_variables, unused_mut)
+)]
 
 use anyhow::{bail, Result};
 use hww3_wave::backend::{Scalar, Sweeper};

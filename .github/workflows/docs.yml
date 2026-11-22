@@ -20,6 +20,11 @@ jobs:
         with:
           python-version: "3.11"
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            hww3-grid
+            hww3-wave
       - name: Install Sphinx
         run: pip install -r docs/requirements.txt
       - name: Build the site (warnings are errors)
@@ -32,6 +37,17 @@ jobs:
           cargo doc --no-deps
           mkdir -p ../docs/_build/html/rust
           cp -r target/doc/* ../docs/_build/html/rust/
+      - name: Build the Rust API reference of the GPU wave model into the site
+        working-directory: hww3-wave
+        env:
+          RUSTDOCFLAGS: -D warnings
+          # no CUDA toolkit or LLVM bundle on the runner (see ci.yml)
+          CUDARC_CUDA_VERSION: "13000"
+          DOCS_RS: "1"
+        run: |
+          cargo doc --locked --no-deps --features cuda-c
+          mkdir -p ../docs/_build/html/rust-wave
+          cp -r target/doc/* ../docs/_build/html/rust-wave/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/_build/html

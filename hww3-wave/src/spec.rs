@@ -7,27 +7,43 @@
 
 use std::f32::consts::PI;
 
+/// Acceleration of gravity (m/s², WW3 `GRAV`).
 pub const GRAV: f32 = 9.806;
+/// Earth radius (m, WW3 `RADIUS`).
 pub const RADIUS: f32 = 4.0e7 / (2.0 * PI);
+/// Degrees to radians (WW3 `DERA`).
 pub const DERA: f32 = PI / 180.0;
 /// Power of the high-frequency tail (`FACHF`, ST4 default).
 pub const FACHF: f32 = 5.0;
 
+/// Spectral grid of WW3: frequencies, directions and the bin widths used
+/// by the propagation and the outputs.
 pub struct Spec {
+    /// Number of frequencies (`NK`).
     pub nk: usize,
+    /// Number of directions (`NTH`).
     pub nth: usize,
+    /// Frequency increment factor (`XFR`).
     pub xfr: f32,
+    /// Direction increment (rad, `DTH`).
     pub dth: f32,
-    /// `SIG(0 .. NK+1)`, `DSIP(0 .. NK+1)` (rad/s).
+    /// `SIG(0 .. NK+1)` (rad/s).
     pub sig: Vec<f32>,
+    /// `DSIP(0 .. NK+1)`: frequency bandwidths (rad/s) of the propagation.
     pub dsip: Vec<f32>,
-    /// `DSII(1 .. NK)` and `DDEN(1 .. NK)` stored at index `ik - 1`.
+    /// `DSII(1 .. NK)` stored at index `ik - 1`: bandwidths of the integrals.
     pub dsii: Vec<f32>,
+    /// `DDEN(1 .. NK)` stored at index `ik - 1`: `DTH DSII SIG`.
     pub dden: Vec<f32>,
+    /// `cos θ` (`ECOS`, exactly 0 or ±1 on the axes).
     pub ecos: Vec<f32>,
+    /// `sin θ` (`ESIN`, exactly 0 or ±1 on the axes).
     pub esin: Vec<f32>,
+    /// `sin² θ` (`ES2`).
     pub es2: Vec<f32>,
+    /// `cos² θ` (`EC2`).
     pub ec2: Vec<f32>,
+    /// `sin θ cos θ` (`ESC`).
     pub esc: Vec<f32>,
     /// `XFR^(-FACHF-2)`: tail factor of the action spectrum per bin.
     pub fachfa: f32,
@@ -36,6 +52,9 @@ pub struct Spec {
 }
 
 impl Spec {
+    /// Spectral grid of `nk` frequencies from `fr1` (Hz) with factor `xfr`,
+    /// and `nth` directions offset by `thoff` (fraction of `DTH`), as
+    /// `W3GRID` builds it.
     pub fn new(nk: usize, nth: usize, fr1: f32, xfr: f32, thoff: f32) -> Spec {
         let tpi = 2.0 * PI;
         let xfr = xfr.max(1.00001);
@@ -109,4 +128,63 @@ pub fn node_wavenumbers(sp: &Spec, dw: f32, zb: f32, dmin: f32, wn: &mut [f32], 
         cg[ik] = c;
     }
     deep
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spectral_grid() {
+        let sp = Spec::new(32, 36, 0.0373, 1.1, 0.0);
+        assert_eq!((sp.sig.len(), sp.dsii.len()), (34, 32));
+        assert!((sp.sig[1] / (2.0 * PI * 0.0373) - 1.0).abs() < 1e-6);
+        for ik in 0..33 {
+            assert!((sp.sig[ik + 1] / sp.sig[ik] / 1.1 - 1.0).abs() < 1e-6);
+            assert!((sp.dsip[ik] / (sp.sig[ik] * 0.5 * (1.1 - 1.0 / 1.1)) - 1.0).abs() < 1e-6);
+        }
+        // the inner bandwidths tile the band between the two end half-bins
+        let inner: f32 = sp.dsii[1..31].iter().sum();
+        let band = 0.5 * (sp.sig[31] + sp.sig[32]) - 0.5 * (sp.sig[1] + sp.sig[2]);
+        assert!((inner / band - 1.0).abs() < 1e-4);
+        for k in 0..36 {
+            assert!((sp.ecos[k].powi(2) + sp.esin[k].powi(2) - 1.0).abs() < 1e-6);
+            assert_eq!(sp.esc[k], sp.esin[k] * sp.ecos[k]);
+        }
+        // directions on the axes are exact
+        assert_eq!((sp.ecos[0], sp.esin[0]), (1.0, 0.0));
+        assert_eq!((sp.ecos[9], sp.esin[9]), (0.0, 1.0));
+        assert_eq!((sp.ecos[18], sp.esin[18]), (-1.0, 0.0));
+        assert_eq!((sp.ecos[27], sp.esin[27]), (0.0, -1.0));
+    }
+
+    #[test]
+    fn wavnu3_follows_the_dispersion_relation() {
+        // WAVNU3 is an explicit approximation: within 0.1 % of the exact
+        // wavenumber and group speed
+        for f in [0.0373f32, 0.06, 0.1, 0.2, 0.5, 0.7] {
+            for h in [1.0f32, 5.0, 20.0, 100.0, 1000.0, 5000.0] {
+                let si = 2.0 * PI * f;
+                let (k, cg) = wavnu3(si, h);
+                let r = si * si / (GRAV * k * (k * h).tanh());
+                assert!((r - 1.0).abs() < 2e-3, "f {f} h {h}: ratio {r}");
+                let exact = crate::geom::group_speed(f as f64, h as f64) as f32;
+                assert!((cg / exact - 1.0).abs() < 1e-3, "f {f} h {h}: cg {cg} against {exact}");
+            }
+        }
+    }
+
+    #[test]
+    fn node_wavenumbers_keep_deep_nodes_at_the_bathymetric_depth() {
+        let sp = Spec::new(32, 36, 0.0373, 1.1, 0.0);
+        let (mut wn, mut cg) = (vec![0f32; 34], vec![0f32; 34]);
+        // deep: the water level does not matter
+        assert!(node_wavenumbers(&sp, 3.0, -4000.0, 1.0, &mut wn, &mut cg));
+        assert_eq!(wn[5], wavnu3(sp.sig[5], 4000.0).0);
+        // shallow: the water depth is used, never below DMIN
+        assert!(!node_wavenumbers(&sp, 12.0, -10.0, 1.0, &mut wn, &mut cg));
+        assert_eq!(wn[5], wavnu3(sp.sig[5], 12.0).0);
+        assert!(!node_wavenumbers(&sp, 0.2, -10.0, 1.0, &mut wn, &mut cg));
+        assert_eq!(cg[0], wavnu3(sp.sig[0], 1.0).1);
+    }
 }
