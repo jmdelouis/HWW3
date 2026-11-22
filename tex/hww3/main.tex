@@ -63,7 +63,10 @@ model now follows the tidal modulation of $H_s$ and $T_{m02}$.
 A differentiable WW3 written in Rust for one GPU, aimed at learning chains,
 has been costed and started. On an A100 its N-scheme propagation sweep and
 the transposed sweep take about \SI{1}{ms} per frequency on grid v4, and
-the geographic propagation costs \SI{15}{s} per model day.
+the geographic propagation costs \SI{15}{s} per model day. Its
+propagation-only model, without source terms, runs 48 hours of grid v5
+$K=4$ in \SI{32}{s} against \SI{813}{s} for WW3 on 32 cores. It agrees
+with WW3 to \SI{1}{mm} in $H_s$ at the median node.
 \end{abstract}
 
 \section{Motivation}
@@ -1583,10 +1586,6 @@ and run on the CPU, to $1.6\times10^{-6}$ of the largest value in single
 precision and $2.4\times10^{-15}$ in double precision.
 \end{itemize}
 
-Milestone M1, the propagation-only model checked against Fortran runs
-without source terms, started on 22 November 2026. Its Fortran references
-can be run with the hpc build of WW3 (Section~\ref{sec:build}).
-
 \begin{table}[H]
 \centering\small
 \begin{tabular}{lrrrr}
@@ -1608,6 +1607,61 @@ propagation and no source terms.
 The Channel--Biscay box has 21\,425 nodes.}
 \label{tab:m0}
 \end{table}
+
+\paragraph{Milestone M1.} The program \texttt{hww3-prop} runs the time loop
+of \texttt{W3WAVE} with the source terms off (\texttt{RUN\%FLSOU = F}) on
+one A100, from a WW3 restart:
+\begin{itemize}
+\item geographic propagation with currents and open-boundary spectra;
+\item refraction and frequency shift (\texttt{W3KTP3});
+\item water-level updates with the spectrum remapping of \texttt{W3ULEV}, and
+ice as an obstruction.
+\end{itemize}
+It is compared with WW3 run with the same settings by the hpc build
+(Section~\ref{sec:build}) on 32 cores, for 48 hours of grid v5 $K=4$ from
+8 January 2026 00\,h. Table~\ref{tab:m1} gives the three modes:
+\begin{itemize}
+\item \emph{prop}: currents, levels, ice and boundary spectra of the
+explicit run;
+\item \emph{geo}: the same with refraction and frequency shift off;
+\item \emph{ideal}: a Gaussian swell packet from \texttt{ww3\_strt}.
+\end{itemize}
+
+The three targets set before the runs are met in all three modes. They
+were an $H_s$ RMS difference below \SI{1}{cm} at the median node and below
+\SI{5}{cm} at the 99th percentile, and the energy within 0.5\,\%. The 48
+hours take \SI{32}{s} on the GPU against \SI{813}{s} for WW3, i.e.
+\SI{16}{s} per model day, including \SI{4.5}{s} of one-time kernel
+compilation. The largest differences are on coast nodes, most of them with
+a single triangle. In \emph{prop}, 49 of the 371\,278 nodes differ by more
+than \SI{5}{cm} RMS. The masks, the depths, the precision and the code path
+have been ruled out. One remaining hypothesis: coast nodes are left out of
+the CFL count, so they can run at a local CFL number above 1, where the
+result depends strongly on the number of sub-steps.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrrrr}
+\toprule
+mode & nodes & median & p99 & energy & WW3 (s) & GPU (s) \\
+\midrule
+prop & 371\,278 & \SI{0.94}{mm} & \SI{6.0}{mm} & $-0.047$\,\% & 813 & 32.0 \\
+geo & 371\,278 & \SI{0.63}{mm} & \SI{3.1}{mm} & $-0.018$\,\% & 702 & 24.7 \\
+ideal & 22\,015 & \SI{1.5}{mm} & \SI{4.8}{mm} & $-0.45$\,\% & 887 & 32.9 \\
+\bottomrule
+\end{tabular}
+\caption{Milestone M1: propagation-only model on one A100 against WW3 on 32
+cores, 48 hours of grid v5 $K=4$.
+\emph{Median} and \emph{p99}: RMS difference of the hourly $H_s$ over the
+48 hours at the median node and at the 99th percentile.
+\emph{Energy}: largest difference of $\sum_i (H_{s,i}/4)^2$ over the hours.
+For \emph{ideal}, only the nodes where $H_s$ reaches \SI{0.5}{m} are
+counted.
+Slurm jobs 4118215, 4118220 and 4118221 (WW3), and 4117585, 4118253 and
+4118252 (GPU).}
+\label{tab:m1}
+\end{table}
+
 
 \appendix
 \section{Reproducing}
@@ -1668,9 +1722,13 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{sbatch scripts/build\_ww3\_hpc.slurm} (\texttt{docs/ww3.md}).
 \item Table~\ref{tab:diffcost}: \texttt{docs/differentiable.md}, with the
   line counts of \texttt{scripts/ww3\_loc.py}.
-\item Table~\ref{tab:m0}: \texttt{docs/differentiable.md}, Section 9.1.
-  The crate \texttt{hww3-wave} and its Slurm script are on a development
-  branch, to be merged with milestone M1.
+\item Table~\ref{tab:m0}: \texttt{sbatch scripts/wave\_m0\_hpc.slurm}
+  (\texttt{docs/reproducing.md}).
+\item Table~\ref{tab:m1}: for each mode (\texttt{prop}, \texttt{geo},
+  \texttt{ideal}), \texttt{scripts/m1\_ww3\_prop\_hpc.slurm} and
+  \texttt{scripts/m1\_prop\_hpc.slurm} submitted with
+  \texttt{sbatch --export=ALL,MODE=<mode>}, then
+  \texttt{scripts/m1\_compare\_nc.py} (\texttt{docs/reproducing.md}).
 \end{itemize}
 
 \end{document}
