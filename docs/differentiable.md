@@ -684,7 +684,8 @@ Datarmor.
   else as the grid v5 $K=4$ explicit run: 48 h from the restart of
   8 January (Slurm job 4122569, 27 core-hours on 32 ranks, with restarts
   after the first three steps) and the cold-started week of 1–8 January
-  (job 4122614, 64 ranks), on the hpc cluster.
+  (job 4122614, 5,003 s and 88 core-hours on 64 ranks), on the hpc
+  cluster.
 - **Harness.** The unit harness of section 2.3 is linked against the hpc
   WW3 build. It calls the source terms node by node and writes their
   inputs, outputs and the WW3 parameters and tables they read.

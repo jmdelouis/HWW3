@@ -293,7 +293,8 @@ to `$R/m2/forcing` with `ww3_subset.py`.
 | Run | Period | Start | Outputs | Slurm job | Cost |
 |---|---|---|---|---|---|
 | `dev` | 8–10 January, 48 h | `restart001.ww3` of the explicit run (8 January 00 h) | hourly fields; restarts after the first three 600 s steps | 4122569 (32 ranks) | 3,064 s, 27 core-hours |
-| `week` | 1–8 January | cold start, as the explicit run | hourly fields, for the final targets and the scores | 4122614 (64 ranks) | running: 41 s per model hour, about 2 h and 120 core-hours expected |
+| `week` | 1–8 January | cold start, as the explicit run | hourly fields, for the final targets and the scores | 4122614 (64 ranks) | 5,003 s, 88 core-hours |
+| `week_start` | 1 January, 1 h | cold start | the restart after the first 600 s step, to start the GPU week from | 4138952 (32 ranks) | 398 s, 3 core-hours |
 
 The `dev` run takes 64 s per model hour on 32 ranks, against 17 s for the
 propagation-only reference of M1 on the same grid and cores: the source
