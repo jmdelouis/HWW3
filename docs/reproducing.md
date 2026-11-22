@@ -370,6 +370,26 @@ sbatch --export=ALL,MODE=prop,STEPS_REF=$D/restart001.ww3:$D/restart002.ww3:$D/r
 sbatch --export=ALL,MODE=geo,HOURS=1,FSTRIDE=600,TAG=_fld,"FLIST=HS DPT CUR" scripts/m1_ww3_prop_hpc.slurm
 ```
 
+### Milestone M2a: source terms against WW3
+
+The forcing of 1–10 January (wind, currents, levels, ice from
+`natl_v5k4_jan2026_cur`, boundary spectra from `natl_v5k4_jan2026_bnd`) is
+cut from the Datarmor runs with `ww3_subset.py` (two fields per record for
+the wind and the currents) and copied to `$R/m2/forcing`. Then, on the hpc
+cluster:
+
+```bash
+# WW3 with the simplified ST4 (SINTABLE = 0, SDSCUM = 0): 48 h from 8 January with
+# restarts after the first three steps, and the cold-started week of 1-8 January
+sbatch --export=ALL,MODE=dev,RSTRIDE=600,RCOUNT=3 scripts/m2_ww3_ref_hpc.slurm
+sbatch --ntasks=64 --mem=160G -t 24:00:00 --export=ALL,MODE=week scripts/m2_ww3_ref_hpc.slurm
+# source-term harness on the restart of 8 January (in runs/m2_dev, after ww3_grid)
+sbatch --export=ALL,OUT=src_8jan.bin,NODES=169562+130464+165663+229656+147650 scripts/m2_src_harness_hpc.slurm
+# CPU transcriptions against the harness
+cargo build --release --no-default-features --bin hww3-src
+target/release/hww3-src check $R/m2/harness/src_8jan.bin
+```
+
 ## 9. Note
 
 ```bash

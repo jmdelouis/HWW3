@@ -44,7 +44,9 @@ documented and the CI builds the documentation with warnings as errors.
 | `model` | CubeCL | `Model`, `Config`, `Inputs`: the propagation-only time loop |
 | `cuda_c` | CUDA C | `CudaGrid`: the `cudarc` `Sweeper` |
 
-Programs: `hww3-wave` (M0 timings and checks) and `hww3-prop` (M1 model).
+Programs: `hww3-wave` (M0 timings and checks), `hww3-prop` (M1 model) and
+`hww3-src` (M2a source terms against the WW3 harness). The Fortran harness
+`harness/src_harness.F90` is built against the WW3 library.
 
 ## Scripts (`scripts/`)
 
@@ -71,3 +73,5 @@ Programs: `hww3-wave` (M0 timings and checks) and `hww3-prop` (M1 model).
 | `m1_ww3_prop_hpc.slurm`, `natl_prop_run.pbs` | propagation-only WW3 references (hpc / Datarmor) |
 | `m1_prop_hpc.slurm` | GPU model, milestone M1: propagation-only runs and checks |
 | `m1_compare_nc.py`, `m1_compare.py` | hourly $H_s$ and $T_{m02}$ of the GPU model against a WW3 run (without numpy / with numpy) |
+| `m2_ww3_ref_hpc.slurm` | WW3 references of M2a with the simplified ST4 (`SINTABLE = 0`, `SDSCUM = 0`): 48 h from a restart or the cold-started week |
+| `m2_src_harness_hpc.slurm` | builds the source-term harness against the hpc WW3 library and runs it on a restart |

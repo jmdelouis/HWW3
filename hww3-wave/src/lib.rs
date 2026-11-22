@@ -11,7 +11,10 @@
 //!   tape;
 //! - **Milestone M1**: the propagation-only model (`hww3-prop`): geographic
 //!   and spectral propagation (`W3KTP3`), currents, water levels, ice and
-//!   open-boundary spectra, started from a WW3 restart.
+//!   open-boundary spectra, started from a WW3 restart;
+//! - **Milestone M2a** (in progress): the source terms with the simplified
+//!   ST4, checked node by node against the WW3 source-term harness
+//!   (`harness/src_harness.F90`, read by [`harness`]).
 //!
 //! # Backends
 //!
@@ -23,7 +26,7 @@
 //!   CUDA 12.
 //!
 //! The modules without a GPU ([`grid`], [`geom`], [`spec`], [`ww3io`],
-//! [`mod@reference`], [`cpu`], [`backend`]) build with
+//! [`mod@reference`], [`cpu`], [`harness`], [`sources`], [`backend`]) build with
 //! `--no-default-features` and hold the CPU references the kernels are
 //! checked against; their unit tests run without a GPU.
 //!
@@ -36,7 +39,9 @@ pub mod backend;
 pub mod cpu;
 pub mod geom;
 pub mod grid;
+pub mod harness;
 pub mod reference;
+pub mod sources;
 pub mod spec;
 pub mod ww3io;
 

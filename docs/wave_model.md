@@ -17,10 +17,14 @@ reference that every part of the GPU model is checked against.
   frequency on grid v4. The dot-product tests pass to round-off, and a
   sub-step is an operation of Burn's autodiff tape.
 - **Milestone M1 (targets met).** The propagation-only model `hww3-prop`
-  runs 48 h of grid v5 $K=4$ in 32 s on one A100, against 813 s for WW3 on
-  32 cores. It stays within 1 mm of WW3 in $H_s$ at the median node.
-  Differences at about fifty coast nodes are still being diagnosed.
-- **Next: milestone M2a**, the simplified ST4 source terms.
+  runs 48 h of grid v5 $K=4$ in 65 s on one A100, against 813 s for WW3 on
+  32 cores. It stays within 1.5 µm of WW3 in $H_s$ at the median node and
+  0.71 mm at the worst node, once the sub-cycling count includes the coast
+  nodes as WW3 does.
+- **Milestone M2a (in progress)**, the simplified ST4 source terms: the CPU
+  transcriptions of every source term and of the `W3SRCE` integration
+  reproduce WW3 to its single-precision round-off; the wind forcing, the
+  GPU kernels and the time loop come next.
 
 Details and numbers are in [GPU model results](wave_results.md), the
 schemes in [Numerics of the GPU model](wave_numerics.md).
@@ -39,7 +43,14 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | Open-boundary spectra | `W3IOBC`, `W3UBPT`, `APPLY_BOUNDARY_CONDITION_VA` | `ww3io`, `prop`, `model` | M1 |
 | Outputs $H_s$, $T_{m02}$ | `W3OUTG` | `prop` | M1 |
 | Restart, forcing and boundary files | `W3IORS`, `W3FLDG`, `W3IOBC` | `ww3io` | M1 |
-| Source terms (ST4, DIA, LN1, DB1, BT4) | `W3SRCE` and its routines | — | M2a, M2b |
+| Mean parameters, u* (`SINTABLE = 0`: Newton iterations) | `W3SPR4`, `CALC_USTAR` | `sources` (CPU, checked) | M2a |
+| Wind input, swell damping, tail stress in line | `W3SIN4` | `sources` (CPU, checked) | M2a |
+| Wind forcing: time interpolation, wind relative to the current | `W3UWND` | — | M2a |
+| Whitecapping without the cumulative term (`SDSCUM = 0`) | `W3SDS4` | `sources` (CPU, checked) | M2a |
+| Nonlinear interactions (DIA), linear input, depth breaking, bottom friction | `W3SNL1`, `W3SLN1`, `W3SDB1`, `W3SBT4` | `sources` (CPU, checked) | M2a |
+| Integration: dynamic step, limiter, tail, `FHMAX`, ice scaling | `W3SRCE` | `sources` (CPU, checked) | M2a |
+| Stress tables and the cumulative breaking term | `INSIN4` tables, `W3SDS4` (`SDSCUM`) | — | M2b |
+| Unit harness of the source terms | (Fortran program on `libww3.a`) | `harness/src_harness.F90`, `harness` | M2a |
 
 ## Crate layout
 
@@ -51,6 +62,8 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | `ww3io` | no | big-endian WW3 files: restart, forcing fields, boundary spectra |
 | `reference` | no | `PDLIB_W3XYPFSN2` on the CPU in double precision, as WW3 writes it |
 | `cpu` | no | CPU transcriptions of `W3KTP3` and `PDLIB_W3XYPUG` |
+| `harness` | no | reader of the WW3 source-term harness: inputs, outputs and parameters of the source terms |
+| `sources` | no | CPU transcriptions in double precision of the source terms (`W3SPR4`, `CALC_USTAR`, `W3SIN4`, `W3SLN1`, `W3SNL1`, `W3SDS4`, `W3SDB1`, `W3SBT4`) and of the `W3SRCE` integration |
 | `backend` | no | the `Sweeper` trait shared by the GPU backends |
 | `kernels` | CubeCL | N-scheme sub-step and its transpose, three variants |
 | `device` | CubeCL | the grid on the device; `Sweeper` for CubeCL |
@@ -158,3 +171,18 @@ that differ, with `IOBPD`, `ITER` and the local CFL number; `--dump`
 writes the depth and currents of those steps. The job scripts are
 `scripts/m1_prop_hpc.slurm` (GPU) and `scripts/m1_ww3_prop_hpc.slurm`
 (Fortran reference); see [Reproducing](reproducing.md).
+
+### `hww3-src` (milestone M2a)
+
+```text
+hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
+```
+
+Runs the CPU transcriptions of the source terms (`sources`) on the inputs of
+the WW3 source-term harness (`harness/src_harness.F90`, built and run by
+`scripts/m2_src_harness_hpc.slurm`) and prints, for every output, the
+largest difference over the nodes. Each routine gets the inputs WW3 had;
+then the whole `W3SRCE` integration over the global step runs from the same
+state. It also counts the nodes where the wind-sea flags, the
+depth-breaking flag or the limiter decision differ from WW3. It needs no
+GPU.

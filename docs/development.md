@@ -65,6 +65,7 @@ western boundary.
 | `geom::coast_node_takes_waves_from_the_sea_only` | `IOBPD` on a southern coast node keeps the directions with $\sin\theta \le 0$, on an eastern one those with $\cos\theta \ge 0$ |
 | `geom::dry_node_is_masked` | a node shallower than `DMIN` has `IOBDP` = 0, an empty mask and zero velocities |
 | `geom::sub_cycling_keeps_the_cfl_of_every_wet_node_below_one` | with $\Delta t / \mathrm{ITER}$, the CFL number of every wet node (coast and open boundary included, as WW3 with `FSBCCFL = T`) and component is at most 1 |
+| `harness::harness_files_round_trip` | the harness parameter file (lower bounds, 2-D tables, kinds) and output file (record layout of every call) built in memory |
 | `geom::host_arrays_pack_the_masks` | the mask words and time steps handed to the kernels |
 | `spec::spectral_grid` | frequencies, bandwidths and direction cosines of `W3GRID` |
 | `spec::wavnu3_follows_the_dispersion_relation` | `WAVNU3` within 0.1 % of the dispersion relation and of the exact group speed, 1 m to 5,000 m, 0.037 to 0.7 Hz |

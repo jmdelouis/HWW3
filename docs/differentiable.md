@@ -672,6 +672,27 @@ Datarmor.
   currents or the sea level change at every step.
 - **Tuning.** The transposes are 10–14 % slower than the forward sweeps.
 
+### 9.2 Progress of M2a (from 22 November 2026)
+
+- **References.** WW3 with `SINTABLE = 0` and `SDSCUM = 0`, everything
+  else as the grid v5 $K=4$ explicit run: 48 h from the restart of
+  8 January (Slurm job 4122569, 27 core-hours on 32 ranks, with restarts
+  after the first three steps) and the cold-started week of 1–8 January
+  (job 4122614, 64 ranks), on the hpc cluster.
+- **Harness.** The unit harness of section 2.3 is linked against the hpc
+  WW3 build. It calls the source terms node by node and writes their
+  inputs, outputs and the WW3 parameters and tables they read.
+- **CPU ports.** The double-precision transcriptions of `W3SPR4`,
+  `CALC_USTAR`, `W3SIN4` with the tail stress in line, `W3SLN1`,
+  `W3SNL1`, `W3SDS4` without the cumulative term, `W3SDB1`, `W3SBT4` and
+  the whole `W3SRCE` integration over a 600 s step reproduce WW3 on 1,869
+  nodes to the round-off of the single-precision WW3: 1e-6 to 5e-5 for
+  each source term, 4.3e-6 for the spectrum after the step, the same
+  dynamic steps and limiter decisions at every node (Slurm job 4123121).
+
+Details and the list of what remains are in
+[GPU model results](wave_results.md).
+
 ## 10. Other routes, briefly
 
 | route | effort | why not the main route |

@@ -267,3 +267,93 @@ sweeps.
 - `scripts/explicit_cost.py` and the sub-step cap `cfl_substeps` of
   `hww3-grid`, which shaped grid v5, count the interior nodes only, as M0
   did; the coast cells now set the explicit cost of WW3 on these grids.
+
+## Milestone M2a: the source terms (in progress)
+
+M2a adds the source terms of the HWW3 configuration with the simplified
+ST4: `SINTABLE = 0` in `&SIN4` (no stress tables: u* by Newton iterations
+in `CALC_USTAR`, the tail stress integrated in line over 50 wavenumbers in
+`W3SIN4`) and `SDSCUM = 0` in `&SDS4` (no cumulative breaking term), with
+the DIA (`W3SNL1`), `W3SLN1`, `W3SDB1`, `W3SBT4` and the integration of
+`W3SRCE`. Everything else is as in the grid v5 $K=4$ explicit run
+(`BETAMAX = 1.75`, `UGBCCFL` at its default).
+
+### WW3 references
+
+`scripts/m2_ww3_ref_hpc.slurm` runs WW3 `dea641c` (hpc build) with the
+simplified ST4; `ww3_grid.out` confirms `SINTABLE = 0`, `SDSCUM = 0.00`
+and no stress table. The forcing of 1–10 January 2026 (wind, currents,
+levels, ice, boundary spectra) was copied from the Datarmor run directories
+to `$R/m2/forcing` with `ww3_subset.py`.
+
+| Run | Period | Start | Outputs | Slurm job | Cost |
+|---|---|---|---|---|---|
+| `dev` | 8–10 January, 48 h | `restart001.ww3` of the explicit run (8 January 00 h) | hourly fields; restarts after the first three 600 s steps | 4122569 (32 ranks) | 3,064 s, 27 core-hours |
+| `week` | 1–8 January | cold start, as the explicit run | hourly fields, for the final targets and the scores | 4122614 (64 ranks) | running: 41 s per model hour, about 2 h and 120 core-hours expected |
+
+The `dev` run takes 64 s per model hour on 32 ranks, against 17 s for the
+propagation-only reference of M1 on the same grid and cores: the source
+terms cost about three times the propagation in WW3.
+
+### Source-term harness
+
+`hww3-wave/harness/src_harness.F90` is linked against the hpc WW3 build
+(`libww3.a` and its modules, the same compiler flags) by
+`scripts/m2_src_harness_hpc.slurm`. It sets WW3 up as `ww3_shel` does,
+reads the `mod_def.ww3` of the simplified-ST4 reference (which runs
+`INSIN4` and `INSNL1`), takes the spectra, level, ice, u*, u* direction and
+`ASF` of a restart and the wind of `wind.ww3` at the same time, and calls,
+node by node, the routines of the first iteration of `W3SRCE` (`W3SPR4`,
+`W3SIN4`, `W3SPR4`, `W3SLN1`, `W3SIN4`, `W3SNL1`, `W3SDS4`, `W3SDB1`,
+`W3SBT4`) and then a full `W3SRCE` (600 s). It writes their inputs and
+outputs, and a parameter file with what those routines read from the WW3
+modules: the spectral grid, the ST4 constants, `FWTABLE`, the saturation
+indices and weights of `W3SDS4`, the DIA tables of `INSNL1` (`IP11` …
+`IC82`, `AWG`, `SWG`, `AF11`), the LN1, DB1 and BT4 coefficients. The ports
+read that file instead of computing the tables again
+(`hww3_wave::harness`).
+
+On the restart of 8 January 00 h, every 200th sea point and five chosen
+nodes give 1,869 nodes (Slurm job 4123121, 5 s). The values are physical:
+drag coefficients of 0.8–1.6e-3, Charnock coefficients of 0.0095–0.023, u*
+from `W3SPR4` close to the restart value, dynamic steps of 77–212 s at
+shallow windy nodes where bottom friction dominates.
+
+### Ports checked against the harness
+
+CPU transcriptions in double precision (`hww3_wave::sources`), each call
+fed with the inputs WW3 had in the harness (`hww3-src check`); the error is
+the largest difference over the 1,869 nodes, relative to WW3 (to the
+largest value of the node for spectra):
+
+| Routine | Outputs | Largest relative difference |
+|---|---|---|
+| `W3SPR4`, `CALC_USTAR` (10 Newton iterations) | EMEAN, FMEAN, FMEAN1, WNMEAN, FMEANWS | 1.1e-6 |
+| | u*, $C_d$, $z_0$, Charnock | 2.6e-6 |
+| | mean direction of the long waves | 6e-5 rad (absolute) |
+| `W3SIN4` (tail stress in line) | S, D | 3.2e-6 |
+| | wave-supported stress, stress of swell damping | 3.4e-6 |
+| | wind-sea flags `LLWS` | 1 bin of 2,153,088 differs |
+| `W3SLN1` | S | 5.3e-6 |
+| `W3SNL1` (DIA, tables of `INSNL1`) | S, D | 1.1e-6 |
+| `W3SDS4` (`SDSBCHOICE = 1`, no cumulative term) | S, D | 1.7e-5 |
+| `W3SDB1` | S, D; breaking flag | 3.6e-8; no node differs |
+| `W3SBT4` (movable bed) | S, D, bottom stress | 5.0e-5 |
+| | ripple roughness | 1.0e-4 |
+| `W3SRCE` (600 s, dynamic step, limiter, tail, `FHMAX`, ice scaling) | spectrum after the step | 4.3e-6 (mean 6.6e-8) |
+| | mean dynamic step, cut-off frequency, u*, Charnock, mean wavenumber | 1.6e-5 |
+| | stresses (to the waves, to the ocean, swell damping, bottom) | 2.9e-4 |
+| | energy flux from the wind | 5.3e-4 |
+| | shaved steps of the limiter | no node differs |
+
+The larger differences of `W3SDS4` and `W3SBT4` come from the
+single-precision tables WW3 interpolates (error function, friction
+factor); those of the integrated stresses and fluxes from sums of terms of
+both signs. The flux to the ocean, a difference of the integrated fluxes,
+agrees to 1.2e-4 on average but to 4.4e-2 at the node where it nearly
+cancels. The number of dynamic steps goes from 1 to 60 (2.4 on average);
+the mean step agrees to 8.9e-6, so both codes take the same steps at every
+node.
+
+These are the round-off differences of the single-precision WW3. Still to
+port: the wind forcing (`W3UWND`), then the GPU kernels and the time loop.
