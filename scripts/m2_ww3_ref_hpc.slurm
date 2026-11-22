@@ -17,6 +17,9 @@
 #              (8 January 2026 00 h), with wind, currents, levels, ice and
 #              boundary spectra
 #   MODE=week  1-8 January 2026, cold start, as natl_v5k4_jan2026_exp
+# With ST4=full the namelists of natl_v5k4_jan2026_exp are kept unchanged:
+# the calibrated full ST4 of milestone M2b (stress tables, SINTABLE = 1, and
+# the cumulative breaking term, SDSCUM = -0.40, both WW3 defaults).
 # Forcing (1-10 January) in $S/m2/forcing. Hourly fields FLIST (default those
 # of natl_v5k4_jan2026_exp) in $S/runs/m2_<MODE><TAG>/ww3.*.nc; with RSTRIDE,
 # also RCOUNT restarts (full spectra) every RSTRIDE s from the start,
@@ -25,6 +28,7 @@
 #   sbatch --export=ALL,MODE=week scripts/m2_ww3_ref_hpc.slurm
 S=/scratch/jmdeloui/HWW3
 MODE=${MODE:-dev}
+ST4=${ST4:-simplified}
 FLIST=${FLIST:-HS T02 FP DIR WND ICE CUR WLV}
 I=$S/runs/test_grid_v5k4
 FO=$S/m2/forcing
@@ -47,9 +51,13 @@ START=$(date -u -d "$T0 UTC" +'%Y%m%d %H%M%S')
 STOP=$(date -u -d "$T0 UTC + $HOURS hours" +'%Y%m%d %H%M%S')
 mkdir -p $D; cd $D
 cp $I/natl.msh $I/natl.obc $I/ww3_grid.nml .
-# simplified ST4
-sed -e 's|^&SIN4 BETAMAX = 1.75 /$|\&SIN4 BETAMAX = 1.75, SINTABLE = 0 /\n\&SDS4 SDSCUM = 0.0 /|' \
-    $I/namelists_natl.nml > namelists_natl.nml
+if [ "$ST4" = full ]; then
+  cp $I/namelists_natl.nml .
+else
+  # simplified ST4
+  sed -e 's|^&SIN4 BETAMAX = 1.75 /$|\&SIN4 BETAMAX = 1.75, SINTABLE = 0 /\n\&SDS4 SDSCUM = 0.0 /|' \
+      $I/namelists_natl.nml > namelists_natl.nml
+fi
 grep -E "SIN4|SDS4|EXPFSN" namelists_natl.nml
 $B/ww3_grid > ww3_grid.out 2>&1 || { tail -40 ww3_grid.out; exit 1; }
 grep -E "SINTABLE|SDSCUM =" ww3_grid.out
@@ -57,8 +65,8 @@ for f in wind.ww3 current.ww3 level.ww3 ice.ww3 nest.ww3; do ln -sf $FO/$f .; do
 rm -f restart.ww3
 [ "$MODE" = dev ] && ln -sf $S/m1/v5k4/restart001.ww3 restart.ww3
 cat > ww3_shel.nml <<NML
-! HWW3 North Atlantic, grid v5 K=4, explicit scheme, simplified ST4 (SINTABLE = 0,
-! SDSCUM = 0): M2a reference, mode $MODE.
+! HWW3 North Atlantic, grid v5 K=4, explicit scheme, ST4 $ST4 (simplified:
+! SINTABLE = 0, SDSCUM = 0; full: as calibrated): M2 reference, mode $MODE.
 &DOMAIN_NML
   DOMAIN%START  = '$START'
   DOMAIN%STOP   = '$STOP'

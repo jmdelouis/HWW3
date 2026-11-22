@@ -712,6 +712,19 @@ Datarmor.
 Details and the list of what remains are in
 [GPU model results](wave_results.md).
 
+### 9.3 Progress of M2b (from 22 November 2026)
+
+- **Reference.** WW3 with the calibrated namelists (stress tables,
+  `SINTABLE = 1`; cumulative breaking term, `SDSCUM = -0.40`): 48 h from
+  the restart of 8 January with restarts after the first three steps
+  (Slurm job 4139131).
+- **Harness and CPU ports.** The harness writes the stress tables and
+  `CUMULW` from the calibrated `mod_def.ww3`. The CPU transcriptions of
+  `CALC_USTAR` with `TAUT`, the tail of `W3SIN4` with `TAUHFT2` and the
+  cumulative term of `W3SDS4` reproduce WW3 to 1.5e-7, 2.7e-6 and 1.7e-5
+  on 1,869 nodes, and the whole `W3SRCE` step to 3.9e-6 (job 4139132).
+  The GPU kernel has the same branches, still to check on a GPU.
+
 ## 10. Other routes, briefly
 
 | route | effort | why not the main route |

@@ -112,43 +112,63 @@ fn table<F: Float>(tab: &[F], n: usize, x: F) -> F {
 /// Charnock relation with the wave-supported stress `tauw`; writes u*, z0
 /// and the Charnock coefficient into `sc`.
 #[cube]
-fn calc_ustar<F: Float>(par: &[F], sc: &mut Shared<[F]>, windspeed: F, tauw: F) {
+fn calc_ustar<F: Float>(par: &[F], taut: &[F], sc: &mut Shared<[F]>, windspeed: F, tauw: F) {
     let zero = F::new(0.0f32);
     let one = F::new(1.0f32);
     let two = F::new(2.0f32);
     let grav = par[P_GRAV];
     let kappa = par[P_KAPPA];
     let mut chath = par[P_AALPHA];
-    let mut xmin = zero;
     let capped = par[P_CAPCHNK] == one;
-    if capped {
-        let c1 = par[P_CAPCHNK + 1];
-        let c2 = par[P_CAPCHNK + 2];
-        chath = c1 + F::new(0.5f32) * (c2 - c1) * (one - ((windspeed - par[P_CAPCHNK + 3]) / par[P_CAPCHNK + 4]).tanh());
-        xmin = F::new(0.15f32) * (c2 - chath);
-    }
-    let eps1 = F::new(0.00001f32);
-    let xm = F::new(0.5f32);
-    let wcd = F::new(0.0012875f32).sqrt();
-    let ustold = windspeed * wcd;
-    let mut tauold = max(ustold * ustold, tauw + eps1);
     let mut ust = zero;
-    let zz0max = par[P_ZZ0MAX];
-    for _ in 0..10u32 {
-        let x = max(tauw / tauold, xmin);
-        ust = tauold.sqrt();
-        let mut zz00 = chath * tauold / grav;
-        if zz0max != zero {
-            zz00 = min(zz00, zz0max);
+    if par[P_SINTABLE] > zero {
+        // SINTABLE = 1: bilinear interpolation in TAUT
+        let itm = u32::cast_from(par[P_ITAUMAX]) as usize;
+        let jum = u32::cast_from(par[P_JUMAX]) as usize;
+        let tl = max(min(tauw, par[P_TAUWMAX]), zero);
+        let xi = tl.sqrt() / par[P_DELTAUW];
+        let xif = u32::cast_from(xi.trunc()) as usize;
+        let ind = select(xif < itm - 1, xif, itm - 1);
+        let deli1 = min(one, xi - F::cast_from(ind as u32));
+        let deli2 = one - deli1;
+        let xj = windspeed / par[P_DELU];
+        let xjf = u32::cast_from(xj.trunc()) as usize;
+        let j = select(xjf < jum - 1, xjf, jum - 1);
+        let delj1 = min(one, xj - F::cast_from(j as u32));
+        let delj2 = one - delj1;
+        let n = itm + 1;
+        ust = (taut[ind + j * n] * deli2 + taut[ind + 1 + j * n] * deli1) * delj2
+            + (taut[ind + (j + 1) * n] * deli2 + taut[ind + 1 + (j + 1) * n] * deli1) * delj1;
+    } else {
+        let mut xmin = zero;
+        if capped {
+            let c1 = par[P_CAPCHNK + 1];
+            let c2 = par[P_CAPCHNK + 2];
+            chath = c1 + F::new(0.5f32) * (c2 - c1) * (one - ((windspeed - par[P_CAPCHNK + 3]) / par[P_CAPCHNK + 4]).tanh());
+            xmin = F::new(0.15f32) * (c2 - chath);
         }
-        let mut zz0 = zz00 / (one - x).powf(xm);
-        let znu = F::new(0.11f32) * par[P_NU_AIR] / max(ust, F::new(1.0e-6f32));
-        zz0 += par[P_SINTAILPAR + 4] * znu;
-        let l = (par[P_ZZWND] / zz0).ln();
-        let f = ust - kappa * windspeed / l;
-        let delf = one - kappa * windspeed / (l * l) * two / ust * (one - (xm + one) * x) / (one - x);
-        ust -= f / delf;
-        tauold = max(ust * ust, tauw + eps1);
+        let eps1 = F::new(0.00001f32);
+        let xm = F::new(0.5f32);
+        let wcd = F::new(0.0012875f32).sqrt();
+        let ustold = windspeed * wcd;
+        let mut tauold = max(ustold * ustold, tauw + eps1);
+        let zz0max = par[P_ZZ0MAX];
+        for _ in 0..10u32 {
+            let x = max(tauw / tauold, xmin);
+            ust = tauold.sqrt();
+            let mut zz00 = chath * tauold / grav;
+            if zz0max != zero {
+                zz00 = min(zz00, zz0max);
+            }
+            let mut zz0 = zz00 / (one - x).powf(xm);
+            let znu = F::new(0.11f32) * par[P_NU_AIR] / max(ust, F::new(1.0e-6f32));
+            zz0 += par[P_SINTAILPAR + 4] * znu;
+            let l = (par[P_ZZWND] / zz0).ln();
+            let f = ust - kappa * windspeed / l;
+            let delf = one - kappa * windspeed / (l * l) * two / ust * (one - (xm + one) * x) / (one - x);
+            ust -= f / delf;
+            tauold = max(ust * ust, tauw + eps1);
+        }
     }
     let mut z0 = chath * F::new(0.000001f32) / grav;
     let mut charn = chath;
@@ -173,6 +193,7 @@ fn calc_ustar<F: Float>(par: &[F], sc: &mut Shared<[F]>, windspeed: F, tauw: F) 
 #[cube]
 fn spr4<F: Float>(
     par: &[F],
+    taut: &[F],
     sig: &[F],
     dden: &[F],
     a: &Shared<[F]>,
@@ -256,7 +277,7 @@ fn spr4<F: Float>(
         sc[S_AMAX] = amax;
         sc[S_FMEANWS] = fmeanws;
         let tauw = (tauwx * tauwx + tauwy * tauwy).sqrt();
-        calc_ustar::<F>(par, sc, u, tauw);
+        calc_ustar::<F>(par, taut, sc, u, tauw);
     }
     sync_cube();
 }
@@ -267,9 +288,10 @@ fn spr4<F: Float>(
 /// `accumulate`, adds `scale S` and `scale D` to `vs` and `vd`. Ends with a
 /// cube synchronisation.
 #[cube]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, unused_assignments)]
 fn sin4<F: Float>(
     par: &[F],
+    tauhf: &[F],
     sig: &[F],
     dden: &[F],
     ecos: &[F],
@@ -473,6 +495,46 @@ fn sin4<F: Float>(
             temp += a[(nk - 1) * nth + th] * cw * cw * cw;
         }
         let levtail0 = c0 * temp;
+        let mut tauhf_v = zero;
+        if par[P_SINTABLE] > zero {
+            // SINTABLE = 1: tail stress interpolated in TAUHFT2 (sheltering) or TAUHFT
+            let ius = u32::cast_from(par[P_IUSTAR]) as usize;
+            let ial = u32::cast_from(par[P_IALPHA]) as usize;
+            let xi = ust / par[P_DELUST];
+            let xif = u32::cast_from(xi.trunc()) as usize;
+            let ind = select(xif < 1, 1, select(xif < ius - 1, xif, ius - 1));
+            let deli1 = max(min(one, xi - F::cast_from(ind as u32)), zero);
+            let deli2 = one - deli1;
+            let um = max(ust, F::new(0.00001f32));
+            let xj = max(zero, (grav * z0 / (um * um) - par[P_AALPHA]) / par[P_DELALP]);
+            let xjf = u32::cast_from(xj.trunc()) as usize;
+            let j = select(xjf < 1, 1, select(xjf < ial - 1, xjf, ial - 1));
+            let delj1 = max(zero, min(one, xj - F::cast_from(j as u32)));
+            let delj2 = one - delj1;
+            let n1 = ius + 1;
+            let n2 = ial + 1;
+            let mut tau1 = zero;
+            if par[P_TTAUWSHELTER] > zero {
+                let ilv = u32::cast_from(par[P_ILEVTAIL]) as usize;
+                let xk = levtail0 / par[P_DELTAIL];
+                let xkf = u32::cast_from(xk.trunc()) as usize;
+                let i = select(xkf < ilv - 1, xkf, ilv - 1);
+                let delk1 = min(one, xk - F::cast_from(i as u32));
+                let delk2 = one - delk1;
+                let o0 = i * n1 * n2;
+                let o1 = (i + 1) * n1 * n2;
+                tau1 = ((tauhf[ind + j * n1 + o0] * deli2 + tauhf[ind + 1 + j * n1 + o0] * deli1) * delj2
+                    + (tauhf[ind + (j + 1) * n1 + o0] * deli2 + tauhf[ind + 1 + (j + 1) * n1 + o0] * deli1) * delj1)
+                    * delk2
+                    + ((tauhf[ind + j * n1 + o1] * deli2 + tauhf[ind + 1 + j * n1 + o1] * deli1) * delj2
+                        + (tauhf[ind + (j + 1) * n1 + o1] * deli2 + tauhf[ind + 1 + (j + 1) * n1 + o1] * deli1) * delj1)
+                        * delk1;
+            } else {
+                tau1 = (tauhf[ind + j * n1] * deli2 + tauhf[ind + 1 + j * n1] * deli1) * delj2
+                    + (tauhf[ind + (j + 1) * n1] * deli2 + tauhf[ind + 1 + (j + 1) * n1] * deli1) * delj1;
+            }
+            tauhf_v = levtail0 * ust * ust * tau1;
+        } else {
         let km = F::new(363.0f32);
         let mut ustr = ust;
         let zinf = (snk * snk / grav).ln();
@@ -510,8 +572,10 @@ fn sin4<F: Float>(
             taur -= w * tp2 * ustr * ustr * zbeta * levtail * dely * cgtail / cm;
             ustr = max(taur, zero).sqrt();
         }
-        let mut tauwx = sx + tau1 * usdirp.cos();
-        let mut tauwy = sy + tau1 * usdirp.sin();
+        tauhf_v = tau1;
+        }
+        let mut tauwx = sx + tauhf_v * usdirp.cos();
+        let mut tauwy = sy + tauhf_v * usdirp.sin();
         let tauw = (tauwx * tauwx + tauwy * tauwy).sqrt();
         let eps2 = F::new(0.000001f32);
         let um = max(ustar, eps2);
@@ -724,14 +788,20 @@ fn snl1<F: Float>(
 fn sds4<F: Float>(
     par: &[F],
     sig: &[F],
+    ecos: &[F],
+    esin: &[F],
     satw: &[F],
     sati: &[u32],
+    cumw: &[F],
     a: &Shared<[F]>,
     kb: &mut Shared<[F]>,
     b1: &mut Shared<[F]>,
+    dn: &mut Shared<[F]>,
     vs: &mut Shared<[F]>,
     vd: &mut Shared<[F]>,
     depth: F,
+    ustar: F,
+    usdir: F,
     scale: F,
     #[comptime] nk: usize,
     #[comptime] nth: usize,
@@ -764,10 +834,30 @@ fn sds4<F: Float>(
         }
         kb[K_BTH0 * nk + t] = m;
     }
-    sync_cube();
     let br = par[P_SSDSBR];
+    let c3 = par[P_SDSC3];
+    let c5 = par[P_SDSC5];
+    let c21 = par[P_SDSC21];
+    let extra = c3 != zero || c5 != zero || c21 != zero;
+    if c3 != zero {
+        // breaking-crest lengths (BRLAMBDA) for the cumulative term
+        let epsr = br.sqrt();
+        let pi = F::new(3.1415927f32);
+        for r in 0..(nspec + nu - 1) / nu {
+            let is = r * nu + t;
+            if is < nspec {
+                let q = max(b1[is].sqrt() - epsr, zero);
+                dn[is] = q * q * F::new(28.16f32) / (F::new(2.0f32) * (pi * pi));
+            }
+        }
+    }
+    sync_cube();
     let c2 = par[P_SDSC2];
     let c6 = par[P_SDSC6];
+    let dik = u32::cast_from(par[P_DIKCUMUL]) as usize;
+    let facturb = c5 * ustar * ustar / par[P_GRAV] * par[P_DRAT];
+    let cu = usdir.cos();
+    let su = usdir.sin();
     for r in 0..(nspec + nu - 1) / nu {
         let is = r * nu + t;
         if is < nspec {
@@ -784,8 +874,34 @@ fn sds4<F: Float>(
             let sdiagiso = c2 * s * c6 * (q * q);
             let coef2 = c2 * s * (one - c6) / (coef1 * coef1);
             let d = sdiagiso + coef2 * max(b1[is] - coef1, zero).powf(par[P_SSDSP]);
-            vs[is] += scale * (d * a[is]);
-            vd[is] += scale * d;
+            let mut sv = d * a[is];
+            let mut dv = d;
+            if extra {
+                let th = is - ik * nth;
+                let k = kb[K_WN * nk + ik];
+                let mut renewal = zero;
+                if c3 < zero && ik + 1 > dik {
+                    for ik2 in 0..(ik + 1 - dik) {
+                        if kb[K_BTH0 * nk + ik2] > br {
+                            let mut dot = zero;
+                            for th2 in 0..nth {
+                                let dth = select(th2 >= th, th2 - th, th - th2);
+                                dot += cumw[(ik2 * nk + ik) * nth + dth] * dn[ik2 * nth + th2];
+                            }
+                            renewal += dot;
+                        }
+                    }
+                }
+                let facturb2 = F::new(-2.0f32) * s * k * facturb;
+                let dvisc = F::new(-4.0f32) * c21 * k * k;
+                let coswind = ecos[th] * cu + esin[th] * su;
+                let dturb = facturb2 * max(zero, coswind);
+                let diag2 = c3 * renewal + dturb + dvisc;
+                dv += diag2;
+                sv += a[is] * diag2;
+            }
+            vs[is] += scale * sv;
+            vd[is] += scale * dv;
         }
     }
     sync_cube();
@@ -1016,6 +1132,9 @@ pub fn srce<F: Float>(
     dia_ip: &[u32],
     dia_ic: &[u32],
     af11: &[F],
+    taut: &[F],
+    tauhf: &[F],
+    cumw: &[F],
     dtg_: f32,
     start_: u32,
     np: usize,
@@ -1081,16 +1200,16 @@ pub fn srce<F: Float>(
                 isc_ds = max(zero, min(one, one - c * par[P_ICESCALES + 3]));
             }
             // before the loop: W3SPR4, W3SIN4 (TAUWBUG), W3SPR4
-            spr4::<F>(par, sig, dden, &a, &ws, &mut kb, &mut sc, u, zero, zero, nk, nth);
+            spr4::<F>(par, taut, sig, dden, &a, &ws, &mut kb, &mut sc, u, zero, zero, nk, nth);
             if !start {
                 let ust0 = sc[S_USTAR];
                 let z00 = sc[S_Z0];
                 sin4::<F>(
-                    par, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &mut vs, &mut vd, &mut ws, &mut kb, &mut sc, &mut dr, ust0, z00, udir, one, false, nk, nth,
+                    par, tauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &mut vs, &mut vd, &mut ws, &mut kb, &mut sc, &mut dr, ust0, z00, udir, one, false, nk, nth,
                 );
                 let tauwx = sc[S_TAUWX];
                 let tauwy = sc[S_TAUWY];
-                spr4::<F>(par, sig, dden, &a, &ws, &mut kb, &mut sc, u, tauwx, tauwy, nk, nth);
+                spr4::<F>(par, taut, sig, dden, &a, &ws, &mut kb, &mut sc, u, tauwx, tauwy, nk, nth);
             }
             if t == 0 {
                 let fh = max(par[P_FFXFM] * max(sc[S_FMEAN1], sc[S_FMEANWS]), par[P_FFXPM] / sc[S_USTAR]);
@@ -1119,7 +1238,7 @@ pub fn srce<F: Float>(
                 sln1::<F>(par, sig, ecos, esin, &kb, &mut vs, fhigh, ustar, udir, isc_ln, nk, nth, nu);
                 sync_cube();
                 sin4::<F>(
-                    par, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &mut vs, &mut vd, &mut ws, &mut kb, &mut sc, &mut dr, ustar, z0, udir, isc_in, true, nk,
+                    par, tauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &mut vs, &mut vd, &mut ws, &mut kb, &mut sc, &mut dr, ustar, z0, udir, isc_in, true, nk,
                     nth,
                 );
                 let stauwx = sc[S_TAUWX];
@@ -1127,7 +1246,9 @@ pub fn srce<F: Float>(
                 snl1::<F>(
                     par, sig, dia_ip, dia_ic, af11, &a, &kb, &mut ue, &mut b1, &mut b2, &mut dn, &mut vs, &mut vd, wnmean * depth, isc_nl, nk, nth, nspecx, nspecy, nu,
                 );
-                sds4::<F>(par, sig, satw, sati, &a, &mut kb, &mut b1, &mut vs, &mut vd, depth, isc_ds, nk, nth, nsat, nu);
+                sds4::<F>(
+                    par, sig, ecos, esin, satw, sati, cumw, &a, &mut kb, &mut b1, &mut dn, &mut vs, &mut vd, depth, ustar, udir, isc_ds, nk, nth, nsat, nu,
+                );
                 let dbd = sdb1::<F>(par, emean, fmean, wnmean, depth);
                 sbt4::<F>(par, sig, dden, ecos, esin, fwtab, erftab, &a, &mut kb, &mut sc, &mut vs, &mut vd, depth, sd50, spsic, nk, nth, nu);
                 // dynamic step: NKH from the FHIGH of the previous step
@@ -1188,7 +1309,7 @@ pub fn srce<F: Float>(
                     }
                 }
                 sync_cube();
-                spr4::<F>(par, sig, dden, &a, &ws, &mut kb, &mut sc, u, stauwx, stauwy, nk, nth);
+                spr4::<F>(par, taut, sig, dden, &a, &ws, &mut kb, &mut sc, u, stauwx, stauwy, nk, nth);
                 if t == 0 {
                     let fage = par[P_FFXFA] * (F::new(0.3f32) * u * sc[S_FMEANWS] * tpi::<F>() / par[P_GRAV]).tanh();
                     let fh1 = (par[P_FFXFM] + fage) * sc[S_FMEAN1];
@@ -1360,12 +1481,18 @@ pub struct SourceKernel<F: Real> {
     dia_ip: Handle,
     dia_ic: Handle,
     af11: Handle,
+    taut: Handle,
+    tauhf: Handle,
+    cumw: Handle,
     sig: Handle,
     dden: Handle,
     ecos: Handle,
     esin: Handle,
     nfw: usize,
     nerf: usize,
+    ntaut: usize,
+    ntauhf: usize,
+    ncumw: usize,
     /// DIA sizes and the first dimension of the saturation tables.
     pub nspecx: usize,
     /// See [`SourceKernel::nspecx`].
@@ -1397,6 +1524,12 @@ impl<F: Real> SourceKernel<F> {
             dia_ip: upu(&t.dia_ip),
             dia_ic: upu(&t.dia_ic),
             af11: upd(&t.af11),
+            taut: upd(&t.taut),
+            tauhf: upd(&t.tauhf),
+            cumw: upd(&t.cumw),
+            ntaut: t.taut.len(),
+            ntauhf: t.tauhf.len(),
+            ncumw: t.cumw.len(),
             sig: upd(&t.sig),
             dden: upd(&t.dden),
             ecos: upd(&t.ecos),
@@ -1447,6 +1580,9 @@ impl<F: Real> SourceKernel<F> {
                 bf(&self.dia_ip, 16 * self.nspecx),
                 bf(&self.dia_ic, 16 * nspec),
                 bf(&self.af11, self.nspecx),
+                bf(&self.taut, self.ntaut),
+                bf(&self.tauhf, self.ntauhf),
+                bf(&self.cumw, self.ncumw),
                 dtg,
                 start as u32,
                 np,

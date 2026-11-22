@@ -119,6 +119,16 @@ impl Params {
         self.i(name)?.first().copied().ok_or_else(|| anyhow!("parameter {name} is empty"))
     }
 
+    /// Whether the file holds `name`.
+    pub fn has(&self, name: &str) -> bool {
+        self.map.contains_key(name)
+    }
+
+    /// Lower bounds of every dimension of `name`.
+    pub fn get_lbounds(&self, name: &str) -> Result<Vec<i32>> {
+        Ok(self.get(name)?.lbound.clone())
+    }
+
     /// Lower bound of the first dimension of `name`.
     pub fn lbound(&self, name: &str) -> Result<i32> {
         Ok(self.get(name)?.lbound.first().copied().unwrap_or(1))

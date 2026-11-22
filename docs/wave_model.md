@@ -50,7 +50,8 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | Nonlinear interactions (DIA), linear input, depth breaking, bottom friction | `W3SNL1`, `W3SLN1`, `W3SDB1`, `W3SBT4` | `sources` (CPU, checked), `srce` | M2a |
 | Integration: dynamic step, limiter, tail, `FHMAX`, ice scaling | `W3SRCE` | `sources` (CPU, checked), `srce` | M2a |
 | Source terms in the time loop, after the propagation | `W3WAVE` | `model` | M2a |
-| Stress tables and the cumulative breaking term | `INSIN4` tables, `W3SDS4` (`SDSCUM`) | — | M2b |
+| Stress tables (`SINTABLE = 1`): u* from `TAUT`, tail stress from `TAUHFT2` | `INSIN4`, `CALC_USTAR`, `W3SIN4` | `sources` (CPU, checked), `srce` | M2b |
+| Directional cumulative breaking term (`SDSCUM < 0`, `CUMULW`), turbulent and viscous terms | `W3SDS4`, `INSIN4` | `sources` (CPU, checked), `srce` | M2b |
 | Unit harness of the source terms | (Fortran program on `libww3.a`) | `harness/src_harness.F90`, `harness` | M2a |
 
 ## Crate layout

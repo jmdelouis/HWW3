@@ -427,3 +427,38 @@ limiting step falls close to a threshold. The wind of the step, which the
 harness does not test, is the other input that differs. This is not
 verified yet. The dynamic step and cut-off frequency of WW3 (`DTD`, `FC`)
 at these steps would confirm it.
+
+## Milestone M2b: the full ST4 (in progress)
+
+M2b runs the source terms of the calibrated configuration: the stress
+tables of `INSIN4` (`SINTABLE = 1`: u* interpolated in `TAUT` by
+`CALC_USTAR`, the tail stress in `TAUHFT2`, with sheltering, by `W3SIN4`)
+and the directional cumulative breaking term of `W3SDS4`
+(`SDSCUM = -0.40`, through the matrix `CUMULW`). Both are WW3 defaults,
+so the namelists of `natl_v5k4_jan2026_exp` are used unchanged
+(`scripts/m2_ww3_ref_hpc.slurm` with `ST4=full`).
+
+### Harness and CPU ports
+
+The harness also writes the stress tables (`TAUT`, `TAUHFT`, `TAUHFT2`
+with their steps), `DIKCUMUL` and `CUMULW` when WW3 holds them. On the
+restart of 8 January with the `mod_def.ww3` of the calibrated
+configuration (Slurm job 4139132), the CPU transcriptions with these
+branches reproduce WW3 on the 1,869 nodes as closely as in M2a:
+
+| Routine | Largest relative difference |
+|---|---|
+| `CALC_USTAR` from `TAUT`: u* | 1.5e-7 |
+| `W3SIN4` with the tail stress from `TAUHFT2`: S, D; wave-supported stress | 4.1e-6; 2.7e-6 |
+| `W3SDS4` with the cumulative term: S, D | 1.7e-5 |
+| `W3SRCE`, 600 s: spectrum after the step (mean) | 3.9e-6 (6.5e-8) |
+| `W3SRCE`: mean dynamic step | 1.3e-5 |
+
+The wind-sea flags, the depth-breaking flags and the limiter decisions
+are the same as WW3's at every node. Dynamic steps: 1 to 60 per node, 1.8
+on average.
+
+The GPU kernel has the same branches. `CUMULW` depends only on the two
+frequencies and on the direction difference, so it goes to the device as
+a table of $32 \times 32 \times 36$ values, checked against every used
+entry of the matrix. The GPU check of these branches waits for a GPU.

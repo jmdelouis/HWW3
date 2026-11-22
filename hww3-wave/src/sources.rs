@@ -124,6 +124,86 @@ pub struct St4 {
     pub delxerf: f64,
     /// See [`St4::erftable`].
     pub xerfmax: f64,
+    /// Stress tables of `INSIN4` (`SINTABLE = 1`, full ST4), `None` with
+    /// `SINTABLE = 0`.
+    pub tables: Option<StressTables>,
+    /// `CUMULW(IS2, IS)` at `is2 + is NSPEC` (cumulative breaking term,
+    /// `SDSCUM < 0`), empty without it.
+    pub cumulw: Vec<f64>,
+    /// `DIKCUMUL`: frequency offset of the cumulative term.
+    pub dikcumul: i32,
+}
+
+/// The stress tables of `INSIN4` (`TABU_STRESS`, `TABU_TAUHF`,
+/// `TABU_TAUHF2`), Fortran order from index 0.
+#[derive(Clone, Debug)]
+pub struct StressTables {
+    /// `TAUT(0:ITAUMAX, 0:JUMAX)`: u* from the wave stress and the wind.
+    pub taut: Vec<f64>,
+    /// `TAUHFT(0:IUSTAR, 0:IALPHA)`: tail stress without sheltering.
+    pub tauhft: Vec<f64>,
+    /// `TAUHFT2(0:IUSTAR, 0:IALPHA, 0:ILEVTAIL)`: tail stress with
+    /// sheltering (empty when `TAUWSHELTER = 0`).
+    pub tauhft2: Vec<f64>,
+    /// `ITAUMAX`, `JUMAX`, `IUSTAR`, `IALPHA`, `ILEVTAIL`.
+    pub itaumax: usize,
+    /// See [`StressTables::itaumax`].
+    pub jumax: usize,
+    /// See [`StressTables::itaumax`].
+    pub iustar: usize,
+    /// See [`StressTables::itaumax`].
+    pub ialpha: usize,
+    /// See [`StressTables::itaumax`].
+    pub ilevtail: usize,
+    /// Table steps `DELUST`, `DELALP`, `DELTAUW`, `DELU`, `DELTAIL` and the
+    /// largest stress `TAUWMAX`.
+    pub delust: f64,
+    /// See [`StressTables::delust`].
+    pub delalp: f64,
+    /// See [`StressTables::delust`].
+    pub deltauw: f64,
+    /// See [`StressTables::delust`].
+    pub delu: f64,
+    /// See [`StressTables::delust`].
+    pub deltail: f64,
+    /// See [`StressTables::delust`].
+    pub tauwmax: f64,
+}
+
+impl StressTables {
+    fn read(p: &Params) -> Result<StressTables> {
+        let st = p.shape("TAUT")?.to_vec();
+        let sh = p.shape("TAUHFT")?.to_vec();
+        if st.len() != 2 || sh.len() != 2 || p.get_lbounds("TAUT")? != [0, 0] || p.get_lbounds("TAUHFT")? != [0, 0] {
+            bail!("TAUT and TAUHFT must be 2-D tables from 0");
+        }
+        let (tauhft2, ilevtail) = if p.has("TAUHFT2") {
+            let s2 = p.shape("TAUHFT2")?.to_vec();
+            if s2.len() != 3 || s2[0] != sh[0] || s2[1] != sh[1] {
+                bail!("TAUHFT2 shape {s2:?} unlike TAUHFT {sh:?}");
+            }
+            (v64(p.r("TAUHFT2")?), s2[2] - 1)
+        } else {
+            (vec![], 0)
+        };
+        let d = p.r("TABDEL")?;
+        Ok(StressTables {
+            taut: v64(p.r("TAUT")?),
+            tauhft: v64(p.r("TAUHFT")?),
+            tauhft2,
+            itaumax: st[0] - 1,
+            jumax: st[1] - 1,
+            iustar: sh[0] - 1,
+            ialpha: sh[1] - 1,
+            ilevtail,
+            delust: d[0] as f64,
+            delalp: d[1] as f64,
+            deltauw: d[2] as f64,
+            delu: d[3] as f64,
+            deltail: d[4] as f64,
+            tauwmax: d[5] as f64,
+        })
+    }
 }
 
 fn v64(x: &[f32]) -> Vec<f64> {
@@ -135,8 +215,10 @@ impl St4 {
     pub fn new(p: &Params) -> Result<St4> {
         let nk = p.i1("NK")? as usize;
         let nth = p.i1("NTH")? as usize;
-        if p.r1("SINTAILPAR")? > 0.5 {
-            bail!("the port needs SINTABLE = 0 (simplified ST4)");
+        let tables = if p.r1("SINTAILPAR")? > 0.5 { Some(StressTables::read(p)?) } else { None };
+        let cumulw = if p.r("SSDSC")?[2] != 0.0 { v64(p.r("CUMULW")?) } else { vec![] };
+        if !cumulw.is_empty() && cumulw.len() != (nk * nth) * (nk * nth) {
+            bail!("CUMULW holds {} values for NSPEC {}", cumulw.len(), nk * nth);
         }
         let a7 = |n: &str| -> Result<[f64; 7]> {
             let v = p.r(n)?;
@@ -215,6 +297,9 @@ impl St4 {
             erftable: v64(p.r("ERFTABLE")?),
             delxerf: p.r1("DELXERF")? as f64,
             xerfmax: p.r1("XERFMAX")? as f64,
+            tables,
+            cumulw,
+            dikcumul: if p.has("DIKCUMUL") { p.i1("DIKCUMUL")? } else { 0 },
         })
     }
 
@@ -275,10 +360,26 @@ impl Spr4Out {
     }
 }
 
-/// `CALC_USTAR` with `SINTABLE = 0`: u* by 10 Newton iterations on the
-/// Charnock relation with the wave-supported stress `tauw`. Returns
+/// `CALC_USTAR`: u* from the wind and the wave-supported stress `tauw`,
+/// by bilinear interpolation in `TAUT` (`SINTABLE = 1`) or by 10 Newton
+/// iterations on the Charnock relation (`SINTABLE = 0`). Returns
 /// `(USTAR, Z0, CHARN)`.
 pub fn calc_ustar(p: &St4, windspeed: f64, tauw: f64) -> (f64, f64, f64) {
+    if let Some(t) = &p.tables {
+        let tl = tauw.min(t.tauwmax).max(0.0);
+        let xi = tl.sqrt() / t.deltauw;
+        let ind = (t.itaumax - 1).min(xi as usize);
+        let deli1 = 1f64.min(xi - ind as f64);
+        let deli2 = 1.0 - deli1;
+        let xj = windspeed / t.delu;
+        let j = (t.jumax - 1).min(xj as usize);
+        let delj1 = 1f64.min(xj - j as f64);
+        let delj2 = 1.0 - delj1;
+        let n = t.itaumax + 1;
+        let tt = |i: usize, j: usize| t.taut[i + j * n];
+        let ustar = (tt(ind, j) * deli2 + tt(ind + 1, j) * deli1) * delj2 + (tt(ind, j + 1) * deli2 + tt(ind + 1, j + 1) * deli1) * delj1;
+        return z0_charn(p, windspeed, ustar, p.aalpha);
+    }
     const NITER: usize = 10;
     const XM: f64 = 0.50;
     const EPS1: f64 = 0.00001;
@@ -311,7 +412,11 @@ pub fn calc_ustar(p: &St4, windspeed: f64, tauw: f64) -> (f64, f64, f64) {
         ust -= f / delf;
         tauold = (ust * ust).max(tauw_local + EPS1);
     }
-    let ustar = ust;
+    z0_charn(p, windspeed, ust, chath)
+}
+
+/// The end of `CALC_USTAR`: roughness and Charnock coefficient from u*.
+fn z0_charn(p: &St4, windspeed: f64, ustar: f64, chath: f64) -> (f64, f64, f64) {
     let (z0, mut charn);
     if ustar > 0.001 {
         let sqrtcdm1 = (windspeed / ustar).min(100.0);
@@ -424,8 +529,6 @@ pub fn sin4(p: &St4, a: &[f64], cg: &[f64], k: &[f64], u: f64, ustar: f64, drat:
     let nspec = nk * nth;
     let (grav, kappa, nu_air) = (p.grav, p.kappa, p.nu_air);
     let tpi = std::f64::consts::TAU;
-    const EPS1: f64 = 0.00001;
-    const EPS2: f64 = 0.000001;
     const JTOT: usize = 50;
     const KM: f64 = 363.0;
     let sw = &p.sswellf;
@@ -548,6 +651,33 @@ pub fn sin4(p: &St4, a: &[f64], cg: &[f64], k: &[f64], u: f64, ustar: f64, drat:
         temp += a[is] * coswind.max(0.0).powi(3);
     }
     let levtail0 = c0 * temp;
+    if let Some(t) = &p.tables {
+        // tail stress interpolated in TAUHFT or TAUHFT2 (SINTABLE = 1)
+        let xi = ust / t.delust;
+        let ind = 1.max((t.iustar - 1).min(xi as usize));
+        let deli1 = (xi - ind as f64).min(1.0).max(0.0);
+        let deli2 = 1.0 - deli1;
+        let xj = ((grav * z0 / ust.max(0.00001).powi(2) - p.aalpha) / t.delalp).max(0.0);
+        let j = 1.max((t.ialpha - 1).min(xj as usize));
+        let delj1 = (xj - j as f64).min(1.0).max(0.0);
+        let delj2 = 1.0 - delj1;
+        let n1 = t.iustar + 1;
+        let n2 = t.ialpha + 1;
+        let tau1 = if p.ttauwshelter > 0.0 {
+            let xk = levtail0 / t.deltail;
+            let i = (t.ilevtail - 1).min(xk as usize);
+            let delk1 = (xk - i as f64).min(1.0);
+            let delk2 = 1.0 - delk1;
+            let h = |a: usize, b: usize, c: usize| t.tauhft2[a + b * n1 + c * n1 * n2];
+            ((h(ind, j, i) * deli2 + h(ind + 1, j, i) * deli1) * delj2 + (h(ind, j + 1, i) * deli2 + h(ind + 1, j + 1, i) * deli1) * delj1) * delk2
+                + ((h(ind, j, i + 1) * deli2 + h(ind + 1, j, i + 1) * deli1) * delj2 + (h(ind, j + 1, i + 1) * deli2 + h(ind + 1, j + 1, i + 1) * deli1) * delj1) * delk1
+        } else {
+            let h = |a: usize, b: usize| t.tauhft[a + b * n1];
+            (h(ind, j) * deli2 + h(ind + 1, j) * deli1) * delj2 + (h(ind, j + 1) * deli2 + h(ind + 1, j + 1) * deli1) * delj1
+        };
+        let tauhf = levtail0 * ust * ust * tau1;
+        return finish_sin4(s, d, llws, sx, sy, snx, sny, tauhf, usdirp, ustar);
+    }
     // tail stress integrated in line (SINTABLE = 0)
     let x0 = 0.05;
     let mut ustr = ust;
@@ -581,7 +711,14 @@ pub fn sin4(p: &St4, a: &[f64], cg: &[f64], k: &[f64], u: f64, ustar: f64, drat:
         taur -= w * p.sintailpar[1] * ustr * ustr * zbeta * levtail * dely * cgtail / cm;
         ustr = taur.max(0.0).sqrt();
     }
-    let tauhf = tau1;
+    finish_sin4(s, d, llws, sx, sy, snx, sny, tau1, usdirp, ustar)
+}
+
+/// The end of `W3SIN4`: wave-supported stress with the tail, limited by u*.
+#[allow(clippy::too_many_arguments)]
+fn finish_sin4(s: Vec<f64>, d: Vec<f64>, llws: Vec<bool>, sx: f64, sy: f64, snx: f64, sny: f64, tauhf: f64, usdirp: f64, ustar: f64) -> Sin4Out {
+    const EPS1: f64 = 0.00001;
+    const EPS2: f64 = 0.000001;
     let mut tauwx = sx + tauhf * usdirp.cos();
     let mut tauwy = sy + tauhf * usdirp.sin();
     let tauw = (tauwx * tauwx + tauwy * tauwy).sqrt();
@@ -804,18 +941,23 @@ pub struct Sds4Out {
 }
 
 /// `W3SDS4` with `SDSBCHOICE = 1` (directional saturation of Ardhuin et
-/// al. 2010) and without the cumulative, turbulent and viscous terms
-/// (`SDSCUM = SDSC5 = SDSNUW = 0`, as in the simplified ST4); the whitecap
-/// outputs are not computed (they are off in the HWW3 runs).
-pub fn sds4(p: &St4, a: &[f64], k: &[f64], depth: f64) -> Result<Sds4Out> {
+/// al. 2010), with the directional cumulative term through `CUMULW`
+/// (`SDSCUM < 0`, full ST4), the turbulent term (`SSDSC(5)`) and the
+/// viscous term (`SSDSC(21)`); `ustar`, `usdir` are u* and its direction,
+/// `drat` the air/water density ratio. The whitecap outputs are not
+/// computed (they are off in the HWW3 runs).
+pub fn sds4(p: &St4, a: &[f64], k: &[f64], depth: f64, ustar: f64, usdir: f64, drat: f64) -> Result<Sds4Out> {
     let (nk, nth) = (p.nk, p.nth);
     let nspec = nk * nth;
     let c = &p.ssdsc;
     if c[0].round() as i32 != 1 {
         bail!("W3SDS4: only SDSBCHOICE = 1 is ported");
     }
-    if c[2] != 0.0 || c[4] != 0.0 || c.get(20).copied().unwrap_or(0.0) != 0.0 {
-        bail!("W3SDS4: the cumulative, turbulent and viscous terms are not ported (SDSCUM = SDSC5 = SDSNUW = 0)");
+    if c[2] > 0.0 {
+        bail!("W3SDS4: the isotropic cumulative term (SDSCUM > 0) is not ported");
+    }
+    if c[2] < 0.0 && p.cumulw.is_empty() {
+        bail!("W3SDS4: SDSCUM < 0 needs CUMULW in the harness file");
     }
     let epsr = p.ssdsbr.sqrt();
     let mut bth = vec![0f64; nspec];
@@ -858,8 +1000,41 @@ pub fn sds4(p: &St4, a: &[f64], k: &[f64], depth: f64) -> Result<Sds4Out> {
         }
     }
     let pi = std::f64::consts::PI;
-    let brlambda = bth.iter().map(|&b| (b.sqrt() - epsr).max(0.0).powi(2) * 28.16 / (2.0 * pi * pi)).collect();
-    let s = d.iter().zip(a).map(|(d, a)| d * a).collect();
+    let brlambda: Vec<f64> = bth.iter().map(|&b| (b.sqrt() - epsr).max(0.0).powi(2) * 28.16 / (2.0 * pi * pi)).collect();
+    let mut s: Vec<f64> = d.iter().zip(a).map(|(d, a)| d * a).collect();
+    let sdsc21 = c.get(20).copied().unwrap_or(0.0);
+    if c[2] != 0.0 || c[4] != 0.0 || sdsc21 != 0.0 {
+        let facturb = c[4] * ustar * ustar / p.grav * drat;
+        let dik = p.dikcumul.max(0) as usize;
+        let (cu, su) = (usdir.cos(), usdir.sin());
+        for ik in 0..nk {
+            let facturb2 = -2.0 * p.s(ik + 1) * k[ik] * facturb;
+            let dvisc = -4.0 * sdsc21 * k[ik] * k[ik];
+            for ith in 0..nth {
+                let is = ith + ik * nth;
+                // IK > DIKCUMUL in WW3's 1-based count
+                let mut renewalfreq = 0.0;
+                if c[2] < 0.0 && ik + 1 > dik {
+                    for ik2 in 0..(ik + 1 - dik) {
+                        if bth0[ik2] > p.ssdsbr {
+                            let is2 = ik2 * nth;
+                            let col = &p.cumulw[is * nspec..(is + 1) * nspec];
+                            let mut dot = 0.0;
+                            for ith2 in 0..nth {
+                                dot += col[is2 + ith2] * brlambda[is2 + ith2];
+                            }
+                            renewalfreq += dot;
+                        }
+                    }
+                }
+                let coswind = p.ecos[ith] * cu + p.esin[ith] * su;
+                let dturb = facturb2 * coswind.max(0.0);
+                let diag2 = c[2] * renewalfreq + dturb + dvisc;
+                d[is] += diag2;
+                s[is] += a[is] * diag2;
+            }
+        }
+    }
     Ok(Sds4Out { s, d, brlambda })
 }
 
@@ -1294,7 +1469,7 @@ pub fn srce(q: &SrcePar, inp: &SrceIn, spec: &mut [f64], wn: &[f64], cg: &[f64],
         let mut vsln = sln1(p, wn, fhigh, sp.ustar, u10dir);
         let mut si = sin4(p, spec, cg, &wn2, u10, sp.ustar, drat, u10dir, sp.z0);
         let (mut vsnl, mut vdnl) = snl1(&q.dia, spec, cg, sp.wnmean * depth);
-        let ds = sds4(p, spec, wn, depth).expect("W3SDS4 configuration checked by the caller");
+        let ds = sds4(p, spec, wn, depth, sp.ustar, sp.usdir, drat).expect("W3SDS4 configuration checked by the caller");
         let (mut vsds, mut vdds) = (ds.s, ds.d);
         let (vsdb, vddb, _lbreak) = sdb1(p, spec, depth, sp.emean, sp.fmean, sp.wnmean);
         let bt = sbt4(p, spec, cg, wn, depth, inp.d50, inp.psic);
@@ -1575,8 +1750,41 @@ pub const P_NERF: usize = 110;
 pub const P_ICE_FORCING: usize = 111;
 /// Half width of the saturation sector (degrees).
 pub const P_SSDSDTH: usize = 112;
+/// Stress tables on (`SINTABLE = 1`): 1, else 0.
+pub const P_SINTABLE: usize = 113;
+/// Table steps `DELUST`, `DELALP`, `DELTAUW`, `DELU`, `DELTAIL`, `TAUWMAX`.
+pub const P_DELUST: usize = 114;
+/// See [`P_DELUST`].
+pub const P_DELALP: usize = 115;
+/// See [`P_DELUST`].
+pub const P_DELTAUW: usize = 116;
+/// See [`P_DELUST`].
+pub const P_DELU: usize = 117;
+/// See [`P_DELUST`].
+pub const P_DELTAIL: usize = 118;
+/// See [`P_DELUST`].
+pub const P_TAUWMAX: usize = 119;
+/// Table sizes `ITAUMAX`, `JUMAX`, `IUSTAR`, `IALPHA`, `ILEVTAIL`.
+pub const P_ITAUMAX: usize = 120;
+/// See [`P_ITAUMAX`].
+pub const P_JUMAX: usize = 121;
+/// See [`P_ITAUMAX`].
+pub const P_IUSTAR: usize = 122;
+/// See [`P_ITAUMAX`].
+pub const P_IALPHA: usize = 123;
+/// See [`P_ITAUMAX`].
+pub const P_ILEVTAIL: usize = 124;
+/// `SSDSC(3)` (`SDSCUM`, cumulative term), `SSDSC(5)` (turbulence),
+/// `SSDSC(21)` (viscosity).
+pub const P_SDSC3: usize = 125;
+/// See [`P_SDSC3`].
+pub const P_SDSC5: usize = 126;
+/// See [`P_SDSC3`].
+pub const P_SDSC21: usize = 127;
+/// `DIKCUMUL`.
+pub const P_DIKCUMUL: usize = 128;
 /// Number of scalar parameters.
-pub const NPAR: usize = 113;
+pub const NPAR: usize = 129;
 
 /// The parameters and tables of [`SrcePar`] laid out for the GPU source
 /// kernel: scalars at the `P_*` indices, per-frequency factors, the
@@ -1621,6 +1829,15 @@ pub struct SrceTables {
     pub nspecx: usize,
     /// See [`SrceTables::nspecx`].
     pub nspecy: usize,
+    /// `TAUT` (`SINTABLE = 1`; one zero otherwise).
+    pub taut: Vec<f64>,
+    /// `TAUHFT2` when `TAUWSHELTER > 0`, else `TAUHFT` (`SINTABLE = 1`;
+    /// one zero otherwise).
+    pub tauhf: Vec<f64>,
+    /// `CUMULW(IS2, IS)`, which depends on the two frequencies and the
+    /// direction difference only, as `cumw[(ik2 NK + ik) NTH + |ith2 - ith|]`
+    /// (`SDSCUM < 0`; one zero otherwise).
+    pub cumw: Vec<f64>,
 }
 
 /// The sediment diameter `SED_D50` and critical Shields number `SED_PSIC`
@@ -1650,8 +1867,8 @@ impl SrceTables {
         if p.ssdsdth >= 180.0 || p.nsat == 0 {
             bail!("the GPU source kernel needs the saturation tables of W3SDS4 (SSDSDTH < 180)");
         }
-        if p.ssdsc[0].round() as i32 != 1 || p.ssdsc[2] != 0.0 || p.ssdsc[4] != 0.0 || p.ssdsc.get(20).copied().unwrap_or(0.0) != 0.0 {
-            bail!("the GPU source kernel needs SDSBCHOICE = 1 without the cumulative, turbulent and viscous terms");
+        if p.ssdsc[0].round() as i32 != 1 || p.ssdsc[2] > 0.0 {
+            bail!("the GPU source kernel needs SDSBCHOICE = 1 and SDSCUM <= 0");
         }
         let mut par = vec![0f64; NPAR];
         let mut put = |i: usize, v: &[f64]| par[i..i + v.len()].copy_from_slice(v);
@@ -1672,6 +1889,43 @@ impl SrceTables {
         put(P_DTMAX, &[q.dtmax, q.dtmin, q.xflt, q.xrel, q.facp, q.facti1, q.facti2, q.fachfa, q.fhmax, q.dmin, q.ffxfm, q.ffxpm, q.ffxfa]);
         put(P_ICESCALES, &q.icescales);
         put(P_NFW, &[p.fwtable.len() as f64, p.erftable.len() as f64, q.ice_forcing as u8 as f64, p.ssdsdth]);
+        let (mut taut, mut tauhf) = (vec![0.0], vec![0.0]);
+        if let Some(t) = &p.tables {
+            put(P_SINTABLE, &[1.0, t.delust, t.delalp, t.deltauw, t.delu, t.deltail, t.tauwmax]);
+            put(P_ITAUMAX, &[t.itaumax as f64, t.jumax as f64, t.iustar as f64, t.ialpha as f64, t.ilevtail as f64]);
+            taut = t.taut.clone();
+            tauhf = if p.ttauwshelter > 0.0 {
+                if t.tauhft2.is_empty() {
+                    bail!("TAUWSHELTER > 0 needs TAUHFT2");
+                }
+                t.tauhft2.clone()
+            } else {
+                t.tauhft.clone()
+            };
+        }
+        put(P_SDSC3, &[p.ssdsc[2], p.ssdsc[4], p.ssdsc.get(20).copied().unwrap_or(0.0), p.dikcumul as f64]);
+        let mut cumw = vec![0.0];
+        if p.ssdsc[2] < 0.0 {
+            // CUMULW(IS2, IS) as a function of (IK2, IK, |ITH2 - ITH|), checked
+            // against every used entry of the matrix
+            cumw = vec![0.0; nk * nk * nth];
+            let dik = p.dikcumul.max(0) as usize;
+            for ik in 0..nk {
+                for ik2 in 0..(ik + 1).saturating_sub(dik) {
+                    for ith in 0..nth {
+                        for ith2 in 0..nth {
+                            let v = p.cumulw[(ik2 * nth + ith2) + (ik * nth + ith) * nspec];
+                            let o = (ik2 * nk + ik) * nth + ith2.abs_diff(ith);
+                            if ith == 0 || ith2 == 0 {
+                                cumw[o] = v;
+                            } else if cumw[o] != v {
+                                bail!("CUMULW is not a function of the direction difference at ({ik2}, {ith2}; {ik}, {ith})");
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let first = |v: &[f64]| -> Result<Vec<f64>> {
             let mut out = vec![];
             for ik in 0..nk {
@@ -1727,6 +1981,9 @@ impl SrceTables {
             esin: p.esin[..nth].to_vec(),
             nspecx: dia.nspecx,
             nspecy: dia.nspecy,
+            taut,
+            tauhf,
+            cumw,
         })
     }
 }
