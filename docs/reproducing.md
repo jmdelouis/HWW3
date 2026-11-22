@@ -393,6 +393,8 @@ cluster:
 # restarts after the first three steps, and the cold-started week of 1-8 January
 sbatch --export=ALL,MODE=dev,RSTRIDE=600,RCOUNT=3 scripts/m2_ww3_ref_hpc.slurm
 sbatch --ntasks=64 --mem=160G -t 24:00:00 --export=ALL,MODE=week scripts/m2_ww3_ref_hpc.slurm
+# the explicit run with sources, 12 h from 8 January, with UGBCCFL = T then F on the same node
+sbatch scripts/m2_ww3_bccfl_hpc.slurm
 # source-term harness on the restart of 8 January (in runs/m2_dev, after ww3_grid)
 sbatch --export=ALL,OUT=src_8jan.bin,NODES=169562+130464+165663+229656+147650 scripts/m2_src_harness_hpc.slurm
 # CPU transcriptions against the harness

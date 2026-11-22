@@ -74,4 +74,5 @@ Programs: `hww3-wave` (M0 timings and checks), `hww3-prop` (M1 model) and
 | `m1_prop_hpc.slurm` | GPU model, milestone M1: propagation-only runs and checks |
 | `m1_compare_nc.py`, `m1_compare.py` | hourly $H_s$ and $T_{m02}$ of the GPU model against a WW3 run (without numpy / with numpy) |
 | `m2_ww3_ref_hpc.slurm` | WW3 references of M2a with the simplified ST4 (`SINTABLE = 0`, `SDSCUM = 0`): 48 h from a restart or the cold-started week |
+| `m2_ww3_bccfl_hpc.slurm` | the explicit WW3 run with sources twice on the same node, with `UGBCCFL = T` and `F` (sub-cycling over every wet node or the interior nodes only) |
 | `m2_src_harness_hpc.slurm` | builds the source-term harness against the hpc WW3 library and runs it on a restart |

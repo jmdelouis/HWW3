@@ -342,21 +342,34 @@ and v5 $K=4$ and on the Channel–Biscay box:
   grid v3 with 5.1 % more sweeps (3.4 % fewer with the interior count), and
   the time per node rises from v4 to v5 while $S$ rises by 8–9 % (the
   interior count falls by 14–23 %).
-- **Share of the explicit cost.** On grid v5 $K=4$ with 32 ranks of the
-  hpc cluster, WW3 takes 3,756 s per model day with sources (first 6 h,
-  Slurm job 4116085), 406 s for the propagation alone and 351 s for the
-  geographic propagation alone (`RUN%FLSOU = F`, 48 h, jobs 4118215 and
-  4118220). The sub-cycling therefore sets about 9 % of the explicit run
-  there; the rest (source terms and output, not timed separately) is, on
-  Datarmor, about twice the whole implicit run. With that share on
-  Datarmor, counting the interior nodes only ($S$ = 2835) would save about
-  6 % (2,601 → 2,434 s per model day on $K=4$, 4,318 → 4,093 s on v4). A
-  fit of the four explicit runs to $aN + bNS + cS$ ($N$ nodes, within
-  1.4 %) puts the $S$-dependent part at 41 % on $K=4$ and 34 % on v4 with
-  112 ranks, for which the saving would be 28 % (1,866 s) and 19 %
-  (3,489 s). With the interior count the same fit needs a negative cost per
-  sweep. The share of the propagation at 112 ranks is not known better
-  than this range.
+- **Share of the explicit cost, measured.** WW3 was run twice on grid v5
+  $K=4$ with its sources, 12 h from the restart of 8 January 00 h on the
+  same 32 ranks of one hpc node (Slurm job 4135981,
+  `scripts/m2_ww3_bccfl_hpc.slurm`): 10.32 s per 600 s step with
+  `UGBCCFL = T` and 9.61 s with `UGBCCFL = F` (1,486 and 1,384 s per model
+  day without the 7 s start-up), 6.9 % less for 68 % fewer sub-steps
+  ($S$ = 9,003 → 2,835 without current; WW3 does not log `ITER`). The
+  sub-steps therefore cost about 10 % of the explicit run, although the
+  geographic propagation alone takes 351 s per model day there (24 %;
+  `RUN%FLSOU = F`, 48 h, job 4118220), and a 6 h cold start with sources
+  (3,756 s per model day, job 4116085) gives about 9 %. A fit of the four
+  Datarmor runs to $aN + bNS + cS$ ($N$ nodes, within 1.4 %) put the
+  $S$-dependent part at 41 %; the measurement does not support it. With a
+  10 % share on Datarmor, counting the interior nodes only would save about
+  7 % on $K=4$ (2,601 → about 2,420 s per model day) and 6 % on v4
+  (4,318 → about 4,080 s): most of the explicit cost, about twice the
+  implicit run on Datarmor, is not set by the sub-cycling.
+- **`UGBCCFL = F` is stable but changes the coast.** Over these 12 h, $H_s$
+  differs from the `UGBCCFL = T` run by 0.77 mm RMS at the median node and
+  1.2 cm at the 99th percentile, and the total energy drifts to −0.056 %.
+  68 coastal nodes differ by more than 5 cm RMS, 56 of them at local CFL
+  numbers above 1 with the interior count; the largest, 0.35 m, is at a
+  node of the Gulf of Maine (44.48° N, 68.19° W, CFL 2.6) where the mean
+  $H_s$ falls from 0.62 to 0.27 m. $T_{m02}$ differs by 1.7 ms at the
+  median node, 46 ms at the 99th percentile and up to 3.4 s at a coastal
+  node. There is no NaN and the largest $H_s$ is 7.45 m in both runs: the
+  scheme stays stable with coastal nodes above CFL 1, but they are no
+  longer what WW3 computes by default (`results/natl_v5k4_bccfl_hpc.json`).
 - **What would lower it** on grid v5 $K=4$ (`explicit_cost.py`, other
   nodes unchanged): removing the coastal nodes in a single triangle,
   $S$ = 8,421; making every node above $K$ sub-steps as many levels coarser
@@ -384,14 +397,15 @@ and v5 $K=4$ and on the Channel–Biscay box:
     Sea, 23 in the Channel and Biscay) and more than 2 km farther for 39
     (Pasaia 2.5 → 11 km, the Baltic buoys 300–715 km).
 
-  Its expected explicit cost is 2,170 s per model day with the 9 % share
-  of the propagation and 1,860 s with the fit (−17 % and −28 % against
-  2,601 s), most of it from the fewer nodes, more than a quarter of which are
-  the lost seas. A coastal cap that keeps the narrow passages open would sit
+  With the measured 10 % share of the sub-steps, its expected explicit
+  cost is about 2,160 s per model day (−17 % against 2,601 s), almost all
+  of it from the fewer nodes, more than a quarter of which are the lost
+  seas. A coastal cap that keeps the narrow passages open would sit
   between this grid and grid v5 $K=4$.
 
 Files: `results/natl_v{3,4,5k5,5k4}_explicit_cost_bccfl.json` (no current),
-`results/natl_v5k4cb_explicit_cost_bccfl.json` (test build).
+`results/natl_v5k4cb_explicit_cost_bccfl.json` (test build),
+`results/natl_v5k4_bccfl_hpc.json` (`UGBCCFL = T` against `F`).
 
 ## First WW3 run
 
