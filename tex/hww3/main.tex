@@ -63,10 +63,12 @@ model now follows the tidal modulation of $H_s$ and $T_{m02}$.
 A differentiable WW3 written in Rust for one GPU, aimed at learning chains,
 has been costed and started. On an A100 its N-scheme propagation sweep and
 the transposed sweep take about \SI{1}{ms} per frequency on grid v4, and
-the geographic propagation costs \SI{15}{s} per model day. Its
+the geographic propagation costs \SI{35}{s} per model day. Its
 propagation-only model, without source terms, runs 48 hours of grid v5
-$K=4$ in \SI{32}{s} against \SI{813}{s} for WW3 on 32 cores. It agrees
-with WW3 to \SI{1}{mm} in $H_s$ at the median node.
+$K=4$ in \SI{65}{s} against \SI{813}{s} for WW3 on 32 cores. It agrees
+with WW3 to \SI{2}{\micro\metre} in $H_s$ at the median node and
+\SI{0.7}{mm} at worst, once its sub-cycling counts the coast nodes as WW3
+does.
 \end{abstract}
 
 \section{Motivation}
@@ -1564,10 +1566,13 @@ Table~\ref{tab:m0} gives the times.
 \item On grid v4, a frequency sweep takes \SI{0.93}{ms} in single
 precision: under the \SI{1.3}{ms} threshold set before the test, and 1.5
 times the bandwidth estimate.
-\item A \SI{600}{s} step needs 110 frequency sweeps with the sub-cycling of
-Section~\ref{sec:explicit} and takes \SI{0.103}{s}. The geographic
-propagation alone thus costs \SI{14.8}{s} per model day on grid v4 and
-\SI{6.2}{s} on grid v5 $K=4$.
+\item With the sub-cycling of WW3, which counts every wet node (found at
+M1, below), a \SI{600}{s} step needs 258 frequency sweeps on grid v4 and
+takes \SI{0.240}{s}. The geographic propagation alone thus costs
+\SI{34.6}{s} per model day on grid v4 and \SI{21.3}{s} on grid v5 $K=4$
+(287 sweeps per step). The count of Section~\ref{sec:explicit}, over the
+interior nodes only, gave 110 and 83 sweeps per step, and \SI{14.8}{s} and
+\SI{6.2}{s} per model day.
 \item CubeCL is between 3\,\% slower and 11\,\% faster than CUDA C. Double
 precision costs 1.9 times single precision.
 \end{itemize}
@@ -1588,23 +1593,26 @@ precision and $2.4\times10^{-15}$ in double precision.
 
 \begin{table}[H]
 \centering\small
-\begin{tabular}{lrrrr}
+\begin{tabular}{lrrrrr}
 \toprule
-grid & sweep (ms) & transpose (ms) & \SI{600}{s} step (s) & s per model day \\
+grid & sweeps & sweep (ms) & transpose (ms) & \SI{600}{s} step (s) & s per model day \\
 \midrule
-v4 & 0.93 / 0.95 & 1.03 / 1.07 & 0.103 / 0.114 & 14.8 / 16.4 \\
-v5 $K=4$ & 0.51 / 0.50 & 0.58 / 0.57 & 0.043 / 0.048 & 6.2 / 7.0 \\
-Channel--Biscay box (v4) & 0.033 / 0.033 & 0.034 / 0.035 & 0.0030 / 0.0031 & 0.43 / 0.45 \\
+v4 & 258 & 0.93 / 0.95 & 1.03 / 1.07 & 0.240 / 0.265 & 34.6 / 38.2 \\
+v5 $K=4$ & 287 & 0.51 / 0.50 & 0.58 / 0.57 & 0.148 / 0.167 & 21.3 / 24.1 \\
+box & 208 & 0.033 / 0.033 & 0.034 / 0.035 & 0.0069 / 0.0071 & 0.99 / 1.02 \\
 \bottomrule
 \end{tabular}
 \caption{Milestone M0: N-scheme propagation on one A100 in single
 precision.
+\emph{Sweeps}: frequency sweeps per \SI{600}{s} step with the sub-cycling
+of WW3, over every wet node.
 \emph{Sweep} and \emph{transpose}: one frequency sweep, given as CubeCL /
 CUDA C.
 \emph{Step} and \emph{model day}: CubeCL only, given as forward /
-transpose; they cover the geographic propagation only, with no spectral
-propagation and no source terms.
-The Channel--Biscay box has 21\,425 nodes.}
+transpose, the sweep time times the number of sweeps; they cover the
+geographic propagation only, with no spectral propagation and no source
+terms.
+\emph{Box}: the Channel--Biscay box of grid v4, 21\,425 nodes.}
 \label{tab:m0}
 \end{table}
 
@@ -1629,36 +1637,69 @@ explicit run;
 
 The three targets set before the runs are met in all three modes. They
 were an $H_s$ RMS difference below \SI{1}{cm} at the median node and below
-\SI{5}{cm} at the 99th percentile, and the energy within 0.5\,\%. The 48
-hours take \SI{32}{s} on the GPU against \SI{813}{s} for WW3, i.e.
-\SI{16}{s} per model day, including \SI{4.5}{s} of one-time kernel
-compilation. The largest differences are on coast nodes, most of them with
-a single triangle. In \emph{prop}, 49 of the 371\,278 nodes differ by more
-than \SI{5}{cm} RMS. The masks, the depths, the precision and the code path
-have been ruled out. One remaining hypothesis: coast nodes are left out of
-the CFL count, so they can run at a local CFL number above 1, where the
-result depends strongly on the number of sub-steps.
+\SI{5}{cm} at the 99th percentile, and the energy within 0.5\,\%. The
+agreement is three to four orders of magnitude inside them: no node
+differs from WW3 by more than \SI{0.71}{mm} RMS in $H_s$. The 48 hours
+take \SI{65}{s} on the GPU against \SI{813}{s} for WW3, i.e. \SI{33}{s}
+per model day, including about \SI{4.5}{s} of one-time kernel compilation.
+
+\emph{Coast nodes and the sub-cycling count.} A first version counted only
+the interior nodes in the sub-cycling count ITER, as
+Section~\ref{sec:explicit} does. It met the targets too (\SI{0.94}{mm} at
+the median node and \SI{6.0}{mm} at the 99th percentile in \emph{prop}, in
+\SI{32}{s}), but 49 coast nodes, most of them in a single triangle,
+differed by more than \SI{5}{cm} RMS, up to \SI{0.48}{m}. The diagnosis
+went as follows.
+\begin{itemize}
+\item WW3 was run with a restart written after each of the first three
+steps, and the full spectra were compared node by node. The difference
+appeared in the first step, in the geographic part, with depths and
+currents equal within \SI{1}{mm} and \SI{2e-6}{m/s}. One extra sub-step on
+the GPU removed most of it.
+\item In \texttt{PDLIB\_W3XYPFSN2} the step limit \texttt{DTMAX} is taken
+over the nodes with \texttt{IOBP = 1 .OR. FSBCCFL}. \texttt{FSBCCFL} comes
+from \texttt{UGBCCFL} in the \texttt{UNST} namelist of \texttt{ww3\_grid},
+which is true by default and in our runs.
+\item WW3 thus counts every wet node, coast and open boundary included.
+With the interior count, the coast nodes in a single triangle ran at local
+CFL numbers of 2.5--4.8, where the N scheme is no longer positive.
+\end{itemize}
+Counting every wet node gives the agreement of Table~\ref{tab:m1}, at the
+price of 3.4 times more frequency sweeps: 287 per step on grid v5 $K=4$
+instead of 83 (258 instead of 110 on grid v4).
+
+The consequence goes beyond the GPU model. The small coast cells, not the
+interior, set the sub-cycling of the WW3 explicit runs on these grids:
+ITER at the lowest frequency is 19--26 on grid v5 $K=4$, not 4--5. The
+measured WW3 times stand, but the cost counts of
+Section~\ref{sec:explicit} and the sub-step cap of grid v5 take the
+interior nodes only, and are being re-evaluated with the count of WW3.
 
 \begin{table}[H]
 \centering\small
-\begin{tabular}{lrrrrrr}
+\begin{tabular}{lrrrrrrr}
 \toprule
-mode & nodes & median & p99 & energy & WW3 (s) & GPU (s) \\
+mode & nodes & median & p99 & max & energy & WW3 (s) & GPU (s) \\
 \midrule
-prop & 371\,278 & \SI{0.94}{mm} & \SI{6.0}{mm} & $-0.047$\,\% & 813 & 32.0 \\
-geo & 371\,278 & \SI{0.63}{mm} & \SI{3.1}{mm} & $-0.018$\,\% & 702 & 24.7 \\
-ideal & 22\,015 & \SI{1.5}{mm} & \SI{4.8}{mm} & $-0.45$\,\% & 887 & 32.9 \\
+prop & 371\,278 & \SI{1.5}{\micro\metre} & \SI{24}{\micro\metre} & \SI{0.71}{mm} & $-2.4\times10^{-7}$ & 813 & 65.1 \\
+geo & 371\,278 & \SI{0.23}{\micro\metre} & \SI{5.9}{\micro\metre} & \SI{0.71}{mm} & $-2.8\times10^{-8}$ & 702 & 57.6 \\
+ideal & 22\,002 & \SI{0.11}{\micro\metre} & \SI{4.9}{\micro\metre} & \SI{22}{\micro\metre} & $-1.3\times10^{-7}$ & 887 & 66.3 \\
 \bottomrule
 \end{tabular}
 \caption{Milestone M1: propagation-only model on one A100 against WW3 on 32
-cores, 48 hours of grid v5 $K=4$.
-\emph{Median} and \emph{p99}: RMS difference of the hourly $H_s$ over the
-48 hours at the median node and at the 99th percentile.
-\emph{Energy}: largest difference of $\sum_i (H_{s,i}/4)^2$ over the hours.
+cores, 48 hours of grid v5 $K=4$, with the sub-cycling of WW3.
+\emph{Median}, \emph{p99} and \emph{max}: RMS difference of the hourly
+$H_s$ over the 48 hours at the median node, at the 99th percentile and at
+the worst node.
+\emph{Energy}: largest relative difference of $\sum_i (H_{s,i}/4)^2$ over
+the hours.
 For \emph{ideal}, only the nodes where $H_s$ reaches \SI{0.5}{m} are
 counted.
-Slurm jobs 4118215, 4118220 and 4118221 (WW3), and 4117585, 4118253 and
-4118252 (GPU).}
+Slurm jobs 4118215, 4118220 and 4118221 (WW3), and 4120563, 4120564 and
+4120565 (GPU). With the interior count (jobs 4117585, 4118253 and
+4118252), the median and p99 were 0.94 and \SI{6.0}{mm} in \emph{prop},
+0.63 and \SI{3.1}{mm} in \emph{geo}, 1.5 and \SI{4.8}{mm} in
+\emph{ideal}.}
 \label{tab:m1}
 \end{table}
 
@@ -1728,7 +1769,10 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{ideal}), \texttt{scripts/m1\_ww3\_prop\_hpc.slurm} and
   \texttt{scripts/m1\_prop\_hpc.slurm} submitted with
   \texttt{sbatch --export=ALL,MODE=<mode>}, then
-  \texttt{scripts/m1\_compare\_nc.py} (\texttt{docs/reproducing.md}).
+  \texttt{scripts/m1\_compare\_nc.py}. For the step-by-step comparison,
+  the same scripts with \texttt{RSTRIDE} and \texttt{RCOUNT} for WW3 and
+  \texttt{STEPS\_REF} for \texttt{hww3-prop check-steps}
+  (\texttt{docs/reproducing.md}).
 \end{itemize}
 
 \end{document}
