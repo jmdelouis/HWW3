@@ -69,7 +69,11 @@ propagation-only model, without source terms, runs 48 hours of grid v5
 $K=4$ in \SI{65}{s} against \SI{813}{s} for WW3 on 32 cores. It agrees
 with WW3 to \SI{2}{\micro\metre} in $H_s$ at the median node and
 \SI{0.7}{mm} at worst, once its sub-cycling counts the coast nodes as WW3
-does.
+does. With the source terms of a simplified ST4 it runs a week in
+\SI{143}{s} per model day, against \SI{715}{s} for WW3 on 64 cores, with
+the altimeter and buoy scores of WW3 to \SI{1}{\micro\metre}. With the
+calibrated ST4, 48 hours agree with WW3 to \SI{2}{\micro\metre} at the
+median node, at \SI{127}{s} per model day.
 \end{abstract}
 
 \section{Motivation}
@@ -1805,7 +1809,7 @@ Slurm jobs 4118215, 4118220 and 4118221 (WW3), and 4120563, 4120564 and
 \label{tab:m1}
 \end{table}
 
-\paragraph{Milestone M2a (in progress).} M2a adds the source terms with the
+\paragraph{Milestone M2a (targets met).} M2a adds the source terms with the
 simplified ST4: \texttt{SINTABLE = 0}, with no stress tables, and
 \texttt{SDSCUM = 0}, with no cumulative breaking term. The other source
 terms are the DIA (\texttt{W3SNL1}), \texttt{W3SLN1}, \texttt{W3SDB1} and
@@ -1836,28 +1840,44 @@ integration of a step, one block of 128 threads per node with the
 spectrum in shared memory. On the harness nodes it reproduces WW3 to
 $3.1\times10^{-6}$ in single precision (\SI{0.9}{\micro\metre} in $H_s$),
 with the same number of dynamic steps at every node (job 4138915). A step
-of source terms on 373\,800 nodes takes \SI{0.97}{s} on one A100, so 48
-hours of grid v5 $K=4$ should take about \SI{345}{s} with the
-propagation.
+of source terms on 373\,800 nodes takes \SI{0.97}{s} on one A100.
 \item \emph{Time loop.} \texttt{hww3-prop} runs the source kernel after the
 propagation of each step, with the wind interpolated as \texttt{W3UWND}
 does and taken relative to the current. After the first three steps from
 the restart of 8 January, $H_s$ agrees with the WW3 restarts within
 \SI{1}{mm} at all but 13 of 371\,000 nodes, \SI{7.9}{mm} at most (job
 4138987). The remaining differences sit in the high-frequency bands of a
-few nodes, probably discrete decisions (tail index, number of dynamic
-steps) taken differently near a threshold; this is not verified yet.
+few nodes.
+\item \emph{48 hours and the week.} Over 48 hours from 8 January and over
+1--8 January, the RMS difference of the hourly $H_s$ with WW3 is
+2.1 and \SI{2.5}{\micro\metre} at the median node, and 86 and
+\SI{110}{\micro\metre} at the 99th percentile of 371\,278 nodes
+(Table~\ref{tab:m2}). The targets, the difference between the explicit and
+implicit runs of grid v4 (Section~\ref{sec:explicit}), are \SI{2.1}{cm}
+and \SI{20}{cm}. One A100 runs the week in \SI{1002}{s},
+\SI{143}{s} per model day against \SI{715}{s} for WW3 on 64 cores; the
+source kernel takes most of it.
+\item \emph{Scores.} The scores of the week are those of WW3 to
+\SI{1}{\micro\metre}: a bias of \SI{+1.16}{cm} and an RMSE of
+\SI{28.39}{cm} against the 45\,518 altimeter blocks, \SI{-3.59}{cm} and
+\SI{32.21}{cm} against the 252 buoys, and \SI{-0.47}{s} and \SI{1.21}{s}
+in $T_{m02}$ against 171 buoys (job 4139371).
+\item \emph{Spikes.} Eight nodes per run differ by more than \SI{1}{cm}
+RMS: in the fjords of Lofoten and Troms at $H_s$ of 0.05--\SI{0.2}{m}, in
+the western Channel, on the Bahamas banks, in the Gulf of Finland, in the
+Bay of Fundy, in Ungava Bay, and once in a Labrador Sea storm (7.92
+against \SI{8.07}{m}). Each is a spike of one or two hours, up to
+\SI{23}{cm}. The same 48 hours in double precision on the GPU has the same
+spikes at the same nodes and hours, while the two GPU runs differ by at
+most \SI{4}{mm} (job 4162035). They are therefore not round-off, but
+something that WW3 and the GPU model compute differently for an hour. WW3
+restarts every 10 minutes around the spike of 9 January 02\,h in Troms
+(job 4162053) will locate it in the spectrum.
 \end{itemize}
-What remains for M2a:
-\begin{itemize}
-\item the 48-hour and one-week GPU runs, their comparison with the
-references and their scores, chained on the hpc cluster and waiting for
-a GPU;
-\item the observation operators and the first finite-difference
-gradients.
-\end{itemize}
+The observation operators and the first finite-difference gradients with
+respect to the parameters are still to be written.
 
-\paragraph{Milestone M2b (started).} M2b runs the source terms of the
+\paragraph{Milestone M2b (in progress).} M2b runs the source terms of the
 calibrated configuration, with the stress tables of \texttt{INSIN4}
 (\texttt{SINTABLE = 1}) and the directional cumulative breaking term of
 \texttt{W3SDS4} (\texttt{SDSCUM = -0.40}, through the matrix
@@ -1873,12 +1893,45 @@ CPU ports with these branches reproduce WW3 as closely as in M2a
 decisions at every node.
 \item The GPU kernel has the same branches; \texttt{CUMULW} depends only on
 the two frequencies and the direction difference, and goes to the device
-as a table of $32\times32\times36$ values. Its check, and the GPU runs,
-wait for a GPU.
+as a table of $32\times32\times36$ values. On the harness nodes it
+reproduces WW3 to $4.0\times10^{-6}$ in single precision, with the same
+number of dynamic steps at every node. A step on 373\,800 nodes takes
+\SI{0.81}{s}: the table look-ups cost less than the Newton iterations and
+the 50-point tail they replace (job 4139172).
+\item After each of the first three steps from the restart of 8 January,
+$H_s$ agrees with the WW3 restarts within \SI{4.4}{mm} (job 4162033).
+Over 48 hours the RMS difference is \SI{2.0}{\micro\metre} at the median
+node, \SI{77}{\micro\metre} at the 99th percentile and \SI{2.1}{cm} at the
+worst node, which has the same one-hour spikes as in M2a. One A100 takes
+\SI{127}{s} per model day, 11.7 times faster than 32 cores (job 4162034,
+Table~\ref{tab:m2}).
+\item The week, against the explicit run of grid v5 $K=4$, and its scores
+are running (jobs 4162038 to 4162040).
 \end{itemize}
 The targets of M2b are those of M2a, against the existing explicit runs on
 grids v5 $K=4$ and v4, and at least ten times the speed of the Fortran
 explicit scheme, i.e. under \SI{430}{s} per model day on grid v4.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{llrrrrr}
+\toprule
+run & ST4 & median & p99 & max & GPU (s/day) & WW3 \\
+\midrule
+48 h & simplified & \SI{2.1}{\micro\metre} & \SI{86}{\micro\metre} & \SI{2.3}{cm} & 146 & 3\,064 s, 32 cores \\
+week & simplified & \SI{2.5}{\micro\metre} & \SI{110}{\micro\metre} & \SI{1.9}{cm} & 143 & 5\,003 s, 64 cores \\
+48 h & calibrated & \SI{2.0}{\micro\metre} & \SI{77}{\micro\metre} & \SI{2.1}{cm} & 127 & 2\,982 s, 32 cores \\
+\bottomrule
+\end{tabular}
+\caption{Milestones M2a and M2b: the GPU model with source terms on one
+A100 against WW3, grid v5 $K=4$. \emph{Median}, \emph{p99} and
+\emph{max}: RMS difference of the hourly $H_s$ over the run at the median
+node, at the 99th percentile and at the worst of 371\,278 nodes. The 48 h
+runs start from the restart of 8 January 00\,h, the week from the WW3
+restart of 1 January 00:10. Slurm jobs 4122569, 4122614 and 4139131
+(WW3), 4139023, 4139117 and 4162034 (GPU).}
+\label{tab:m2}
+\end{table}
 
 \begin{table}[H]
 \centering\small
@@ -1895,12 +1948,13 @@ routine & M2a & M2b \\
 \texttt{W3SBT4} & $5.0\times10^{-5}$ & \\
 \texttt{W3SRCE}, spectrum after \SI{600}{s} & $4.3\times10^{-6}$ & $3.9\times10^{-6}$ \\
 \texttt{W3SRCE}, mean dynamic step & $8.9\times10^{-6}$ & $1.3\times10^{-5}$ \\
-\texttt{W3SRCE} on the GPU, single precision & $3.1\times10^{-6}$ & \\
+\texttt{W3SRCE} on the GPU, single precision & $3.1\times10^{-6}$ & $4.0\times10^{-6}$ \\
 \bottomrule
 \end{tabular}
 \caption{Milestones M2a and M2b: double-precision CPU ports of the source
 terms against WW3 on 1\,869 nodes of the restart of 8 January 2026 00\,h
-(Slurm jobs 4123121 and 4139132), and the GPU kernel of M2a (job 4138915).
+(Slurm jobs 4123121 and 4139132), and the GPU kernel (jobs 4138915 and
+4139172).
 Largest difference over the nodes, relative to WW3, or to the largest
 value of the node for spectra. M2a: simplified ST4 (no stress tables, no
 cumulative term). M2b: the calibrated ST4, given for the routines whose
@@ -1986,6 +2040,11 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{scripts/m2\_ww3\_ref\_hpc.slurm}, the harness with
   \texttt{scripts/m2\_src\_harness\_hpc.slurm}, then
   \texttt{hww3-src check} (\texttt{docs/reproducing.md}).
+\item Table~\ref{tab:m2}: \texttt{scripts/m2\_ww3\_ref\_hpc.slurm} with
+  \texttt{MODE=dev} or \texttt{week} (and \texttt{ST4=full} for M2b),
+  \texttt{scripts/m2\_prop\_hpc.slurm} with \texttt{HOURS=48} or
+  \texttt{168}, then \texttt{scripts/m1\_compare\_nc.py} and
+  \texttt{scripts/m2\_scores\_hpc.slurm} (\texttt{docs/reproducing.md}).
 \end{itemize}
 
 \end{document}
