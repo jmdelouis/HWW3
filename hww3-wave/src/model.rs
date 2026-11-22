@@ -76,6 +76,10 @@ pub struct Config {
     /// Wavenumbers, group speeds and spectrum remapping of `W3ULEV` on the
     /// host (threads) instead of the device.
     pub host_level: bool,
+    /// `FSBCCFL` (namelist `UNST` of `ww3_grid`, `UGBCCFL`, default true): the
+    /// sub-cycling count `ITER` takes every wet node, coast and open boundary
+    /// included; false counts the interior nodes (`IOBP = 1`) only.
+    pub bccfl: bool,
 }
 
 impl Default for Config {
@@ -91,6 +95,7 @@ impl Default for Config {
             block: 256,
             lanes: 2048,
             host_level: false,
+            bccfl: true,
         }
     }
 }
@@ -562,6 +567,12 @@ impl<F: Real> Model<F> {
     pub fn download_u32(&self, h: &Handle) -> Vec<u32> {
         let b = self.client.read_one(h.clone()).expect("device read");
         u32::from_bytes(&b).to_vec()
+    }
+
+    /// Current group speeds `CG[ik][node]`, `ik = 0 .. NK+1`, from the device
+    /// (the host copy [`Model::cg`] stays that of the restart).
+    pub fn device_cg(&self) -> Vec<f32> {
+        self.download(&self.d_cg)
     }
 
     /// Node flags and mask words from IOBP, DW, MAPSTA (host copies).
@@ -1135,6 +1146,7 @@ impl<F: Real> Model<F> {
                     bf(&self.d_start, np + 1),
                     bf(&self.d_slot, 3 * ne),
                     bf(&self.d_partial, nk * nth * lanes),
+                    if self.cfg.bccfl { prop::FLAG_WET } else { prop::FLAG_INTERIOR | prop::FLAG_WET },
                     np,
                     ne,
                     nk,
@@ -1490,6 +1502,7 @@ impl<F: Real> Model<F> {
             bbn: &bbn,
             rd10,
             rd20,
+            bccfl: self.cfg.bccfl,
         };
         let iters = crate::cpu::geo_freq(&g, &mut va, nth);
         self.geographic(ik);

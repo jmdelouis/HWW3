@@ -18,19 +18,28 @@
 #   MODE=ideal  idealised swell from ww3_strt (Gaussian packet, 0.08 Hz,
 #               centred at 25W 47N, 3 deg spread, H_max 3 m), no forcing and
 #               no boundary spectra
-# Hourly H_s and T_m02 for HOURS hours (default 48) in $S/runs/m1_<MODE>/ww3.*.nc.
+# H_s and T_m02 (or the fields of FLIST) every FSTRIDE s (default 3600) for
+# HOURS hours (default 48)
+# in $S/runs/m1_<MODE><TAG>/ww3.*.nc; with RSTRIDE, also RCOUNT restarts
+# (full spectra) every RSTRIDE s from the start, restart001.ww3 ... there.
 #   sbatch --export=ALL,MODE=prop scripts/m1_ww3_prop_hpc.slurm
+#   sbatch --export=ALL,MODE=prop,HOURS=1,FSTRIDE=600,RSTRIDE=600,RCOUNT=3,TAG=_diag scripts/m1_ww3_prop_hpc.slurm
 S=/scratch/jmdeloui/HWW3
 MODE=${MODE:-prop}
 HOURS=${HOURS:-48}
+FSTRIDE=${FSTRIDE:-3600}
+FLIST=${FLIST:-HS T02}
 I=$S/runs/test_grid_v5k4
 F=$S/m1/v5k4
-D=$S/runs/m1_$MODE
+D=$S/runs/m1_$MODE${TAG}
 B=$S/opt/ww3/bin
 source /etc/profile.d/modules.sh
 module purge
 module load oneapi/2025.2.1 hdf5/1.14.6 netcdf-c/4.9.3-parallel netcdf-fortran/4.6.2-parallel
 export I_MPI_FABRICS=shm
+# the PDLIB restart writer (UNST_PDLIB_WRITE_TO_FILE) holds a 460 MB
+# automatic array: without this the ranks die on the first restart
+ulimit -s unlimited
 set -e
 START='20260108 000000'
 STOP=$(date -u -d "2026-01-08 00:00 UTC + $HOURS hours" +'%Y%m%d %H%M%S')
@@ -68,20 +77,30 @@ cat > ww3_shel.nml <<NML
   INPUT%FORCING%ICE_CONC     = '$FORC'
 /
 &OUTPUT_TYPE_NML
-  TYPE%FIELD%LIST = 'HS T02'
+  TYPE%FIELD%LIST = '$FLIST'
 /
 &OUTPUT_DATE_NML
   DATE%FIELD%START  = '$START'
-  DATE%FIELD%STRIDE = '3600'
+  DATE%FIELD%STRIDE = '$FSTRIDE'
   DATE%FIELD%STOP   = '$STOP'
-/
 NML
+if [ -n "$RSTRIDE" ]; then
+  R0=$(date -u -d "2026-01-08 00:00 UTC + $RSTRIDE seconds" +'%Y%m%d %H%M%S')
+  R1=$(date -u -d "2026-01-08 00:00 UTC + $((RSTRIDE * ${RCOUNT:-1})) seconds" +'%Y%m%d %H%M%S')
+  cat >> ww3_shel.nml <<NML
+  DATE%RESTART%START  = '$R0'
+  DATE%RESTART%STRIDE = '$RSTRIDE'
+  DATE%RESTART%STOP   = '$R1'
+NML
+fi
+echo "/" >> ww3_shel.nml
+cat ww3_shel.nml
 cat > ww3_ounf.nml <<NML
 &FIELD_NML
   FIELD%TIMESTART  = '$START'
-  FIELD%TIMESTRIDE = '3600'
-  FIELD%TIMECOUNT  = '$((HOURS + 1))'
-  FIELD%LIST       = 'HS T02'
+  FIELD%TIMESTRIDE = '$FSTRIDE'
+  FIELD%TIMECOUNT  = '$((HOURS * 3600 / FSTRIDE + 1))'
+  FIELD%LIST       = '$FLIST'
   FIELD%SAMEFILE   = T
   FIELD%TYPE       = 4
 /
@@ -98,3 +117,4 @@ SECONDS=0
 $B/ww3_ounf > ww3_ounf.out 2>&1
 echo "ww3_ounf rc=$? in $SECONDS s"
 ls -la ww3.*.nc
+ls -la restart[0-9]*.ww3 2>/dev/null || true

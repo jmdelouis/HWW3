@@ -181,7 +181,9 @@ pub fn cur_coef<F: Float>(ux: &[F], uy: &[F], ine: &[u32], ien: &[F], ccoef: &mu
 // Sub-cycling count of PDLIB_W3XYPFSN2 (LCALC)
 // ---------------------------------------------------------------------------
 
-/// Partial minima of `SI / max(1e-9, KKSUM IOBDP)` over the interior nodes, for
+/// Partial minima of `SI / max(1e-9, KKSUM IOBDP)` over the nodes whose flags
+/// contain `need` (`FLAG_WET`: every wet node, as WW3 with `UGBCCFL = T`, its
+/// default; `FLAG_INTERIOR | FLAG_WET`: the interior nodes only), for
 /// every frequency in one launch: unit `g = (ik nth/4 + grp) lanes + lane`
 /// handles frequency `ik`, directions `4 grp .. 4 grp + 3` and nodes
 /// `lane, lane + lanes, ...`.
@@ -196,6 +198,7 @@ pub fn iter_partial<F: Float>(
     start: &[u32],
     slot: &[u32],
     partial: &mut [F],
+    need: u32,
     np: usize,
     ne: usize,
     nk: usize,
@@ -228,7 +231,7 @@ pub fn iter_partial<F: Float>(
         let cb = ik * ne * 12;
         let mut i = lane;
         while i < np {
-            if (nflag[i] & 3u32) == 3u32 {
+            if (nflag[i] & need) == need {
                 let mut k0s = zero;
                 let mut k1s = zero;
                 let mut k2s = zero;

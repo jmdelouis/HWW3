@@ -15,13 +15,19 @@ sum of the sub-steps over the components for one 600 s step; a *frequency
 sweep* is one sub-step of all directions of one frequency, and a step
 needs $\sum_f \max_\theta \mathrm{ITER}$ of them.
 
-| Grid | Nodes | Triangles | Interior / coast / open | $S$ (`explicit_cost.py`) | Sweeps per step | ITER at $f_1$ |
-|---|---|---|---|---|---|---|
-| Channel–Biscay box of v4 | 21,425 | 41,313 | 19,872 / 1,358 / 195 | 3,079 (3,080) | 92 | 6–8 |
-| v4 | 794,613 | 1,531,542 | 734,829 / 58,443 / 1,341 | 3,678 (3,678) | 110 | 8–10 |
-| v5 $K=4$ | 424,123 | 807,832 | 382,296 / 40,775 / 1,052 | 2,837 (2,835) | 83 | 4–5 |
+| Grid | Nodes | Triangles | Interior / coast / open | $S$ (`explicit_cost.py`) | Sweeps per step | ITER at $f_1$ | Sweeps per step, every wet node | ITER at $f_1$, every wet node |
+|---|---|---|---|---|---|---|---|---|
+| Channel–Biscay box of v4 | 21,425 | 41,313 | 19,872 / 1,358 / 195 | 3,079 (3,080) | 92 | 6–8 | 208 | 8–17 |
+| v4 | 794,613 | 1,531,542 | 734,829 / 58,443 / 1,341 | 3,678 (3,678) | 110 | 8–10 | 258 | 18–24 |
+| v5 $K=4$ | 424,123 | 807,832 | 382,296 / 40,775 / 1,052 | 2,837 (2,835) | 83 | 4–5 | 287 | 19–26 |
 
 A coast node propagates 18.9 of the 36 directions on average.
+
+The M0 counts (columns 5 to 7), like `scripts/explicit_cost.py`, take the
+interior nodes only. WW3 runs with `FSBCCFL = T` (the default of `UGBCCFL`)
+and counts the coast and open-boundary nodes as well (see
+[Coast nodes](#coast-nodes-the-sub-cycling-count)), which gives the last
+two columns (`hww3-wave info`, without currents).
 
 ### Sweep times
 
@@ -58,7 +64,11 @@ with all directions active. CubeCL kernels with Burn on one hpc A100
   the transposes, 10–14 % slower than the forward sweeps.
 
 These figures cover the geographic propagation alone (144 steps per model
-day), not the spectral propagation or the source terms.
+day), not the spectral propagation or the source terms. The step and
+per-day times use the interior sweep counts (110 and 83 per step). With the
+count of WW3 (258 and 287), `two_phase_x4` takes 0.240 s per step on v4
+(34.6 s per model day, 38.2 s for the transpose) and 0.148 s on v5 $K=4$
+(21.3 s, 24.1 s for the transpose); the sweep times do not change.
 
 ### Dot-product tests
 
@@ -133,6 +143,12 @@ fields:
 | `W3ULEV` on the device; energy budget from per-node sums on the device | 34.3 s | largest difference 6.3e-5 m, RMS 3e-8 m | 4117391 |
 | direction kernel staged through shared memory (coalesced loads and stores) | 32.0 s | identical (bitwise) | 4117585 |
 
+With the sub-cycling of WW3 (every wet node, see
+[Coast nodes](#coast-nodes-the-sub-cycling-count)), the 48 h run makes
+82,386 sweeps instead of 23,917 and takes 65.1 s, 32.5 s per model day
+(job 4120563). The rest of this section describes the runs before that
+correction.
+
 The 32.0 s include about 4.5 s of NVRTC compilation at the first level
 update; after it, 6 model hours take 3.4 s, i.e. 13.6 s per model day. A
 6 h run synchronised after each part (job 4117586) spends 2.0 s in the
@@ -160,36 +176,94 @@ over the nodes, at the worst hour:
 
 | Mode | Nodes | $H_s$ RMS, median | $H_s$ RMS, p99 | $H_s$ RMS, max | Energy | WW3, 32 cores | GPU | Jobs (WW3, GPU) |
 |---|---|---|---|---|---|---|---|---|
-| `prop` | 371,278 | 0.94 mm | 6.0 mm | 0.48 m | −0.047 % | 813 s | 32.0 s | 4118215, 4117585 |
-| `geo` | 371,278 | 0.63 mm | 3.1 mm | 0.47 m | −0.018 % | 702 s | 24.7 s | 4118220, 4118253 |
-| `ideal`, nodes reaching $H_s$ = 0.5 m | 22,015 | 1.5 mm | 4.8 mm | 7.0 cm | −0.45 % (13 h), +0.12 % at 48 h | 887 s | 32.9 s | 4118221, 4118252 |
+| `prop` | 371,278 | 1.5 µm | 24 µm | 0.71 mm | −2.4e-7 | 813 s | 65.1 s | 4118215, 4120563 |
+| `geo` | 371,278 | 0.23 µm | 5.9 µm | 0.71 mm | −2.8e-8 | 702 s | 57.6 s | 4118220, 4120564 |
+| `ideal`, nodes reaching $H_s$ = 0.5 m | 22,002 | 0.11 µm | 4.9 µm | 22 µm | −1.3e-7 | 887 s | 66.3 s | 4118221, 4120565 |
 
-The three M1 targets (an $H_s$ RMS difference below 1 cm at the median node
-and below 5 cm at the 99th percentile, the energy within 0.5 %) are met in
-the three modes. $T_{m02}$ differs by 3.2 ms at the median node and 0.06 s
-at the 99th percentile in `prop`.
+These runs count every wet node in `ITER`, as WW3 does. The three M1
+targets (an $H_s$ RMS difference below 1 cm at the median node and below
+5 cm at the 99th percentile, the energy within 0.5 %) are met in the three
+modes with a margin of three to four orders of magnitude: no node differs
+by more than 1 mm RMS, and $T_{m02}$ differs by 5.7 µs at the median node
+and 0.11 ms at the 99th percentile in `prop`. The GPU runs the 48 h 12.5
+times faster than WW3 on 32 cores.
 
-### Open question: coast nodes
+Before that correction, with `ITER` counted on the interior nodes only
+(jobs 4117585, 4118253 and 4118252), the median and 99th-percentile RMS
+differences were 0.94 / 6.0 mm in `prop`, 0.63 / 3.1 mm in `geo` and
+1.5 / 4.8 mm in `ideal`, with up to 0.48 m on coast nodes.
 
-The largest differences are all on coast nodes (`IOBP = 0`), most of them
-with a single triangle. In `prop`, 1,074 of the 371,278 nodes differ by
-more than 1 cm RMS, 49 by more than 5 cm and 7 by more than 20 cm. At the
-worst node (169562, Nova Scotia, 6.1 m deep), $H_s$ is 2.11 m on the GPU
-against 1.84 m in WW3 one hour after the restart, from the same 1.37 m.
+### Coast nodes: the sub-cycling count
 
-Ruled out so far:
+**The question.** With `ITER` counted on the interior nodes only, the
+largest differences were all on coast nodes (`IOBP = 0`), most of them in a
+single triangle: in `prop`, 1,074 of the 371,278 nodes differed by more
+than 1 cm RMS, 49 by more than 5 cm and 7 by more than 20 cm. At node
+169562 (Nova Scotia, 6.1 m deep), $H_s$ was 2.11 m on the GPU against
+1.84 m in WW3 one hour after the restart, from the same 1.37 m.
+
+**Ruled out first.**
 
 - the masks: `IOBP` and `IOBPD` read from `mod_def.ww3` are identical to
   those of `geom` on all nodes, including the 40,775 coast nodes;
-- the depths: `ZB` of `mod_def.ww3` is within 0.8 mm of the grid depths;
+- the depths: `ZB` of `mod_def.ww3` is within 0.8 mm of the grid depths,
+  and the triangles of `natl.msh` are those of the grid;
 - the precision: the `geo` run in double precision (job 4118461) is within
   0.6 mm of the single-precision run on every node;
 - the code path: WW3 calls `PDLIB_W3XYPUG` per spectral bin with
-  `PDLIB_W3XYPFSN2`, recomputes `ITER` after the current and level updates,
-  and builds `PDLIB_SI` and `PDLIB_IEN` as `geom` does.
+  `PDLIB_W3XYPFSN2`, recomputes `ITER` after the current and level updates
+  (`UGDTUPDATE`), and builds `PDLIB_SI` and `PDLIB_IEN` as `geom` does.
 
-Coast nodes are left out of the CFL count, so a coast node with a single
-triangle can run at a local CFL number above 1, where the result depends
-much more on the number of sub-steps than elsewhere. A one-hour WW3 run
-with fields every 600 s and point spectra at a few of these nodes would
-show at which step and in which components the difference appears.
+**Step by step.** WW3 was run for one hour from the same restart with a
+restart file written after each of the first three 600 s steps (`prop`
+and `geo`, Slurm jobs 4119699 and 4119701; the PDLIB restart writer needs
+`ulimit -s unlimited`). `hww3-prop check-steps` compares the full spectra
+of every node with those files, by node class and by graph distance to the
+coast, and gives the frequencies and directions that differ at chosen
+nodes with `IOBPD`, `ITER` and the local CFL number
+$\Delta t / \mathrm{ITER} \sum_T K^+_{iT} / \mathrm{SI}_i$ (jobs 4119700 and
+4119702):
+
+- the difference appears in the first step, in the geographic part
+  (`geo` as much as `prop`): 902 coast nodes and 182 interior nodes differ
+  by more than 1 cm in $H_s$, up to 13 cm;
+- it is not confined to the coast: 12 nodes 8 or more edges away from any
+  coast differ by more than 1 cm (node 165663, on the Sable Island bank,
+  5.4 m deep, 24 edges from the coast: 3.3 % more energy in all directions
+  of the peak frequencies), and most of the worst nodes are 5–7 m deep;
+- the inputs agree: the depths and currents of WW3 (fields `DPT` and `CUR`
+  every 600 s, job 4120131) are within 1 mm and 2e-6 m/s of those of the
+  GPU on every node;
+- the coast nodes in a single triangle run at local CFL numbers of 2.5–4.8
+  (node 169562: 3.05 with `ITER` = 1 at frequency 22), where the N scheme
+  is no longer positive;
+- adding one sub-step to every component on the GPU cuts the coast nodes
+  above 1 cm from 902 to 95 and the interior ones from 182 to 16: WW3
+  takes more sub-steps.
+
+**The cause.** In `PDLIB_W3XYPFSN2`, the time-step limit `DTMAX` is taken
+over the nodes with `IOBP_LOC(IP) .EQ. 1 .OR. FSBCCFL`. `FSBCCFL` comes
+from `UGBCCFL` in the `UNST` namelist of `ww3_grid`, whose default is true
+(`ww3_grid.out` of the runs: `UGBCCFL = T`). WW3 therefore counts every wet
+node, coast and open boundary included, and the small cells of the coast
+set the sub-cycling: on grid v5 $K=4$, `ITER` at the lowest frequency is
+19–26 instead of 4–5, and a step needs 287 frequency sweeps instead of 83
+(258 instead of 110 on grid v4).
+
+**The fix.** `ITER` now counts every wet node in the GPU kernels
+(`iter_partial`), in `cpu::geo_freq` and in `geom` (`Config::bccfl`,
+`Geometry::set_bccfl`, `--no-bccfl` for the interior count). After it, the
+local CFL number stays below 1 everywhere (0.96 at node 169562 with
+`ITER` = 5), the first three steps agree with WW3 within 0.1 mm in `geo`
+and 1.1 mm in `prop` on every node (jobs 4120561 and 4120562), and the
+48 h runs agree within 0.71 mm (table above). The GPU run takes twice as
+long (65.1 s instead of 32.0 s per 48 h), since it makes 3.4 times more
+sweeps.
+
+**Consequences.**
+
+- The M0 per-day times (14.8 s on grid v4, 6.2 s on grid v5 $K=4$) used
+  the interior count; with that of WW3 they are 34.6 and 21.3 s.
+- `scripts/explicit_cost.py` and the sub-step cap `cfl_substeps` of
+  `hww3-grid`, which shaped grid v5, count the interior nodes only, as M0
+  did; the coast cells now set the explicit cost of WW3 on these grids.

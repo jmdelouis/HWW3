@@ -344,7 +344,7 @@ inputs of the hpc check of section 3 in `$R/runs/test_grid_v5k4`.
 ```bash
 # WW3 references, 32 cores, 12-15 min each; ideal first, it writes the ww3_strt restart
 for m in ideal prop geo; do sbatch --export=ALL,MODE=$m scripts/m1_ww3_prop_hpc.slurm; done
-# GPU model, one A100, 25-33 s each
+# GPU model, one A100, 58-66 s each
 for m in ideal prop geo; do sbatch --export=ALL,MODE=$m scripts/m1_prop_hpc.slurm; done
 # comparison (no numpy needed), with the GPU output directory of each job
 python3 scripts/m1_compare_nc.py $R/runs/m1_prop/ww3.202601.nc $R/m1/out_<job> --out m1_prop.json
@@ -356,6 +356,19 @@ python3 scripts/m1_compare_nc.py $R/runs/m1_prop/ww3.202601.nc $R/m1/out_<job> -
 transcriptions, `NORUN=1` skips the run, `HOURS` sets its length and
 `EXTRA='--profile'` times each part of a step:
 `sbatch --export=ALL,MODE=prop,HOURS=6,CHECK=1 scripts/m1_prop_hpc.slurm`.
+
+Step-by-step comparison (the diagnosis of the coast nodes): WW3 for one
+hour with a restart after each of the first three steps, then
+`hww3-prop check-steps` against those restarts (`STEPS_REF` separated by
+`:`, `NODES` by `+`, since `sbatch --export` splits at commas):
+
+```bash
+sbatch --export=ALL,MODE=prop,HOURS=1,FSTRIDE=600,RSTRIDE=600,RCOUNT=3,TAG=_diag scripts/m1_ww3_prop_hpc.slurm
+D=$R/runs/m1_prop_diag
+sbatch --export=ALL,MODE=prop,STEPS_REF=$D/restart001.ww3:$D/restart002.ww3:$D/restart003.ww3,NODES=169562+165663 scripts/m1_prop_hpc.slurm
+# WW3 depth and currents every 600 s, to compare with check-steps --dump (DUMP=dir)
+sbatch --export=ALL,MODE=geo,HOURS=1,FSTRIDE=600,TAG=_fld,"FLIST=HS DPT CUR" scripts/m1_ww3_prop_hpc.slurm
+```
 
 ## 9. Note
 

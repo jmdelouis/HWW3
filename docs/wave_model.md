@@ -125,10 +125,13 @@ The job scripts are `scripts/wave_m0_hpc.slurm` (CubeCL, hpc) and
 hww3-prop run <grid dir> --restart FILE [--current FILE] [--level FILE] [--ice FILE]
           [--nest FILE] [--start YYYYMMDDHHMMSS] --hours H --out DIR
           [--f64] [--block B] [--itstep0 N] [--no-cx] [--no-cth] [--no-ck]
-          [--host-level] [--profile]
+          [--host-level] [--no-bccfl] [--profile]
 hww3-prop restart-hs <grid dir> --restart FILE --out FILE.f32
 hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
 hww3-prop check-geo  <grid dir> --restart FILE [forcing as for run]
+hww3-prop check-steps <grid dir> --restart FILE [forcing as for run]
+          --ref RESTART1,RESTART2,... [--nodes N1,N2,...] [--no-cth] [--no-ck]
+          [--no-bccfl] [--dump DIR]
 ```
 
 | Option | Meaning |
@@ -139,6 +142,7 @@ hww3-prop check-geo  <grid dir> --restart FILE [forcing as for run]
 | `--no-cx`, `--no-cth`, `--no-ck` | switch off the geographic propagation, refraction or the frequency shift (`RUN%FLCX`, `RUN%FLCTH`, `RUN%FLCK`) |
 | `--f64` | double precision |
 | `--host-level` | water-level update on the host instead of the device |
+| `--no-bccfl` | count the interior nodes only in `ITER` (`FSBCCFL = F`); by default every wet node counts, as WW3 does with `UGBCCFL = T` |
 | `--profile` | synchronise after each part of a step and report the time of each part |
 
 `run` writes hourly $H_s$ and $T_{m02}$ to `DIR/hs_YYYYMMDDHH.f32` and
@@ -146,6 +150,11 @@ hww3-prop check-geo  <grid dir> --restart FILE [forcing as for run]
 where `MAPSTA <= 0`) and a `DIR/summary.json`. `restart-hs` gives $H_s$
 and $T_{m02}$ of the restart spectra, to check the reader. `check-ktp3`
 and `check-geo` compare one `W3KTP3` call and one geographic step on the
-GPU with the CPU transcriptions. The job scripts are
+GPU with the CPU transcriptions. `check-steps` steps from the restart and
+compares the full spectra with WW3 restarts written at the end of some
+steps: $H_s$ differences by node class and by distance to the coast, the
+worst nodes, and for the nodes of `--nodes` the frequencies and directions
+that differ, with `IOBPD`, `ITER` and the local CFL number; `--dump`
+writes the depth and currents of those steps. The job scripts are
 `scripts/m1_prop_hpc.slurm` (GPU) and `scripts/m1_ww3_prop_hpc.slurm`
 (Fortran reference); see [Reproducing](reproducing.md).

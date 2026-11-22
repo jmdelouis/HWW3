@@ -318,6 +318,9 @@ pub struct GeoFreq<'a> {
     pub rd10: f32,
     /// `RD20`: length of the boundary interval (s).
     pub rd20: f32,
+    /// `FSBCCFL`: `ITER` from every node (true, WW3's default) or from the
+    /// interior nodes only.
+    pub bccfl: bool,
 }
 
 /// One geographic step of every direction of a frequency, as WW3 writes it
@@ -378,7 +381,7 @@ pub fn geo_freq(g: &GeoFreq, va: &mut [f32], nth: usize) -> Vec<u32> {
         }
         let mut dtmax = 10.0e10f64;
         for i in 0..np {
-            if g.iobp[i] == 1 {
+            if g.iobp[i] == 1 || g.bccfl {
                 dtmax = dtmax.min(g.si[i] / (1e-9f64).max(kksum[i] * g.iobdp[i] as f64));
             }
         }
@@ -535,6 +538,7 @@ mod tests {
                 bbn: &[],
                 rd10: 0.0,
                 rd20: 0.0,
+                bccfl: true,
             };
             // W3XYPUG propagates VA CLATS / CG: start it from u
             let mut va: Vec<f32> = (0..np * nth).map(|j| (u[j] * cg[j / nth] as f64 / clats[j / nth] as f64) as f32).collect();

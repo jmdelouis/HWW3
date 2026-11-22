@@ -16,7 +16,12 @@
 #   MODE=geo    the same without refraction and frequency shift
 #   MODE=ideal  from the COLD restart written by ww3_strt in $S/runs/m1_ideal
 #               (idealised swell), no forcing and no boundary spectra
-# Hourly H_s and T_m02 in $S/m1/out_$J.
+# Hourly H_s and T_m02 in $S/m1/out_$J. With STEPS_REF (WW3 restarts written
+# at the end of some steps, e.g. by m1_ww3_prop_hpc.slurm with RSTRIDE=600,
+# separated by ':' since sbatch --export splits at commas), hww3-prop
+# check-steps compares the spectra instead, with details at the nodes of
+# NODES (separated by '+'); with DUMP, the depth and currents of those steps
+# are written to that directory.
 #   sbatch [--export=ALL,MODE=geo,HOURS=6,CHECK=1,NORUN=1,EXTRA='--profile'] scripts/m1_prop_hpc.slurm
 # Built on the login node with
 #   module load cuda/13.0.0
@@ -48,5 +53,9 @@ echo "mode $MODE: restart $R, $F $M"
 time $B restart-hs $G --restart $R --out $S/m1/restart_hs_$MODE.f32
 [ -n "$CHECK" ] && time $B check-ktp3 $G --restart $R $F
 [ -n "$CHECK" ] && time $B check-geo $G --restart $R $F
+if [ -n "$STEPS_REF" ]; then
+  time $B check-steps $G --restart $R $F $M --ref ${STEPS_REF//:/,} ${NODES:+--nodes ${NODES//+/,}} ${DUMP:+--dump $DUMP}
+  exit 0
+fi
 [ -n "$NORUN" ] && exit 0
 time $B run $G --restart $R $F $M --hours ${HOURS:-48} --out $S/m1/out_$J ${EXTRA}

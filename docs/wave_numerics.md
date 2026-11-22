@@ -61,10 +61,15 @@ $$
 \mathrm{ITER}(f, \theta) = \Big\lceil \Delta t \max_i \frac{\sum_{T \ni i} K^+_{iT}}{\mathrm{SI}_i} \Big\rceil,
 $$
 
-the maximum being over the interior wet nodes (`IOBP = 1`). Coast nodes
-are left out, so a coast node with a single triangle can run with a local
-CFL number above 1. With currents or varying water levels, `ITER` is
-recomputed at every step, as WW3 does.
+the maximum being over every wet node, coast and open boundary included.
+WW3 takes the interior nodes (`IOBP = 1`) only when `FSBCCFL` is false;
+`FSBCCFL` comes from `UGBCCFL` in the `UNST` namelist of `ww3_grid`, which
+is true by default and in the HWW3 runs. Counting the interior nodes only
+(`--no-bccfl`) leaves the coast nodes in a single triangle at local CFL
+numbers of 2.5–4.8 on grid v5 $K=4$, where the scheme is no longer
+positive, and needs 3.5 times fewer sweeps per step on that grid. With
+currents or varying water levels, `ITER` is recomputed at every step, as
+WW3 does.
 
 ### From loops to kernels
 

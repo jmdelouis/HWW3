@@ -7,16 +7,25 @@
 //!     against the WW3 output at the restart time.
 //! hww3-prop run <grid dir> --restart FILE [--current FILE] [--level FILE]
 //!     [--ice FILE] [--nest FILE] [--start YYYYMMDDHHMMSS] --hours H --out DIR [--f64] [--block B]
-//!     [--itstep0 N] [--no-cx] [--no-cth] [--no-ck] [--host-level] [--profile]
+//!     [--itstep0 N] [--no-cx] [--no-cth] [--no-ck] [--host-level] [--no-bccfl] [--profile]
 //!     Hourly H_s and T_m02 (little-endian f32, one value per node,
 //!     UNDEF = -999.9 where MAPSTA <= 0) in DIR/hs_YYYYMMDDHH.f32 and
-//!     DIR/t02_YYYYMMDDHH.f32, and DIR/summary.json.
+//!     DIR/t02_YYYYMMDDHH.f32, and DIR/summary.json. The sub-cycling counts
+//!     every wet node as WW3 with UGBCCFL = T (its default); --no-bccfl
+//!     counts the interior nodes only.
 //! hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
 //!     One step's forcing, then one W3KTP3 call on the GPU compared with
 //!     the CPU transcription of W3KTP3 (hww3_wave::cpu) on a sample of nodes.
 //! hww3-prop check-geo <grid dir> --restart FILE [forcing as for run]
 //!     One step's forcing, then the geographic step of frequencies 1, 17
 //!     and 32 on the GPU against the CPU transcription of PDLIB_W3XYPUG.
+//! hww3-prop check-steps <grid dir> --restart FILE [forcing as for run]
+//!     --ref RESTART1,RESTART2,... [--nodes N1,N2,...] [--no-cth] [--no-ck] [--dump DIR]
+//!     Steps from the restart and compares the spectra with the WW3 restarts
+//!     written at the end of some steps: H_s differences by node class, the
+//!     worst nodes, and for the listed nodes the frequencies and directions
+//!     that differ, with IOBPD, ITER and the local CFL number; --dump writes
+//!     the depth and currents of those steps (dw_, cx_, cy_YYYYMMDDHHMM.f32).
 //! ```
 
 use anyhow::{bail, Result};
@@ -45,7 +54,10 @@ fn parse() -> Result<Args> {
     }
     let mut opts = std::collections::HashMap::new();
     let mut flags = std::collections::HashSet::new();
-    let valued = ["--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start"];
+    let valued = [
+        "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
+        "--dump",
+    ];
     let mut i = 2;
     while i < a.len() {
         if valued.contains(&a[i].as_str()) {
@@ -138,6 +150,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     cfg.flcth = !a.flags.contains("--no-cth");
     cfg.flck = !a.flags.contains("--no-ck");
     cfg.host_level = a.flags.contains("--host-level");
+    cfg.bccfl = !a.flags.contains("--no-bccfl");
     let hours: i64 = a.opts.get("--hours").map(|h| h.parse()).transpose()?.unwrap_or(48);
     let out = PathBuf::from(a.opts.get("--out").cloned().unwrap_or_else(|| "prop_out".into()));
     std::fs::create_dir_all(&out)?;
@@ -304,6 +317,296 @@ fn check_ktp3<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     Ok(())
 }
 
+/// Time of a WW3 restart file (its second record), without reading the spectra.
+fn restart_time(p: &Path) -> Result<Time> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(p)?;
+    let mut h = [0u8; 78];
+    f.read_exact(&mut h)?;
+    let nspec = i32::from_be_bytes(h[74..78].try_into()?) as u64;
+    f.seek(SeekFrom::Start(4 * nspec))?;
+    let mut b = [0u8; 8];
+    f.read_exact(&mut b)?;
+    Ok(Time(i32::from_be_bytes(b[0..4].try_into()?), i32::from_be_bytes(b[4..8].try_into()?)))
+}
+
+/// Inputs of a run from the command line.
+fn inputs(a: &Args) -> Result<Inputs> {
+    let opt = |k: &str| a.opts.get(k).map(PathBuf::from);
+    Ok(Inputs {
+        restart: PathBuf::from(&a.opts["--restart"]),
+        current: opt("--current"),
+        level: opt("--level"),
+        ice: opt("--ice"),
+        nest: opt("--nest"),
+        start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
+    })
+}
+
+/// Step from the restart and, at the time of each WW3 restart of `--ref`,
+/// compare the spectra node by node: H_s differences by node class (coast,
+/// interior, open boundary), the worst nodes, and for the nodes of
+/// `--nodes` the frequencies and directions that differ, with the mask
+/// `IOBPD`, `ITER` and the local CFL number `DT / ITER * KKSUM / SI`.
+fn check_steps(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
+    use hww3_wave::spec::{DERA, RADIUS};
+    let device = Device::cuda(0);
+    let client = hww3_wave::burn_ext::client(&device)?;
+    let inp = inputs(a)?;
+    let mut cfg = Config::default();
+    cfg.flcth = !a.flags.contains("--no-cth");
+    cfg.flck = !a.flags.contains("--no-ck");
+    cfg.bccfl = !a.flags.contains("--no-bccfl");
+    let mut m = Model::<f32>::new(client, grid, geo, &inp, cfg)?;
+    let mut refs: Vec<(Time, PathBuf)> = Vec::new();
+    for s in a.opts.get("--ref").map(|s| s.as_str()).unwrap_or("").split(',').filter(|s| !s.is_empty()) {
+        let p = PathBuf::from(s);
+        refs.push((restart_time(&p)?, p));
+    }
+    refs.sort();
+    let nodes: Vec<usize> = match a.opts.get("--nodes") {
+        Some(s) => s.split(',').map(|x| x.parse::<usize>()).collect::<Result<_, _>>()?,
+        None => vec![],
+    };
+    let (np, nk, nth) = (m.np, m.nk, m.nth);
+    let nspec = nk * nth;
+    let facx = 1.0 / (DERA * RADIUS);
+    let clats: Vec<f32> = m.lat.iter().map(|&y| (DERA * y).cos()).collect();
+    let ntri = |i: usize| (geo.start[i + 1] - geo.start[i]) as usize;
+    // graph distance (edges) of every node to the nearest coast node
+    let mut hops = vec![u32::MAX; np];
+    let mut front: Vec<usize> = (0..np).filter(|&i| geo.iobp[i] == 0).collect();
+    for &i in &front {
+        hops[i] = 0;
+    }
+    let mut d = 0u32;
+    while !front.is_empty() {
+        d += 1;
+        let mut next = vec![];
+        for &i in &front {
+            for q in geo.start[i] as usize..geo.start[i + 1] as usize {
+                let t = geo.slot[q] as usize / 3;
+                for r in 0..3 {
+                    let j = geo.ine[3 * t + r] as usize;
+                    if hops[j] == u32::MAX {
+                        hops[j] = d;
+                        next.push(j);
+                    }
+                }
+            }
+        }
+        front = next;
+    }
+    for (tref, pref) in &refs {
+        while m.time < *tref {
+            m.step()?;
+        }
+        if m.time != *tref {
+            bail!("no step ends at {tref} (model at {})", m.time);
+        }
+        if let Some(dir) = a.opts.get("--dump") {
+            // depth and currents of this step, to compare with WW3's DPT and CUR fields
+            let tag = format!("{:08}{:04}", m.time.0, m.time.1 / 100);
+            let dir = PathBuf::from(dir);
+            std::fs::create_dir_all(&dir)?;
+            write_f32(&dir.join(format!("dw_{tag}.f32")), &m.dw)?;
+            write_f32(&dir.join(format!("cx_{tag}.f32")), &m.download(&m.d_cx))?;
+            write_f32(&dir.join(format!("cy_{tag}.f32")), &m.download(&m.d_cy))?;
+        }
+        let rs = Restart::read(pref)?;
+        let va = m.download(&m.d_va);
+        let cg = m.device_cg();
+        let band = |src: &dyn Fn(usize, usize, usize) -> f32, i: usize, k: usize| -> f64 {
+            let s: f64 = (0..nth).map(|th| src(i, k, th) as f64).sum();
+            s * (m.sp.dden[k] / cg[(k + 1) * np + i]) as f64
+        };
+        let gpu = |i: usize, k: usize, th: usize| va[(k * np + i) * nth + th];
+        let ww3 = |i: usize, k: usize, th: usize| rs.va[i * nspec + k * nth + th];
+        let mut dh = vec![0f64; np];
+        let mut hh = vec![(0f64, 0f64); np];
+        let mut relmax = [(0f64, 0usize); 3];
+        for i in 0..np {
+            if m.mapsta[i] <= 0 {
+                continue;
+            }
+            let (mut eg, mut ew, mut dmax, mut vmax) = (0f64, 0f64, 0f64, 0f64);
+            for k in 0..nk {
+                eg += band(&gpu, i, k);
+                ew += band(&ww3, i, k);
+                for th in 0..nth {
+                    let (g, w) = (gpu(i, k, th) as f64, ww3(i, k, th) as f64);
+                    dmax = dmax.max((g - w).abs());
+                    vmax = vmax.max(w.abs());
+                }
+            }
+            let (hg, hw) = (4.0 * eg.max(0.0).sqrt(), 4.0 * ew.max(0.0).sqrt());
+            hh[i] = (hg, hw);
+            dh[i] = hg - hw;
+            let c = geo.iobp[i].min(2) as usize;
+            let rel = dmax / vmax.max(1e-30);
+            if vmax > 1e-12 && rel > relmax[c].0 {
+                relmax[c] = (rel, i);
+            }
+        }
+        println!("== {} (ITSTEP {}) against {}", m.time, m.itstep, pref.display());
+        let names = ["coast", "interior", "open boundary"];
+        for (c, name) in names.iter().enumerate() {
+            let sel: Vec<usize> = (0..np).filter(|&i| m.mapsta[i] > 0 && geo.iobp[i].min(2) as usize == c).collect();
+            let worst = sel.iter().copied().max_by(|&x, &y| dh[x].abs().total_cmp(&dh[y].abs()));
+            let single = sel.iter().filter(|&&i| ntri(i) == 1).count();
+            println!(
+                "  {name}: {} nodes ({} in one triangle), |dHs| > 1 mm {}, > 1 cm {}, > 5 cm {}; max |dHs| {:.4} m at {:?}; max spectral |gpu - ww3| / max ww3 {:.2e} at node {}",
+                sel.len(),
+                single,
+                sel.iter().filter(|&&i| dh[i].abs() > 1e-3).count(),
+                sel.iter().filter(|&&i| dh[i].abs() > 1e-2).count(),
+                sel.iter().filter(|&&i| dh[i].abs() > 5e-2).count(),
+                worst.map_or(0.0, |w| dh[w].abs()),
+                worst,
+                relmax[c].0,
+                relmax[c].1
+            );
+        }
+        println!("  by distance to the coast (edges: nodes, |dHs| > 1 mm, > 1 cm, max |dHs|, max spectral relative difference):");
+        for dd in 0..=8u32 {
+            let sel: Vec<usize> = (0..np)
+                .filter(|&i| m.mapsta[i] > 0 && if dd < 8 { hops[i] == dd } else { hops[i] >= 8 })
+                .collect();
+            let mut rmax = 0f64;
+            for &i in &sel {
+                let mut dmax = 0f64;
+                let mut vmax = 0f64;
+                for k in 0..nk {
+                    for th in 0..nth {
+                        let (g, w) = (gpu(i, k, th) as f64, ww3(i, k, th) as f64);
+                        dmax = dmax.max((g - w).abs());
+                        vmax = vmax.max(w.abs());
+                    }
+                }
+                if vmax > 1e-12 {
+                    rmax = rmax.max(dmax / vmax);
+                }
+            }
+            println!(
+                "    {}{dd}: {} nodes, {}, {}, {:.2e} m, {:.2e}",
+                if dd < 8 { "" } else { ">=" },
+                sel.len(),
+                sel.iter().filter(|&&i| dh[i].abs() > 1e-3).count(),
+                sel.iter().filter(|&&i| dh[i].abs() > 1e-2).count(),
+                sel.iter().map(|&i| dh[i].abs()).fold(0f64, f64::max),
+                rmax
+            );
+        }
+        let one: Vec<usize> = (0..np).filter(|&i| m.mapsta[i] > 0 && geo.iobp[i] == 0 && ntri(i) == 1).collect();
+        println!(
+            "  coast nodes in one triangle: |dHs| > 1 cm {} of {}; coast nodes in 2 or more: |dHs| > 1 cm {}",
+            one.iter().filter(|&&i| dh[i].abs() > 1e-2).count(),
+            one.len(),
+            (0..np).filter(|&i| m.mapsta[i] > 0 && geo.iobp[i] == 0 && ntri(i) > 1 && dh[i].abs() > 1e-2).count()
+        );
+        let mut order: Vec<usize> = (0..np).filter(|&i| m.mapsta[i] > 0).collect();
+        order.sort_by(|&x, &y| dh[y].abs().total_cmp(&dh[x].abs()));
+        println!("  worst nodes (node iobp triangles hops depth: Hs gpu / ww3):");
+        let far: Vec<usize> = order.iter().copied().filter(|&i| hops[i] >= 8).take(4).collect();
+        for &i in order.iter().take(12).chain(far.iter()) {
+            println!(
+                "    {i} {} {} {} {:.1}: {:.4} / {:.4} (lon {:.3}, lat {:.3})",
+                geo.iobp[i],
+                ntri(i),
+                hops[i],
+                m.dw[i],
+                hh[i].0,
+                hh[i].1,
+                grid.lon[i],
+                grid.lat[i]
+            );
+        }
+        let nodes: Vec<usize> = nodes.iter().copied().chain(far.iter().copied().take(2)).collect();
+        if nodes.is_empty() {
+            continue;
+        }
+        let cx = m.download(&m.d_cx);
+        let cy = m.download(&m.d_cy);
+        let dt = m.cfg.dtg as f64;
+        // local CFL number of node i for component (k, th)
+        let cfl = |i: usize, k: usize, th: usize| -> f64 {
+            let (ec, es) = (m.sp.ecos[th] as f64, m.sp.esin[th] as f64);
+            let vel = |j: usize| -> (f64, f64) {
+                let wet = (m.dw[j] >= m.dmin + 1e-5) as u8 as f64;
+                let c = cg[(k + 1) * np + j] as f64;
+                let cur = (geo.iobp[j] > 0) as u8 as f64;
+                let cl = clats[j] as f64;
+                (
+                    (facx as f64 * ec * c / cl + cur * facx as f64 * cx[j] as f64 / cl) * wet,
+                    (facx as f64 * es * c + cur * facx as f64 * cy[j] as f64) * wet,
+                )
+            };
+            let mut kk = 0f64;
+            for q in geo.start[i] as usize..geo.start[i + 1] as usize {
+                let code = geo.slot[q] as usize;
+                let (t, p) = (code / 3, code % 3);
+                let v: Vec<(f64, f64)> = (0..3).map(|r| vel(geo.ine[3 * t + r] as usize)).collect();
+                let lx = (v[0].0 + v[1].0 + v[2].0) / 6.0;
+                let ly = (v[0].1 + v[1].1 + v[2].1) / 6.0;
+                kk += (lx * geo.ien[6 * t + 2 * p] + ly * geo.ien[6 * t + 2 * p + 1]).max(0.0);
+            }
+            let it = m.iter_host[k * nth + th].max(1) as f64;
+            dt / it * kk / geo.si[i]
+        };
+        for &i in &nodes {
+            let (hg, hw) = hh[i];
+            let mut bands: Vec<(usize, f64, f64)> = (0..nk).map(|k| (k, band(&gpu, i, k), band(&ww3, i, k))).collect();
+            bands.sort_by(|x, y| (y.1 - y.2).abs().total_cmp(&(x.1 - x.2).abs()));
+            let (mut cmax, mut kmax, mut tmax) = (0f64, 0, 0);
+            for k in 0..nk {
+                for th in 0..nth {
+                    let c = cfl(i, k, th);
+                    if c > cmax {
+                        (cmax, kmax, tmax) = (c, k, th);
+                    }
+                }
+            }
+            println!(
+                "  node {i} (iobp {}, {} triangles, depth {:.1} m): Hs {:.4} / {:.4}; largest local CFL {:.2} at k {} th {} (ITER {})",
+                geo.iobp[i],
+                ntri(i),
+                m.dw[i],
+                hg,
+                hw,
+                cmax,
+                kmax,
+                tmax,
+                m.iter_host[kmax * nth + tmax]
+            );
+            print!("    bands with the largest energy differences (k: gpu / ww3):");
+            for &(k, g, w) in bands.iter().take(4) {
+                print!(" {k}: {g:.4e} / {w:.4e};");
+            }
+            println!();
+            let k = bands[0].0;
+            let mask = geo.iobpd[i];
+            println!("    k {k}, per direction (th mask ITER CFL: gpu / ww3):");
+            let mut line = String::new();
+            for th in 0..nth {
+                let (g, w) = (gpu(i, k, th), ww3(i, k, th));
+                if g.abs().max(w.abs()) == 0.0 {
+                    continue;
+                }
+                line.push_str(&format!(
+                    " [{th} {} {} {:.2}: {:.3e}/{:.3e}]",
+                    (mask >> th) & 1,
+                    m.iter_host[k * nth + th],
+                    cfl(i, k, th),
+                    g,
+                    w
+                ));
+            }
+            println!("   {line}");
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let a = parse()?;
     let grid = Grid::read(&a.grid)?;
@@ -347,6 +650,10 @@ fn main() -> Result<()> {
         "check-ktp3" => {
             let geo = Geometry::new(&grid);
             check_ktp3::<f32>(&grid, &geo, &a)
+        }
+        "check-steps" => {
+            let geo = Geometry::new(&grid);
+            check_steps(&grid, &geo, &a)
         }
         other => bail!("unknown command {other}"),
     }

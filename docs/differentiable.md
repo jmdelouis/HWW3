@@ -34,7 +34,7 @@ estimates use:
 | Cost to that point | **M2a**, with a simplified ST4 that WW3 also runs (`SINTABLE = 0`, `SDSCUM = 0`): 26–52 person-weeks for one developer who knows WW3, Rust and GPUs (central value about 35), or 10–28 weeks of Jean-Marc's time with coding assistants writing most of the code (central value about 16). **M2b**, with the full ST4: 30–59 person-weeks (about 40), or 11–31 weeks of his time (about 18). |
 | Cost to reverse mode for the fields (milestone M4) | 52–98 person-weeks for one developer (central value about 70). For Jean-Marc with assistants: 17–48 weeks (central value about 30). |
 | AD in Rust on GPU today | No tool differentiates Rust GPU kernels automatically. The kernels are written in CubeCL, with Burn for tensors and the tape. The adjoint of the propagation is written by hand: it is the transposed operator. The adjoints of the source terms are written by hand too, or the source terms are written as Burn tensor operations so that Burn differentiates them. `std::autodiff` (Enzyme) works on the CPU only; it is not installed for now, and the reference derivatives come from finite differences in double precision. |
-| Expected speed | 40–550 s per model day on one A100 for grid v4, against 4,318 s for the Fortran explicit scheme on 112 cores: 8 to 100 times faster. Milestone M0 measured the geographic propagation alone: 14.8 s per model day on grid v4 and 6.2 s on grid v5 $K=4$, 1.5 times the bandwidth estimate. |
+| Expected speed | 40–550 s per model day on one A100 for grid v4, against 4,318 s for the Fortran explicit scheme on 112 cores: 8 to 100 times faster. Milestone M0 measured the geographic propagation alone at 1.5 times the bandwidth estimate per sweep: 34.6 s per model day on grid v4 and 21.3 s on grid v5 $K=4$ with the sub-cycling of WW3, which counts the coast nodes (14.8 and 6.2 s with the interior count used at M0). |
 | Biggest cost drivers | How faithful the ST4 port must be; hand-written adjoints of the source terms; debugging against the Fortran. |
 
 ## 1. Scope
@@ -369,6 +369,13 @@ Depending on how the WAM6-GPU time splits between propagation and sources
     when the currents or the sea level change, adds about 11 %.
   - With this time the bandwidth estimate for grid v4 becomes 41–106 s
     per model day; the full range stays 40–550 s.
+  - These times count the interior nodes in `ITER`. WW3 counts every wet
+    node (`FSBCCFL = T`, found at M1, section 9.1): 258 frequency sweeps
+    per step on grid v4 and 287 on grid v5 $K=4$ instead of 110 and 83.
+    The step then takes 0.240 s on grid v4 (34.6 s per model day) and
+    0.148 s on grid v5 $K=4$ (21.3 s), and the estimates that use the M0
+    time grow by 19.8 s per model day on grid v4 (61–126 s instead of
+    41–106 s, 42–51 s instead of 22–31 s below).
 - **The lower end** is reached with fused kernels and one or two source
   evaluations per step.
 - **Burn tensor operations for the sources** put the speed-up nearer to the
@@ -553,7 +560,7 @@ coastal-scale corrections can therefore be computed on uniform maps.
 | milestone | content | go if | pw (one developer) |
 |---|---|---|---|
 | M0 | Rust stable with the CubeCL and Burn crates and their CUDA backend on one A100; N-scheme sweep and its transpose on grids v4 and v5 $K=4$ with the sub-cycling of `cfl.rs` | a frequency sweep on grid v4 within twice the bandwidth estimate (about 1.3 ms); dot-product test passes; the toolchain builds and runs on the GPU nodes. Otherwise switch the kernels to `cudarc` and CUDA C. **Done: go** (section 9.1) | 1–2 |
-| M1 | propagation-only model: geographic and spectral propagation, depth, currents, sea level, boundary spectra, ice mask, restart reader | the propagation-only targets of section 6. **Targets met** on 22 November 2026, coast-node differences under diagnosis ([GPU model results](wave_results.md)) | 10–18 |
+| M1 | propagation-only model: geographic and spectral propagation, depth, currents, sea level, boundary spectra, ice mask, restart reader | the propagation-only targets of section 6. **Targets met** on 22 November 2026: once `ITER` counts the coast nodes as WW3 does, $H_s$ is within 1.5 µm (median node) and 24 µm (99th percentile) RMS of WW3 over 48 h, energy within 2.4e-7, 65 s on one A100 against 813 s on 32 cores (section 9.1, [GPU model results](wave_results.md)) | 10–18 |
 | M2a | forward model with the simplified ST4 (`SINTABLE = 0`, `SDSCUM = 0`), DIA, LN1, DB1, BT4, integration and limiter, outputs, observation operators | the targets with sources of section 6 against the WW3 run with the same settings. **First gradients:** finite differences in double precision for `BETAMAX` and a few parameters, at GPU speed, to build and test the calibration chain | 15–32 |
 | M2b | full ST4: the stress tables `TAUT`, `TAUHFT`, `TAUHFT2` and the directional cumulative term (`SDSCUM = −0.40`) | the targets with sources of section 6 against the existing explicit runs, and at least 10 times the Fortran explicit speed (under 430 s per model day on grid v4). **First scientific gradients** with respect to the parameters of the calibrated configuration | 4–7 |
 | M3 | tangent kernels for parameters (sources and stress tables) | agreement with the double-precision finite differences to $10^{-4}$ where the model is smooth | 4–7 (optional) |
@@ -584,6 +591,20 @@ sweep and its transpose in three variants, each in CubeCL and in CUDA C.
   the nodes, four directions per thread.
 - The sub-cycling matches `scripts/explicit_cost.py`: $S$ = 3,678 on grid
   v4 (110 frequency sweeps per step) and 2,837 on grid v5 $K=4$ (83).
+  Both count the interior nodes only. The M1 comparison with WW3 found that
+  WW3 counts every wet node: `PDLIB_W3XYPFSN2` takes `DTMAX` over the nodes
+  with `IOBP = 1 .OR. FSBCCFL`, and `FSBCCFL` comes from `UGBCCFL` in the
+  `UNST` namelist of `ww3_grid`, true by default and in the HWW3 runs. The
+  small coast cells then set the sub-cycling: 258 frequency sweeps per step
+  on grid v4 and 287 on grid v5 $K=4$ (`ITER` at the lowest frequency 18–24
+  and 19–26 instead of 8–10 and 4–5). With the interior count, the coast
+  nodes in a single triangle ran at local CFL numbers up to 4.8, which gave
+  differences up to 0.48 m in $H_s$ at the coast (Slurm jobs 4119699 to
+  4120565). With the count of WW3 the sweep times below stand, and the step
+  times and per-day times grow by 2.3 on grid v4 and 3.5 on grid v5 $K=4$
+  (0.240 and 0.148 s per step, 34.6 and 21.3 s per model day).
+  `scripts/explicit_cost.py` and the `cfl_substeps` cap of `hww3-grid`
+  still count the interior nodes only.
 
 **Platforms.**
 

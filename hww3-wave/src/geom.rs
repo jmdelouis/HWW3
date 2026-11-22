@@ -17,8 +17,11 @@
 //!   from the sea), with WW3's `eDet` test.
 //!
 //! Sub-cycling (`PDLIB_W3XYPFSN2`, `LCALC`): for each component,
-//! `ITER = ceil(DT / min_i SI_i / KKSUM_i)` over the interior nodes
-//! (`IOBP = 1`, `FSBCCFL = F`), with `KKSUM_i = Σ_T max(0, K_iT)`.
+//! `ITER = ceil(DT / min_i SI_i / KKSUM_i)` over every wet node, coast and
+//! open boundary included, as WW3 does with `FSBCCFL = T` (`UGBCCFL` of the
+//! `UNST` namelist of `ww3_grid`, true by default and in the HWW3 runs), with
+//! `KKSUM_i = Σ_T max(0, K_iT)`; [`Geometry::set_bccfl`] switches to the
+//! interior nodes only (`FSBCCFL = F`).
 
 use crate::grid::Grid;
 use rayon::prelude::*;
@@ -81,6 +84,9 @@ pub struct Geometry {
     pub iter: Vec<u32>,
     /// Largest `DT / dt_i` per component (WW3 `CFLXY`), `nk nth`.
     pub cflxy: Vec<f64>,
+    /// `FSBCCFL`: whether `cflxy` and `iter` count every wet node (true) or
+    /// the interior nodes only.
+    pub bccfl: bool,
 }
 
 /// Linear group speed (m/s) of frequency `f` (Hz) at depth `h` (m).
@@ -235,13 +241,22 @@ impl Geometry {
             cy,
             iter: vec![],
             cflxy: vec![],
+            bccfl: true,
         };
-        geo.cflxy = geo.cfl();
-        geo.iter = geo.cflxy.iter().map(|&c| (c.ceil() as u32).max(1)).collect();
+        geo.set_bccfl(true);
         geo
     }
 
-    /// `DT max_i KKSUM_i / SI_i` per component over the interior nodes.
+    /// Sub-cycling from every wet node (`bccfl`, WW3's `FSBCCFL = T`, the
+    /// default) or from the interior nodes only; recomputes `cflxy` and `iter`.
+    pub fn set_bccfl(&mut self, bccfl: bool) {
+        self.bccfl = bccfl;
+        self.cflxy = self.cfl();
+        self.iter = self.cflxy.iter().map(|&c| (c.ceil() as u32).max(1)).collect();
+    }
+
+    /// `DT max_i KKSUM_i / SI_i` per component over the wet nodes counted by
+    /// `bccfl`.
     fn cfl(&self) -> Vec<f64> {
         let (np, nth) = (self.np, self.nth);
         let mut out = Vec::with_capacity(self.nk * nth);
@@ -250,7 +265,7 @@ impl Geometry {
             let cy = &self.cy[ik * np..(ik + 1) * np];
             let best = (0..np)
                 .into_par_iter()
-                .filter(|&i| self.iobp[i] == 1 && self.iobdp[i] == 1)
+                .filter(|&i| (self.bccfl || self.iobp[i] == 1) && self.iobdp[i] == 1)
                 .fold(
                     || vec![0.0f64; nth],
                     |mut acc, i| {
@@ -415,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn sub_cycling_keeps_the_interior_cfl_below_one() {
+    fn sub_cycling_keeps_the_cfl_of_every_wet_node_below_one() {
         let geo = Geometry::new(&lattice(12, 10, 20.0, 15.0, true));
         let (np, nth) = (geo.np, geo.nth);
         for ik in 0..geo.nk {
@@ -424,7 +439,7 @@ mod tests {
                 let it = geo.iter[ik * nth + k];
                 assert_eq!(it, (geo.cflxy[ik * nth + k].ceil() as u32).max(1));
                 let mut worst = 0.0f64;
-                for i in (0..np).filter(|&i| geo.iobp[i] == 1) {
+                for i in (0..np).filter(|&i| geo.iobdp[i] == 1) {
                     let mut kk = 0.0;
                     for s in geo.start[i]..geo.start[i + 1] {
                         let code = geo.slot[s as usize] as usize;

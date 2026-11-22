@@ -4,10 +4,14 @@
 //! the same dot-product test through Burn's autodiff tape.
 //!
 //! ```text
-//! hww3-wave info  <grid dir> [--box lon0 lon1 lat0 lat1]
+//! hww3-wave info  <grid dir> [--box lon0 lon1 lat0 lat1] [--no-bccfl]
 //! hww3-wave bench <grid dir> [--box lon0 lon1 lat0 lat1] [--backend cubecl|cuda-c]
-//!                 [--reps N] [--block B] [--f64] [--reference] [--burn] [--out results.json]
+//!                 [--reps N] [--block B] [--f64] [--reference] [--burn] [--no-bccfl]
+//!                 [--out results.json]
 //! ```
+//!
+//! The sub-cycling counts every wet node, as WW3 with `UGBCCFL = T` (its
+//! default); `--no-bccfl` counts the interior nodes only, as the M0 runs did.
 
 // Built without a GPU backend, the driver only has `info`, and the timing
 // and test helpers are unused.
@@ -69,6 +73,8 @@ struct Args {
     f64: bool,
     reference: bool,
     burn: bool,
+    /// count the interior nodes only in the sub-cycling (`FSBCCFL = F`)
+    no_bccfl: bool,
     out: Option<PathBuf>,
 }
 
@@ -87,6 +93,7 @@ fn parse() -> Result<Args> {
         f64: false,
         reference: false,
         burn: false,
+        no_bccfl: false,
         out: None,
     };
     let mut i = 2;
@@ -116,6 +123,7 @@ fn parse() -> Result<Args> {
             "--f64" => r.f64 = true,
             "--reference" => r.reference = true,
             "--burn" => r.burn = true,
+            "--no-bccfl" => r.no_bccfl = true,
             s => bail!("unknown option {s}"),
         }
         i += 1;
@@ -410,7 +418,10 @@ fn main() -> Result<()> {
     if let Some(b) = args.bbox {
         grid = grid.cut_box(b[0], b[1], b[2], b[3]);
     }
-    let geo = Geometry::new(&grid);
+    let mut geo = Geometry::new(&grid);
+    if args.no_bccfl {
+        geo.set_bccfl(false);
+    }
     let sum = summary(&geo, t.elapsed().as_secs_f64());
     println!("{}", serde_json::to_string(&sum)?);
     let mut res = json!({"grid": args.grid.display().to_string(), "box": args.bbox,

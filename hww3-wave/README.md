@@ -43,8 +43,8 @@ CUDARC_CUDA_VERSION=11040 cargo build --release --no-default-features --features
 - `hww3-wave info|bench <grid dir> ...`: geometry and sub-cycling of a grid,
   sweep timings, dot-product tests, check against the CPU loop of WW3
   (milestone M0).
-- `hww3-prop run|restart-hs|check-ktp3|check-geo <grid dir> ...`: the
-  propagation-only model and its checks (milestone M1).
+- `hww3-prop run|restart-hs|check-ktp3|check-geo|check-steps <grid dir> ...`:
+  the propagation-only model and its checks (milestone M1).
 
 The job scripts are in `../scripts` (`wave_m0_hpc.slurm`, `wave_m0.pbs`,
 `m1_prop_hpc.slurm`, `m1_ww3_prop_hpc.slurm`, `m1_compare_nc.py`).
