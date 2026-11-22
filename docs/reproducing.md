@@ -420,6 +420,42 @@ python3 scripts/m1_compare_nc.py $D/ww3.202601.nc $R/m2/out_JOBID --worst 20 --g
 python3 scripts/m1_compare_nc.py $D/ww3.202601.nc $R/m2/out_JOBID --vars uwnd,vwnd
 ```
 
+The week on the GPU starts from the restart that a 1 h cold-started WW3
+run writes after its first step, since the GPU model has no `W3UINI`:
+
+```bash
+sbatch -t 00:30:00 --export=ALL,MODE=week,HOURS=1,RSTRIDE=600,RCOUNT=1,TAG=_start,FLIST=HS scripts/m2_ww3_ref_hpc.slurm
+sbatch -t 02:00:00 --export=ALL,RESTART=$R/runs/m2_week_start/restart001.ww3,HOURS=168,EXTRA=--wind-out scripts/m2_prop_hpc.slurm
+```
+
+**Scores on hpc.** The hpc cluster has no numpy and does not see the
+Datarmor mirrors of the observations. A Python environment on scratch and a
+copy of the January observations (as agreed, 22 November 2026):
+
+```bash
+# Python 3.9 of the system, packages through the proxy (304 MB):
+# numpy 2.0.2, scipy 1.13.1, netCDF4 1.7.2, matplotlib 3.9.4 and their dependencies
+python3 -m venv $R/pyenv
+$R/pyenv/bin/pip install --no-cache-dir numpy scipy netCDF4 matplotlib
+# from a machine that reaches both clusters: the January 2026 buoys (303 MB),
+# the L3 altimeter files of January 2026 (607 MB) and the node files
+B=/home/ref-copernicus-insitu/INSITU_GLO_PHYBGCWAV_DISCRETE_MYNRT_013_030/cmems_obs-ins_glo_phybgcwav_mynrt_na_irr_202311/monthly/MO
+L=/home/ref-cmems-public/tac/wave/WAVE_GLO_PHY_SWH_L3_NRT_014_001
+G=/home1/scratch/jmdeloui/HWW3/grids
+ssh datarmor "tar -cf - -C $B 202601" | ssh hpc "mkdir -p $R/obs/insitu_MO && tar -m -xf - -C $R/obs/insitu_MO"
+ssh datarmor "cd $L && tar -cf - */2026/01" | ssh hpc "mkdir -p $R/obs/l3 && tar -m -xf - -C $R/obs/l3"
+ssh datarmor "tar -cf - -C $G natl_v5k4/plot/nodes.npz natl_v4/plot/nodes.npz natl_v4/raw/depth.f64" | ssh hpc "tar -m -xf - -C $R/grids"
+```
+
+The GPU fields become a netCDF file shaped like the WW3 one (coordinates,
+triangles, time and ice copied from it, `scripts/gpu_to_nc.py`), then both
+go through the validation scripts on the window of the explicit runs
+(`VAL_END=2026-01-07T21:00`, `VAL_MIN_HOURS=48`):
+
+```bash
+sbatch --export=ALL,WW3NC=$R/runs/m2_week/ww3.202601.nc,GPU=$R/m2/out_JOBID,OUT=$R/m2/val_week scripts/m2_scores_hpc.slurm
+```
+
 ## 9. Note
 
 ```bash

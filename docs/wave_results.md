@@ -300,6 +300,19 @@ The `dev` run takes 64 s per model hour on 32 ranks, against 17 s for the
 propagation-only reference of M1 on the same grid and cores: the source
 terms cost about three times the propagation in WW3.
 
+The altimeter and buoy scores run on hpc with the validation scripts
+unchanged (`scripts/m2_scores_hpc.slurm`, a Python environment and the
+January observations on scratch, see [Reproducing](reproducing.md)). The
+matching is the one of the Datarmor runs: 45,518 altimeter blocks over
+4 January 00 h – 7 January 21 h, as for `natl_v5k4_jan2026_exp`. The `week`
+reference with the simplified ST4 (Slurm job 4139219) scores:
+
+| | Bias | RMSE $H_s$ | Scatter index | Correlation |
+|---|---|---|---|---|
+| Altimeters (45,518 blocks) | +1.2 cm | 28.4 cm | 0.121 | 0.971 |
+| Buoys (252) | −3.6 cm | 32.2 cm | 0.276 | 0.919 |
+| Calibrated full ST4 (`natl_v5k4_jan2026_exp`), altimeters | −1.5 cm | 28.3 cm | 0.121 | 0.970 |
+
 ### Source-term harness
 
 `hww3-wave/harness/src_harness.F90` is linked against the hpc WW3 build

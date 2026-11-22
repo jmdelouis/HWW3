@@ -72,7 +72,9 @@ Programs: `hww3-wave` (M0 timings and checks), `hww3-prop` (M1 model) and
 | `wave_m0_hpc.slurm` / `wave_m0.pbs` | GPU model, milestone M0: sweep times and dot-product tests (CubeCL on hpc / CUDA C on Datarmor) |
 | `m1_ww3_prop_hpc.slurm`, `natl_prop_run.pbs` | propagation-only WW3 references (hpc / Datarmor) |
 | `m1_prop_hpc.slurm` | GPU model, milestone M1: propagation-only runs and checks |
-| `m1_compare_nc.py`, `m1_compare.py` | hourly $H_s$ and $T_{m02}$ of the GPU model against a WW3 run (without numpy / with numpy) |
+| `m1_compare_nc.py`, `m1_compare.py` | hourly $H_s$ and $T_{m02}$ (or `--vars`, such as the wind) of the GPU model against a WW3 run (without numpy / with numpy) |
+| `gpu_to_nc.py` | the hourly fields of the GPU model as a netCDF file shaped like the WW3 output, for the validation scripts |
+| `m2_scores_hpc.slurm` | altimeter and buoy scores of a WW3 run and of the GPU run on the hpc cluster (`gpu_to_nc.py`, `validate_altimetry.py`, `validate_buoys.py`) |
 | `m2_ww3_ref_hpc.slurm` | WW3 references of M2a with the simplified ST4 (`SINTABLE = 0`, `SDSCUM = 0`): 48 h from a restart or the cold-started week |
 | `m2_ww3_bccfl_hpc.slurm` | the explicit WW3 run with sources twice on the same node, with `UGBCCFL = T` and `F` (sub-cycling over every wet node or the interior nodes only) |
 | `m2_src_harness_hpc.slurm` | builds the source-term harness against the hpc WW3 library and runs it on a restart |
