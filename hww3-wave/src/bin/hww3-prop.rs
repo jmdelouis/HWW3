@@ -6,13 +6,18 @@
 //!     H_s and T_m02 of the restart spectra (CPU), to check the reader
 //!     against the WW3 output at the restart time.
 //! hww3-prop run <grid dir> --restart FILE [--current FILE] [--level FILE]
-//!     [--ice FILE] [--nest FILE] [--start YYYYMMDDHHMMSS] --hours H --out DIR [--f64] [--block B]
+//!     [--ice FILE] [--nest FILE] [--wind FILE --sources PARAMS] [--start YYYYMMDDHHMMSS]
+//!     --hours H --out DIR [--f64] [--block B] [--units U]
 //!     [--itstep0 N] [--no-cx] [--no-cth] [--no-ck] [--host-level] [--no-bccfl] [--profile]
 //!     Hourly H_s and T_m02 (little-endian f32, one value per node,
 //!     UNDEF = -999.9 where MAPSTA <= 0) in DIR/hs_YYYYMMDDHH.f32 and
 //!     DIR/t02_YYYYMMDDHH.f32, and DIR/summary.json. The sub-cycling counts
 //!     every wet node as WW3 with UGBCCFL = T (its default); --no-bccfl
-//!     counts the interior nodes only.
+//!     counts the interior nodes only. With --sources (the parameter file
+//!     of the source-term harness, from the mod_def.ww3 of the run) and
+//!     --wind, the source terms of the simplified ST4 run after the
+//!     propagation (milestone M2a); --wind-out also writes the hourly wind
+//!     (uwnd_, vwnd_YYYYMMDDHH.f32, as WW3 outputs it).
 //! hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
 //!     One step's forcing, then one W3KTP3 call on the GPU compared with
 //!     the CPU transcription of W3KTP3 (hww3_wave::cpu) on a sample of nodes.
@@ -56,7 +61,7 @@ fn parse() -> Result<Args> {
     let mut flags = std::collections::HashSet::new();
     let valued = [
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
-        "--dump",
+        "--dump", "--wind", "--sources", "--units",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -137,6 +142,8 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         level: opt("--level"),
         ice: opt("--ice"),
         nest: opt("--nest"),
+        wind: opt("--wind"),
+        sources: opt("--sources"),
         start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
     };
     let mut cfg = Config::default();
@@ -151,6 +158,9 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     cfg.flck = !a.flags.contains("--no-ck");
     cfg.host_level = a.flags.contains("--host-level");
     cfg.bccfl = !a.flags.contains("--no-bccfl");
+    if let Some(u) = a.opts.get("--units") {
+        cfg.units = u.parse()?;
+    }
     let hours: i64 = a.opts.get("--hours").map(|h| h.parse()).transpose()?.unwrap_or(48);
     let out = PathBuf::from(a.opts.get("--out").cloned().unwrap_or_else(|| "prop_out".into()));
     std::fs::create_dir_all(&out)?;
@@ -164,9 +174,13 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     println!("start {start}, stop {stop}, {} nodes, {} boundary points, setup {setup:.1} s", m.np, m.nbnd);
     let tag = |t: Time| format!("{:08}{:02}", t.0, t.1 / 10000);
     let mut energy = vec![];
-    let (hs, t02) = m.outputs();
-    write_f32(&out.join(format!("hs_{}.f32", tag(start))), &hs)?;
-    write_f32(&out.join(format!("t02_{}.f32", tag(start))), &t02)?;
+    if start.secs() % 3600 == 0 {
+        // the outputs are hourly: a start between two hours (a restart
+        // written after the first step) has none
+        let (hs, t02) = m.outputs();
+        write_f32(&out.join(format!("hs_{}.f32", tag(start))), &hs)?;
+        write_f32(&out.join(format!("t02_{}.f32", tag(start))), &t02)?;
+    }
     energy.push(json!({"time": start.to_string(), "energy": m.total_energy()}));
     let t1 = Instant::now();
     let mut steps = 0u64;
@@ -182,6 +196,17 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
             let (hs, t02) = m.outputs();
             write_f32(&out.join(format!("hs_{}.f32", tag(m.time))), &hs)?;
             write_f32(&out.join(format!("t02_{}.f32", tag(m.time))), &t02)?;
+            if a.flags.contains("--wind-out") {
+                // the wind WW3 writes (UA cos UD, UA sin UD): the wind of the
+                // step before the current is removed
+                let (u, d) = (m.download(&m.d_u10), m.download(&m.d_u10d));
+                let (cx, cy) = (m.download(&m.d_cx), m.download(&m.d_cy));
+                let rw = cfg.rwindc;
+                let uw: Vec<f32> = (0..m.np).map(|i| u[i] * d[i].cos() + rw * cx[i]).collect();
+                let vw: Vec<f32> = (0..m.np).map(|i| u[i] * d[i].sin() + rw * cy[i]).collect();
+                write_f32(&out.join(format!("uwnd_{}.f32", tag(m.time))), &uw)?;
+                write_f32(&out.join(format!("vwnd_{}.f32", tag(m.time))), &vw)?;
+            }
             if m.time.secs() % 21600 == 0 {
                 let e = m.total_energy();
                 energy.push(json!({"time": m.time.to_string(), "energy": e}));
@@ -202,7 +227,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     let per_day = wall / (hours as f64 / 24.0);
     let t = &m.timers;
     println!(
-        "{steps} steps in {wall:.1} s: {per_day:.1} s per model day; forcing {:.1} s (level update on the host {:.1} s, {} threads), iter {:.1} s, ktp3 {:.1} s (theta {:.1} s), geographic {:.1} s ({} sweeps), outputs {:.1} s",
+        "{steps} steps in {wall:.1} s: {per_day:.1} s per model day; forcing {:.1} s (level update on the host {:.1} s, {} threads), iter {:.1} s, ktp3 {:.1} s (theta {:.1} s), geographic {:.1} s ({} sweeps), sources {:.1} s, outputs {:.1} s",
         t.forcing,
         t.level_host,
         std::thread::available_parallelism().map_or(1, |n| n.get()),
@@ -211,6 +236,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         t.ktp3_theta,
         t.geographic,
         t.sweeps,
+        t.sources,
         t.outputs
     );
     let summary = json!({
@@ -224,12 +250,12 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         "seconds_per_model_day": per_day,
         "profiled": m.profile,
         "timers": {"forcing": t.forcing, "level_host": t.level_host, "iter": t.iter, "ktp3": t.ktp3, "ktp3_theta": t.ktp3_theta, "geographic": t.geographic,
-                   "outputs": t.outputs, "sweeps": t.sweeps},
+                   "outputs": t.outputs, "sweeps": t.sweeps, "sources": t.sources},
         "sweeps": iters,
         "energy": energy,
         "config": {"dtg": cfg.dtg, "dtkth": cfg.dtkth, "ctmax": cfg.ctmax, "flcx": cfg.flcx, "flcth": cfg.flcth,
                    "flck": cfg.flck, "itstep0": cfg.itstep0, "block": cfg.block,
-                   "host_level": cfg.host_level},
+                   "host_level": cfg.host_level, "sources": m.has_sources(), "units": cfg.units},
     });
     std::fs::write(out.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
     Ok(())
@@ -247,6 +273,8 @@ fn check_ktp3<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         level: opt("--level"),
         ice: opt("--ice"),
         nest: opt("--nest"),
+        wind: opt("--wind"),
+        sources: opt("--sources"),
         start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
     };
     let mut m = Model::<F>::new(client, grid, geo, &inp, Config::default())?;
@@ -339,6 +367,8 @@ fn inputs(a: &Args) -> Result<Inputs> {
         level: opt("--level"),
         ice: opt("--ice"),
         nest: opt("--nest"),
+        wind: opt("--wind"),
+        sources: opt("--sources"),
         start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
     })
 }
@@ -357,6 +387,9 @@ fn check_steps(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     cfg.flcth = !a.flags.contains("--no-cth");
     cfg.flck = !a.flags.contains("--no-ck");
     cfg.bccfl = !a.flags.contains("--no-bccfl");
+    if let Some(u) = a.opts.get("--units") {
+        cfg.units = u.parse()?;
+    }
     let mut m = Model::<f32>::new(client, grid, geo, &inp, cfg)?;
     let mut refs: Vec<(Time, PathBuf)> = Vec::new();
     for s in a.opts.get("--ref").map(|s| s.as_str()).unwrap_or("").split(',').filter(|s| !s.is_empty()) {
@@ -633,6 +666,8 @@ fn main() -> Result<()> {
                 level: opt("--level"),
                 ice: opt("--ice"),
                 nest: opt("--nest"),
+                wind: opt("--wind"),
+                sources: opt("--sources"),
                 start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
             };
             let mut m = Model::<f32>::new(client, &grid, &geo, &inp, Config::default())?;

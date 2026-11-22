@@ -4,7 +4,13 @@
 //!
 //! ```text
 //! hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
+//! hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R]
 //! ```
+//!
+//! `check-gpu` (CubeCL build) runs the GPU kernel of the whole `W3SRCE`
+//! integration (`hww3_wave::srce`) on the harness nodes and compares the
+//! spectra after the step with WW3 and with the CPU transcription; with
+//! `--replicate R` each node is repeated `R` times for the timing.
 //!
 //! Each call of the transcription gets the inputs WW3 got in the harness,
 //! so that each routine is checked on its own: `W3SPR4` (twice), `W3SIN4`
@@ -196,10 +202,172 @@ fn check(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// The GPU kernel `hww3_wave::srce::srce` on the harness nodes (each node
+/// `replicate` times, for the timing), against the full `W3SRCE` of WW3 and
+/// the CPU transcription.
+#[cfg(feature = "cubecl")]
+fn check_gpu<F: hww3_wave::device::Real>(path: PathBuf, nu: usize, replicate: usize) -> Result<()> {
+    use burn::tensor::Device;
+    use cubecl::prelude::CubeElement;
+    use hww3_wave::sources::SrceTables;
+    use hww3_wave::srce::{SourceKernel, SrceArgs};
+    let h = Harness::read(&path)?;
+    let mut pp = path.clone().into_os_string();
+    pp.push(".params");
+    let p = Params::read(&PathBuf::from(pp))?;
+    let q = SrcePar::new(&p)?;
+    let (nk, nth) = (h.nk, h.nth);
+    let nspec = nk * nth;
+    let n0 = h.nodes.len();
+    let t = SrceTables::new(&q)?;
+    let device = Device::cuda(0);
+    let client = hww3_wave::burn_ext::client(&device)?;
+    let k = SourceKernel::<F>::new(&client, &t, nu);
+    let n = n0 * replicate;
+    let mut va = vec![0f64; nspec * n];
+    let mut wn = vec![0f64; (nk + 2) * n];
+    let mut cg = vec![0f64; (nk + 2) * n];
+    let (mut dw, mut u10, mut u10d, mut ice) = (vec![0f64; n], vec![0f64; n], vec![0f64; n], vec![0f64; n]);
+    let (mut d50, mut psic) = (vec![0f64; n], vec![0f64; n]);
+    for j in 0..n {
+        let inp = &h.nodes[j % n0].inputs;
+        for ik in 0..nk {
+            for th in 0..nth {
+                va[(ik * n + j) * nth + th] = inp.spec[ik * nth + th] as f64;
+            }
+            wn[(ik + 1) * n + j] = inp.wn[ik] as f64;
+            cg[(ik + 1) * n + j] = inp.cg[ik] as f64;
+        }
+        dw[j] = inp.v[0] as f64;
+        u10[j] = inp.v[3] as f64;
+        u10d[j] = inp.v[4] as f64;
+        ice[j] = inp.v[7] as f64;
+        d50[j] = inp.v[10] as f64;
+        psic[j] = inp.v[11] as f64;
+    }
+    let up = |v: &[f64]| {
+        let w: Vec<F> = v.iter().map(|&x| F::of_f64(x)).collect();
+        client.create_from_slice(F::as_bytes(&w))
+    };
+    let (d_va, d_wn, d_cg, d_dw, d_u10, d_u10d, d_ice) = (up(&va), up(&wn), up(&cg), up(&dw), up(&u10), up(&u10d), up(&ice));
+    let (d_d50, d_psic) = (up(&d50), up(&psic));
+    let d_nflag = client.create_from_slice(u32::as_bytes(&vec![4u32; n]));
+    let (d_ust, d_dtdyn) = (up(&vec![0.0; n]), up(&vec![0.0; n]));
+    let args = SrceArgs {
+        va: &d_va,
+        wn: &d_wn,
+        cg: &d_cg,
+        dw: &d_dw,
+        u10: &d_u10,
+        u10d: &d_u10d,
+        ice: &d_ice,
+        d50: &d_d50,
+        psic: &d_psic,
+        nflag: &d_nflag,
+        ust: &d_ust,
+        dtdyn: &d_dtdyn,
+    };
+    let sync = || futures_lite::future::block_on(client.sync()).expect("device sync");
+    let down = |hd: &cubecl::server::Handle| -> Vec<f64> {
+        let b = client.read_one(hd.clone()).expect("device read");
+        F::from_bytes(&b).iter().map(|&x| x.as_f64()).collect()
+    };
+    // the first launch compiles the kernel
+    let t0 = std::time::Instant::now();
+    k.launch(&client, &args, h.dtg, false, n, nk, nth);
+    sync();
+    let first = t0.elapsed().as_secs_f64();
+    let gva = down(&d_va);
+    let gust = down(&d_ust);
+    let gdt = down(&d_dtdyn);
+    // timing on a fresh copy of the spectra
+    let d_va2 = up(&va);
+    let args2 = SrceArgs { va: &d_va2, ..args };
+    let t1 = std::time::Instant::now();
+    k.launch(&client, &args2, h.dtg, false, n, nk, nth);
+    sync();
+    let second = t1.elapsed().as_secs_f64();
+    let hs = |a: &dyn Fn(usize) -> f64, cgk: &[f32]| -> f64 {
+        let mut e = 0.0;
+        for ik in 0..nk {
+            let s: f64 = (0..nth).map(|th| a(ik * nth + th)).sum();
+            e += s * q.st.dden[ik] / cgk[ik] as f64;
+        }
+        4.0 * e.max(0.0).sqrt()
+    };
+    let (mut w_spec, mut w_spec_mean, mut c_spec, mut w_dhs, mut c_dhs, mut w_dt, mut w_ust) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
+    let mut worst = 0usize;
+    let mut bad_dt = 0usize;
+    for (j, node) in h.nodes.iter().enumerate() {
+        let g = |isp: usize| gva[((isp / nth) * n + j) * nth + isp % nth];
+        let w = |isp: usize| node.srce.spec[isp] as f64;
+        let inp = &node.inputs;
+        let a: Vec<f64> = inp.spec.iter().map(|&x| x as f64).collect();
+        let wnk: Vec<f64> = inp.wn.iter().map(|&x| x as f64).collect();
+        let cgk: Vec<f64> = inp.cg.iter().map(|&x| x as f64).collect();
+        let si = SrceIn {
+            start: false,
+            dtg: h.dtg as f64,
+            depth: inp.v[0] as f64,
+            u10: inp.v[3] as f64,
+            u10dir: inp.v[4] as f64,
+            ice: inp.v[7] as f64,
+            d50: inp.v[10] as f64,
+            psic: inp.v[11] as f64,
+            coef: inp.v[8] as f64,
+        };
+        let mut cpu = a.clone();
+        srce(&q, &si, &mut cpu, &wnk, &cgk, inp.v[5] as f64);
+        let vmax = (0..nspec).map(w).fold(0f64, f64::max).max(1e-30);
+        let cmax = cpu.iter().cloned().fold(0f64, f64::max).max(1e-30);
+        let dw_ = (0..nspec).map(|i| (g(i) - w(i)).abs()).fold(0f64, f64::max) / vmax;
+        let dc_ = (0..nspec).map(|i| (g(i) - cpu[i]).abs()).fold(0f64, f64::max) / cmax;
+        if dw_ > w_spec {
+            w_spec = dw_;
+            worst = node.isea;
+        }
+        w_spec_mean += dw_ / n0 as f64;
+        c_spec = c_spec.max(dc_);
+        let hg = hs(&g, &inp.cg);
+        w_dhs = w_dhs.max((hg - hs(&w, &inp.cg)).abs());
+        c_dhs = c_dhs.max((hg - hs(&|i| cpu[i], &inp.cg)).abs());
+        let rdt = (gdt[j] - node.srce.v[0] as f64).abs() / (node.srce.v[0] as f64).abs().max(1e-12);
+        w_dt = w_dt.max(rdt);
+        bad_dt += (rdt > 1e-3) as usize;
+        w_ust = w_ust.max((gust[j] - node.srce.v[2] as f64).abs() / (node.srce.v[2] as f64).abs().max(1e-12));
+    }
+    println!(
+        "GPU {} ({} units per cube), {} nodes ({} harness nodes x {}): first launch {:.3} s (with compilation), second {:.4} s",
+        F::NAME,
+        nu,
+        n,
+        n0,
+        replicate,
+        first,
+        second
+    );
+    println!("  spectrum after the step, max |gpu - ww3| / max ww3 per node: max {w_spec:.3e} (ISEA {worst}), mean {w_spec_mean:.3e}; |dHs| max {w_dhs:.3e} m");
+    println!("  spectrum after the step, max |gpu - cpu f64| / max cpu per node: max {c_spec:.3e}; |dHs| max {c_dhs:.3e} m");
+    println!("  mean dynamic step against WW3: max relative difference {w_dt:.3e}, {bad_dt} nodes above 1e-3; u* max relative difference {w_ust:.3e}");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let a: Vec<String> = std::env::args().collect();
+    let opt = |k: &str| a.iter().position(|x| x == k).and_then(|i| a.get(i + 1)).cloned();
+    let _ = &opt;
     match (a.get(1).map(|s| s.as_str()), a.get(2)) {
         (Some("check"), Some(f)) => check(PathBuf::from(f)),
-        _ => bail!("usage: hww3-src check HARNESS"),
+        #[cfg(feature = "cubecl")]
+        (Some("check-gpu"), Some(f)) => {
+            let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
+            let rep: usize = opt("--replicate").map(|s| s.parse()).transpose()?.unwrap_or(1);
+            if a.iter().any(|x| x == "--f64") {
+                check_gpu::<f64>(PathBuf::from(f), nu, rep)
+            } else {
+                check_gpu::<f32>(PathBuf::from(f), nu, rep)
+            }
+        }
+        _ => bail!("usage: hww3-src check HARNESS | check-gpu HARNESS [--f64] [--units N] [--replicate R]"),
     }
 }

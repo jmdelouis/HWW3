@@ -13,9 +13,11 @@ area-weighted), at every hour.
 
 usage:
     python3 scripts/m1_compare_nc.py WW3.nc GPU_DIR [--out stats.json]
-        [--hs-min H] [--worst N --grid GRID_DIR]
+        [--hs-min H] [--worst N --grid GRID_DIR] [--vars hs,t02,uwnd,vwnd]
   --hs-min H  keep only the nodes where H_s reaches H (m) in either run
               (idealised swell: most nodes have no waves)
+  --vars V    the fields to compare (default hs,t02; the GPU files are
+              V_YYYYMMDDHH.f32, the energy is computed when hs is listed)
   --worst N   list the N nodes with the largest H_s RMS difference, with
               their position and depth from GRID_DIR/raw/{lon,lat,depth}.f64
               and whether they are on the open boundary (GRID_DIR/raw/obc.u32)
@@ -91,7 +93,7 @@ def raw(path, code):
 def main():
     args = sys.argv[1:]
     opt = {}
-    for k in ("--out", "--hs-min", "--worst", "--grid"):
+    for k in ("--out", "--hs-min", "--worst", "--grid", "--vars"):
         if k in args:
             i = args.index(k)
             opt[k] = args[i + 1]
@@ -109,7 +111,7 @@ def main():
     res = {"ww3": nc, "gpu": gdir, "nodes": np_, "hs_min": hs_min}
     energy = []
     hsmax = array.array("f", bytes(4 * np_))
-    for var in ("hs", "t02"):
+    for var in opt.get("--vars", "hs,t02").split(","):
         w_all = read_var(nc, var)
         if len(w_all) != len(tags) * np_:
             sys.exit("%s: %d values for %d times x %d nodes" % (var, len(w_all), len(tags), np_))
@@ -172,6 +174,11 @@ def main():
                 print("  %-8d %7.4f %7.4f  %s %7.3f %7.3f %8.3f %8.3f %7.1f  %s"
                       % (i, rmsn[i], dmax[i], tags[tmax[i]], gmax[i], wmax[i],
                          lon[i] if gd else 0, lat[i] if gd else 0, dep[i] if gd else 0, i in obc))
+    if not energy:
+        if out:
+            with open(out, "w") as f:
+                json.dump(res, f, indent=1)
+        return
     worst = max(energy, key=lambda e: abs(e["relative"]))
     res["energy"] = energy
     res["energy_worst_relative"] = worst["relative"]

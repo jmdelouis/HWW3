@@ -359,5 +359,70 @@ cancels. The number of dynamic steps goes from 1 to 60 (2.4 on average);
 the mean step agrees to 8.9e-6, so both codes take the same steps at every
 node.
 
-These are the round-off differences of the single-precision WW3. Still to
-port: the wind forcing (`W3UWND`), then the GPU kernels and the time loop.
+These are the round-off differences of the single-precision WW3.
+
+### GPU source kernel
+
+`hww3_wave::srce` runs the whole `W3SRCE` integration of a global step in
+one CubeCL launch, one cube of 128 units per node. The spectrum and the
+work arrays of the node (source sums, wind-sea flags, the extended spectrum
+and the three interaction arrays of the DIA, the saturation of `W3SDS4`)
+sit in shared memory, about 39 kB per cube in single precision and 78 kB in
+double precision (CubeCL allocates it dynamically, up to the 163 kB of an
+A100). The units share the loops over the 1,152 bins. The scalar parts run
+on unit 0: the mean parameters, `CALC_USTAR`, the sheltering loop over the
+frequencies of `W3SIN4`, the 50-point tail, the three depths of `W3SBT4`
+and the dynamic step. Their sums go in the order of WW3. The parameters and
+tables are those of the harness parameter file, written by WW3 itself from
+the `mod_def.ww3` of the run (`SrceTables`).
+
+On the 1,869 harness nodes (`hww3-src check-gpu`, Slurm job 4138915, one
+A100):
+
+| Run | Spectrum after 600 s: largest difference relative to the node maximum | $H_s$ | Mean dynamic step | u* |
+|---|---|---|---|---|
+| GPU single precision against WW3 | 3.1e-6 (mean 4.1e-8) | 0.9 µm | 1.8e-5 | 3.3e-6 |
+| GPU double precision against WW3 | 4.3e-6 (mean 6.6e-8) | 1.0 µm | 8.8e-6 | 2.6e-6 |
+| GPU double precision against the CPU transcription | 4.6e-8 | 0.01 µm | | |
+
+No node takes a different number of dynamic steps. The double-precision
+kernel departs from the CPU transcription by 4.6e-8 because it keeps the
+single-precision constants of WW3 (`TPIINV`, 0.99 in the step count and the
+other literals). On 200 copies of the harness nodes (373,800 nodes, about
+the size of grid v5 $K=4$), one 600 s step of source terms takes 0.97 s in
+single precision, which would add 280 s to the 65 s of the 48 h
+propagation.
+
+### Time loop and the first steps
+
+`hww3-prop` with `--wind` and `--sources` runs the source kernel after the
+propagation of every step, at the nodes with `MAPSTA = 1`, as `W3WAVE`
+does. The wind is read like the currents (the two records around the time)
+and interpolated by `W3UWND` with `WNT2` (speed corrected so that the
+energy varies linearly) and `RWND` (`RWNDC = 1`: the current of the step
+is removed). The ice concentration of `W3UICE` scales the source terms.
+`SED_D50` and `SED_PSIC` come per sea point from the harness parameter
+file (WW3 allocates them from 0, hence a 0 in their range). The start call
+of `W3WAVE` (`IT = 0`, `DTG = 1 s`) is skipped. It only sets u*, and
+`CALC_USTAR` does not use the previous u*.
+
+`hww3-prop check-steps` against the restarts the `dev` reference wrote
+after its first three steps (Slurm job 4138987, one A100):
+
+| After | Coast nodes, largest $\lvert\Delta H_s\rvert$ | Interior nodes above 1 mm | Largest $\lvert\Delta H_s\rvert$ | Above 1 cm |
+|---|---|---|---|---|
+| 1 step (00:10) | 0.8 mm | 7 of 335,539 | 3.9 mm (node 30735, Tyrrhenian Sea, 922 m) | 0 |
+| 2 steps (00:20) | 0.9 mm | 11 | 3.3 mm | 0 |
+| 3 steps (00:30) | 0.6 mm | 13 | 7.9 mm (node 17597, Aegean Sea, 78 m) | 0 |
+
+The open-boundary nodes agree to 0.01 mm. The propagation alone agreed to
+about 1 µm (M1), and the source kernel reproduces WW3 to 1 µm on the
+harness nodes. These millimetre differences at a few nodes out of 371,000
+come from somewhere else. At the worst nodes they sit in the
+high-frequency bands, around the cut-off: bands 24–27 differ by 1–2 % at
+node 398721. This points to discrete decisions taken differently at a few
+nodes: the tail index `NKH`, or the number of dynamic steps when the
+limiting step falls close to a threshold. The wind of the step, which the
+harness does not test, is the other input that differs. This is not
+verified yet. The dynamic step and cut-off frequency of WW3 (`DTD`, `FC`)
+at these steps would confirm it.

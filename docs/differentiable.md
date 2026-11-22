@@ -695,6 +695,18 @@ Datarmor.
   nodes to the round-off of the single-precision WW3: 1e-6 to 5e-5 for
   each source term, 4.3e-6 for the spectrum after the step, the same
   dynamic steps and limiter decisions at every node (Slurm job 4123121).
+- **GPU kernel.** One CubeCL launch runs the whole `W3SRCE` integration of a
+  global step, one cube per node with the spectrum in shared memory. On
+  the harness nodes it reproduces WW3 to 3.1e-6 in single precision
+  (0.9 µm in $H_s$) with the same dynamic steps at every node, and the CPU
+  transcription to 4.6e-8 in double precision (job 4138915). A step of
+  source terms on 373,800 nodes takes 0.97 s on one A100.
+- **Time loop.** `hww3-prop` runs the source kernel after the propagation
+  of each step, with the wind of `W3UWND` (time interpolation of `WNT2`,
+  wind relative to the current). After the first three steps from the
+  restart of 8 January, the spectra agree with the WW3 restarts to within
+  1 mm in $H_s$ at all but 13 of 371,000 nodes, at most 7.9 mm (job
+  4138987). The 48 h comparison is next.
 
 Details and the list of what remains are in
 [GPU model results](wave_results.md).

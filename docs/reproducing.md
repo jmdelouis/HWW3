@@ -396,10 +396,28 @@ sbatch --ntasks=64 --mem=160G -t 24:00:00 --export=ALL,MODE=week scripts/m2_ww3_
 # the explicit run with sources, 12 h from 8 January, with UGBCCFL = T then F on the same node
 sbatch scripts/m2_ww3_bccfl_hpc.slurm
 # source-term harness on the restart of 8 January (in runs/m2_dev, after ww3_grid)
-sbatch --export=ALL,OUT=src_8jan.bin,NODES=169562+130464+165663+229656+147650 scripts/m2_src_harness_hpc.slurm
+sbatch --export=ALL,OUT=src_8jan_c.bin,NODES=169562+130464+165663+229656+147650 scripts/m2_src_harness_hpc.slurm
 # CPU transcriptions against the harness
 cargo build --release --no-default-features --bin hww3-src
-target/release/hww3-src check $R/m2/harness/src_8jan.bin
+target/release/hww3-src check $R/m2/harness/src_8jan_c.bin
+```
+
+The GPU source kernel and the model with the source terms (the harness
+file `src_8jan_c.bin.params` of job 4138986 also holds `SED_D50` and
+`SED_PSIC` per sea point):
+
+```bash
+module load cuda/13.0.0
+CARGO_TARGET_DIR=$R/target_wave cargo build --release --bin hww3-src --bin hww3-prop
+# the kernel on the harness nodes, f32 and f64, and its timing on 200 copies of them
+sbatch scripts/m2_src_gpu_hpc.slurm
+# the first three steps against the WW3 restarts of the dev reference
+D=$R/runs/m2_dev
+sbatch --export=ALL,STEPS_REF=$D/restart001.ww3:$D/restart002.ww3:$D/restart003.ww3 scripts/m2_prop_hpc.slurm
+# 48 h, then the comparison with the hourly fields of the dev reference
+sbatch --export=ALL,HOURS=48,EXTRA=--wind-out scripts/m2_prop_hpc.slurm
+python3 scripts/m1_compare_nc.py $D/ww3.202601.nc $R/m2/out_JOBID --worst 20 --grid $R/grids/natl_v5k4
+python3 scripts/m1_compare_nc.py $D/ww3.202601.nc $R/m2/out_JOBID --vars uwnd,vwnd
 ```
 
 ## 9. Note

@@ -14,7 +14,10 @@
 //!   open-boundary spectra, started from a WW3 restart;
 //! - **Milestone M2a** (in progress): the source terms with the simplified
 //!   ST4, checked node by node against the WW3 source-term harness
-//!   (`harness/src_harness.F90`, read by [`harness`]).
+//!   (`harness/src_harness.F90`, read by [`harness`]): CPU transcriptions in
+//!   [`sources`], the GPU kernel of the whole `W3SRCE` integration and the
+//!   wind of `W3UWND` in `srce`, run after the propagation in the time loop
+//!   of `model`.
 //!
 //! # Backends
 //!
@@ -55,6 +58,8 @@ pub mod kernels;
 pub mod model;
 #[cfg(feature = "cubecl")]
 pub mod prop;
+#[cfg(feature = "cubecl")]
+pub mod srce;
 
 #[cfg(feature = "cuda-c")]
 pub mod cuda_c;

@@ -43,12 +43,13 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | Open-boundary spectra | `W3IOBC`, `W3UBPT`, `APPLY_BOUNDARY_CONDITION_VA` | `ww3io`, `prop`, `model` | M1 |
 | Outputs $H_s$, $T_{m02}$ | `W3OUTG` | `prop` | M1 |
 | Restart, forcing and boundary files | `W3IORS`, `W3FLDG`, `W3IOBC` | `ww3io` | M1 |
-| Mean parameters, u* (`SINTABLE = 0`: Newton iterations) | `W3SPR4`, `CALC_USTAR` | `sources` (CPU, checked) | M2a |
-| Wind input, swell damping, tail stress in line | `W3SIN4` | `sources` (CPU, checked) | M2a |
-| Wind forcing: time interpolation, wind relative to the current | `W3UWND` | — | M2a |
-| Whitecapping without the cumulative term (`SDSCUM = 0`) | `W3SDS4` | `sources` (CPU, checked) | M2a |
-| Nonlinear interactions (DIA), linear input, depth breaking, bottom friction | `W3SNL1`, `W3SLN1`, `W3SDB1`, `W3SBT4` | `sources` (CPU, checked) | M2a |
-| Integration: dynamic step, limiter, tail, `FHMAX`, ice scaling | `W3SRCE` | `sources` (CPU, checked) | M2a |
+| Mean parameters, u* (`SINTABLE = 0`: Newton iterations) | `W3SPR4`, `CALC_USTAR` | `sources` (CPU, checked), `srce` | M2a |
+| Wind input, swell damping, tail stress in line | `W3SIN4` | `sources` (CPU, checked), `srce` | M2a |
+| Wind forcing: time interpolation (`WNT2`), wind relative to the current (`RWND`) | `W3UWND` | `srce`, `model` | M2a |
+| Whitecapping without the cumulative term (`SDSCUM = 0`) | `W3SDS4` | `sources` (CPU, checked), `srce` | M2a |
+| Nonlinear interactions (DIA), linear input, depth breaking, bottom friction | `W3SNL1`, `W3SLN1`, `W3SDB1`, `W3SBT4` | `sources` (CPU, checked), `srce` | M2a |
+| Integration: dynamic step, limiter, tail, `FHMAX`, ice scaling | `W3SRCE` | `sources` (CPU, checked), `srce` | M2a |
+| Source terms in the time loop, after the propagation | `W3WAVE` | `model` | M2a |
 | Stress tables and the cumulative breaking term | `INSIN4` tables, `W3SDS4` (`SDSCUM`) | — | M2b |
 | Unit harness of the source terms | (Fortran program on `libww3.a`) | `harness/src_harness.F90`, `harness` | M2a |
 
@@ -69,7 +70,8 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | `device` | CubeCL | the grid on the device; `Sweeper` for CubeCL |
 | `burn_ext` | CubeCL | a sub-step as an operation of Burn's autodiff tape |
 | `prop` | CubeCL | the kernels of the propagation-only model |
-| `model` | CubeCL | the time loop of `W3WAVE` with the source terms off |
+| `srce` | CubeCL | the source kernel: the whole `W3SRCE` integration of a global step, one cube per node with the spectrum in shared memory; the wind interpolation of `W3UWND` |
+| `model` | CubeCL | the time loop of `W3WAVE`, propagation only or with the source terms |
 | `cuda_c` | CUDA C | the M0 kernels in CUDA C, through `cudarc` and NVRTC |
 
 Two programs come with the crate: `hww3-wave` (milestone M0: geometry,
@@ -132,12 +134,13 @@ transpose (`--reference` adds the check against the CPU loop of WW3,
 The job scripts are `scripts/wave_m0_hpc.slurm` (CubeCL, hpc) and
 `scripts/wave_m0.pbs` (CUDA C, Datarmor).
 
-### `hww3-prop` (milestone M1)
+### `hww3-prop` (milestones M1 and M2a)
 
 ```text
 hww3-prop run <grid dir> --restart FILE [--current FILE] [--level FILE] [--ice FILE]
-          [--nest FILE] [--start YYYYMMDDHHMMSS] --hours H --out DIR
-          [--f64] [--block B] [--itstep0 N] [--no-cx] [--no-cth] [--no-ck]
+          [--nest FILE] [--wind FILE --sources PARAMS] [--start YYYYMMDDHHMMSS]
+          --hours H --out DIR [--f64] [--block B] [--units U] [--itstep0 N]
+          [--no-cx] [--no-cth] [--no-ck]
           [--host-level] [--no-bccfl] [--profile]
 hww3-prop restart-hs <grid dir> --restart FILE --out FILE.f32
 hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
@@ -152,6 +155,8 @@ hww3-prop check-steps <grid dir> --restart FILE [forcing as for run]
 | `--restart` | WW3 restart: `FULL` (from `ww3_shel`) or `COLD` (from `ww3_strt`, then `--start` is needed) |
 | `--current`, `--level`, `--ice` | forcing files of `ww3_prnc` (`current.ww3`, `level.ww3`, `ice.ww3`) |
 | `--nest` | open-boundary spectra of `ww3_bounc` (`nest.ww3`) |
+| `--wind`, `--sources` | wind of `ww3_prnc` (`wind.ww3`) and the parameter file of the source-term harness (`*.params`, from the `mod_def.ww3` of the run): the source terms of the simplified ST4 run after the propagation (milestone M2a) |
+| `--units` | units per cube of the source kernel (default 128) |
 | `--no-cx`, `--no-cth`, `--no-ck` | switch off the geographic propagation, refraction or the frequency shift (`RUN%FLCX`, `RUN%FLCTH`, `RUN%FLCK`) |
 | `--f64` | double precision |
 | `--host-level` | water-level update on the host instead of the device |
@@ -176,6 +181,7 @@ writes the depth and currents of those steps. The job scripts are
 
 ```text
 hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
+hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R]
 ```
 
 Runs the CPU transcriptions of the source terms (`sources`) on the inputs of
@@ -185,4 +191,7 @@ largest difference over the nodes. Each routine gets the inputs WW3 had;
 then the whole `W3SRCE` integration over the global step runs from the same
 state. It also counts the nodes where the wind-sea flags, the
 depth-breaking flag or the limiter decision differ from WW3. It needs no
-GPU.
+GPU. `check-gpu` runs the GPU source kernel (`srce`) on the same nodes
+and compares the spectra after the step with WW3 and with the CPU
+transcription; `--replicate R` repeats every node `R` times for the
+timing (`scripts/m2_src_gpu_hpc.slurm`).

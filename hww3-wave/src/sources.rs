@@ -1434,3 +1434,299 @@ pub fn srce(q: &SrcePar, inp: &SrceIn, spec: &mut [f64], wn: &[f64], cg: &[f64],
     }
     o
 }
+
+// Indices of the scalar parameters of the GPU source kernel (`srce`) in
+// [`SrceTables::par`].
+/// Gravity.
+pub const P_GRAV: usize = 0;
+/// Von Karman constant.
+pub const P_KAPPA: usize = 1;
+/// Kinematic viscosity of air.
+pub const P_NU_AIR: usize = 2;
+/// Air/water density ratio.
+pub const P_DRAT: usize = 3;
+/// Direction step.
+pub const P_DTH: usize = 4;
+/// Tail factor of the energy (`W3SPR4`).
+pub const P_FTE: usize = 5;
+/// Tail factor of the mean frequency.
+pub const P_FTF: usize = 6;
+/// Tail factor of the mean wavenumber.
+pub const P_SSTXFTWN: usize = 7;
+/// Tail factor of `FMEAN1`.
+pub const P_SSTXFTFTAIL: usize = 8;
+/// Exponent of the mean wavenumber.
+pub const P_WWNMEANP: usize = 9;
+/// Exponent of `FMEAN1`.
+pub const P_WWNMEANPTAIL: usize = 10;
+/// Wind height.
+pub const P_ZZWND: usize = 11;
+/// Charnock constant.
+pub const P_AALPHA: usize = 12;
+/// `BETAMAX`.
+pub const P_BBETA: usize = 13;
+/// Wave age shift `ZALP`.
+pub const P_ZZALP: usize = 14;
+/// Sheltering coefficient.
+pub const P_TTAUWSHELTER: usize = 15;
+/// `SSWELLF(1..7)` (swell damping).
+pub const P_SSWELLF: usize = 16;
+/// Directional exponent of the wind input.
+pub const P_SSINTHP: usize = 23;
+/// Roughness ratio of swell damping.
+pub const P_ZZ0RAT: usize = 24;
+/// Largest roughness.
+pub const P_ZZ0MAX: usize = 25;
+/// `SINTAILPAR(1..5)`.
+pub const P_SINTAILPAR: usize = 26;
+/// `CAPCHNK(1..5)` (capped Charnock).
+pub const P_CAPCHNK: usize = 31;
+/// Step of `FWTABLE`.
+pub const P_DELAB: usize = 36;
+/// Origin of `FWTABLE`.
+pub const P_ABMIN: usize = 37;
+/// `SSDSC(2)` (saturation dissipation coefficient).
+pub const P_SDSC2: usize = 38;
+/// `SSDSC(6)` (isotropic part).
+pub const P_SDSC6: usize = 39;
+/// Saturation threshold.
+pub const P_SSDSBR: usize = 40;
+/// Saturation exponent.
+pub const P_SSDSP: usize = 41;
+/// `SSDSBM(0..4)` (depth correction).
+pub const P_SSDSBM: usize = 42;
+/// `W3SLN1` coefficient.
+pub const P_SLNC1: usize = 47;
+/// `W3SLN1` PM filter factor.
+pub const P_FSPM: usize = 48;
+/// `W3SLN1` high-frequency filter factor.
+pub const P_FSHF: usize = 49;
+/// `W3SDB1` coefficient.
+pub const P_SDBC1: usize = 50;
+/// `W3SDB1` breaking index.
+pub const P_SDBC2: usize = 51;
+/// `W3SDB1`: depth only (1) or Miche (0).
+pub const P_FDONLY: usize = 52;
+/// `SBTCX(1..10)` (`W3SBT4`).
+pub const P_SBTCX: usize = 53;
+/// Specific gravity of the sediment.
+pub const P_SED_SG: usize = 63;
+/// Step of `ERFTABLE`.
+pub const P_DELXERF: usize = 64;
+/// Half range of `ERFTABLE`.
+pub const P_XERFMAX: usize = 65;
+/// DIA: `KDCON`.
+pub const P_KDCON: usize = 66;
+/// DIA: `KDMN`.
+pub const P_KDMN: usize = 67;
+/// DIA: `SNLC1`.
+pub const P_SNLC1: usize = 68;
+/// DIA: `SNLS1`.
+pub const P_SNLS1: usize = 69;
+/// DIA: `SNLS2`.
+pub const P_SNLS2: usize = 70;
+/// DIA: `SNLS3`.
+pub const P_SNLS3: usize = 71;
+/// Tail factor of the energy spectrum.
+pub const P_FACHFE: usize = 72;
+/// DIA: `DAL1`.
+pub const P_DAL1: usize = 73;
+/// DIA: `DAL2`.
+pub const P_DAL2: usize = 74;
+/// DIA: `DAL3`.
+pub const P_DAL3: usize = 75;
+/// DIA: `AWG1..8`.
+pub const P_AWG: usize = 76;
+/// DIA: `SWG1..8`.
+pub const P_SWG: usize = 84;
+/// `W3SRCE`: largest dynamic step.
+pub const P_DTMAX: usize = 92;
+/// `W3SRCE`: smallest dynamic step.
+pub const P_DTMIN: usize = 93;
+/// Limiter: `XFLT`.
+pub const P_XFLT: usize = 94;
+/// Limiter: `XREL`.
+pub const P_XREL: usize = 95;
+/// Limiter: `FACP`.
+pub const P_FACP: usize = 96;
+/// `NKH = INT(FACTI2 + FACTI1 LOG(FHIGH))`.
+pub const P_FACTI1: usize = 97;
+/// See `FACTI1`.
+pub const P_FACTI2: usize = 98;
+/// Tail factor of the action spectrum.
+pub const P_FACHFA: usize = 99;
+/// Largest Hs over depth.
+pub const P_FHMAX: usize = 100;
+/// Smallest depth.
+pub const P_DMIN: usize = 101;
+/// Cut-off factor on the mean frequency.
+pub const P_FFXFM: usize = 102;
+/// Cut-off factor on u*.
+pub const P_FFXPM: usize = 103;
+/// Wave-age part of the cut-off.
+pub const P_FFXFA: usize = 104;
+/// `ICESCALES(1..4)`.
+pub const P_ICESCALES: usize = 105;
+/// Length of `FWTABLE`.
+pub const P_NFW: usize = 109;
+/// Length of `ERFTABLE`.
+pub const P_NERF: usize = 110;
+/// Ice concentration forcing on (1).
+pub const P_ICE_FORCING: usize = 111;
+/// Half width of the saturation sector (degrees).
+pub const P_SSDSDTH: usize = 112;
+/// Number of scalar parameters.
+pub const NPAR: usize = 113;
+
+/// The parameters and tables of [`SrcePar`] laid out for the GPU source
+/// kernel: scalars at the `P_*` indices, per-frequency factors, the
+/// interpolation tables and the index tables of `W3SDS4` and `W3SNL1`
+/// turned into 0-based offsets in the kernel's shared arrays.
+#[derive(Clone, Debug)]
+pub struct SrceTables {
+    /// Scalar parameters, `NPAR` values at the `P_*` indices.
+    pub par: Vec<f64>,
+    /// `SIG2(ISPEC)` and `DDEN2(ISPEC)` of the first direction of each frequency.
+    pub sig2k: Vec<f64>,
+    /// See [`SrceTables::sig2k`].
+    pub dden2k: Vec<f64>,
+    /// `FWTABLE` and `ERFTABLE`.
+    pub fwtable: Vec<f64>,
+    /// See [`SrceTables::fwtable`].
+    pub erftable: Vec<f64>,
+    /// Saturation weights `SATWEIGHTS(j, ith)` at `j + ith nsat`.
+    pub satw: Vec<f64>,
+    /// Saturation direction offsets, 0-based (`SATINDICES - 1`), at `j + ith nsat`.
+    pub sati: Vec<u32>,
+    /// First dimension of the saturation tables.
+    pub nsat: usize,
+    /// DIA: the 16 tables `IP11 .. IM24` (`NSPECX` each), as offsets in the
+    /// extended spectrum `UE` stored from `1 - NTH` (value `+ NTH - 1`).
+    pub dia_ip: Vec<u32>,
+    /// DIA: the 16 tables `IC11, IC12, .., IC82` (`NSPEC` each), as offsets in
+    /// the interaction arrays stored from `1 - NTH`.
+    pub dia_ic: Vec<u32>,
+    /// DIA: `AF11(1..NSPECX)`.
+    pub af11: Vec<f64>,
+    /// `SIG(0 .. NK+1)`, `DDEN(1 .. NK)`, `ECOS(1 .. NTH)`, `ESIN(1 .. NTH)`
+    /// of WW3.
+    pub sig: Vec<f64>,
+    /// See [`SrceTables::sig`].
+    pub dden: Vec<f64>,
+    /// See [`SrceTables::sig`].
+    pub ecos: Vec<f64>,
+    /// See [`SrceTables::sig`].
+    pub esin: Vec<f64>,
+    /// DIA: bins of the interaction arrays and of the extended spectrum.
+    pub nspecx: usize,
+    /// See [`SrceTables::nspecx`].
+    pub nspecy: usize,
+}
+
+/// The sediment diameter `SED_D50` and critical Shields number `SED_PSIC`
+/// of every sea point (`ISEA = 1 .. NSEA`), from the harness parameter file.
+pub fn sediment(p: &Params) -> Result<(Vec<f32>, Vec<f32>)> {
+    let from1 = |n: &str| -> Result<Vec<f32>> {
+        let lb = p.lbound(n)?;
+        if lb > 1 {
+            bail!("{n} starts at {lb}");
+        }
+        Ok(p.r(n)?[(1 - lb) as usize..].to_vec())
+    };
+    Ok((from1("SED_D50")?, from1("SED_PSIC")?))
+}
+
+impl SrceTables {
+    /// Lay out `q` for the GPU (the sediment diameter and critical Shields
+    /// number are per node, see [`sediment`]).
+    pub fn new(q: &SrcePar) -> Result<SrceTables> {
+        let p = &q.st;
+        let dia = &q.dia;
+        let (nk, nth) = (p.nk, p.nth);
+        let nspec = nk * nth;
+        if p.sintailpar[3] < 0.5 {
+            bail!("the GPU source kernel assumes SINTAILPAR(4) > 0.5 (TAUWBUG)");
+        }
+        if p.ssdsdth >= 180.0 || p.nsat == 0 {
+            bail!("the GPU source kernel needs the saturation tables of W3SDS4 (SSDSDTH < 180)");
+        }
+        if p.ssdsc[0].round() as i32 != 1 || p.ssdsc[2] != 0.0 || p.ssdsc[4] != 0.0 || p.ssdsc.get(20).copied().unwrap_or(0.0) != 0.0 {
+            bail!("the GPU source kernel needs SDSBCHOICE = 1 without the cumulative, turbulent and viscous terms");
+        }
+        let mut par = vec![0f64; NPAR];
+        let mut put = |i: usize, v: &[f64]| par[i..i + v.len()].copy_from_slice(v);
+        put(P_GRAV, &[p.grav, p.kappa, p.nu_air, q.dair / q.dwat, p.dth, p.fte, p.ftf, p.sstxftwn, p.sstxftftail, p.wwnmeanp, p.wwnmeanptail]);
+        put(P_ZZWND, &[p.zzwnd, p.aalpha, p.bbeta, p.zzalp, p.ttauwshelter]);
+        put(P_SSWELLF, &p.sswellf);
+        put(P_SSINTHP, &[p.ssinthp, p.zz0rat, p.zz0max]);
+        put(P_SINTAILPAR, &p.sintailpar);
+        put(P_CAPCHNK, &p.capchnk);
+        put(P_DELAB, &[p.delab, p.abmin, p.ssdsc[1], p.ssdsc[5], p.ssdsbr, p.ssdsp]);
+        put(P_SSDSBM, &p.ssdsbm);
+        put(P_SLNC1, &[p.slnc1, p.fspm, p.fshf, p.sdbc1, p.sdbc2, p.fdonly as u8 as f64]);
+        put(P_SBTCX, &p.sbtcx);
+        put(P_SED_SG, &[p.sed_sg, p.delxerf, p.xerfmax, dia.kdcon, dia.kdmn, dia.snlc1, dia.snls[0], dia.snls[1], dia.snls[2], dia.fachfe]);
+        put(P_DAL1, &dia.dal);
+        put(P_AWG, &dia.awg);
+        put(P_SWG, &dia.swg);
+        put(P_DTMAX, &[q.dtmax, q.dtmin, q.xflt, q.xrel, q.facp, q.facti1, q.facti2, q.fachfa, q.fhmax, q.dmin, q.ffxfm, q.ffxpm, q.ffxfa]);
+        put(P_ICESCALES, &q.icescales);
+        put(P_NFW, &[p.fwtable.len() as f64, p.erftable.len() as f64, q.ice_forcing as u8 as f64, p.ssdsdth]);
+        let first = |v: &[f64]| -> Result<Vec<f64>> {
+            let mut out = vec![];
+            for ik in 0..nk {
+                let x = v[ik * nth];
+                if v[ik * nth..(ik + 1) * nth].iter().any(|&y| y != x) {
+                    bail!("SIG2 or DDEN2 varies with direction at frequency {}", ik + 1);
+                }
+                out.push(x);
+            }
+            Ok(out)
+        };
+        let sati: Vec<u32> = p.satindices.iter().map(|&j| (j - 1) as u32).collect();
+        if sati.iter().any(|&j| j as usize >= nth) {
+            bail!("SATINDICES out of 1..NTH");
+        }
+        let off = |v: i32, hi: usize| -> Result<u32> {
+            let o = v + nth as i32 - 1;
+            if o < 0 || o as usize >= hi + nth {
+                bail!("DIA index {v} out of 1-NTH..{hi}");
+            }
+            Ok(o as u32)
+        };
+        let mut dia_ip = Vec::with_capacity(16 * dia.nspecx);
+        for t in &dia.ip {
+            for &v in &t[..dia.nspecx] {
+                dia_ip.push(off(v, dia.nspecy)?);
+            }
+        }
+        let mut dia_ic = Vec::with_capacity(16 * nspec);
+        for t in &dia.ic {
+            for &v in &t[..nspec] {
+                dia_ic.push(off(v, dia.nspecx)?);
+            }
+        }
+        if dia.nspecx < nspec || dia.nspecy != dia.nfrhgh * nth {
+            bail!("DIA sizes NSPECX {} NSPECY {} unlike NSPEC {nspec}, NFRHGH NTH {}", dia.nspecx, dia.nspecy, dia.nfrhgh * nth);
+        }
+        Ok(SrceTables {
+            par,
+            sig2k: first(&p.sig2)?,
+            dden2k: first(&p.dden2)?,
+            fwtable: p.fwtable.clone(),
+            erftable: p.erftable.clone(),
+            satw: p.satweights.clone(),
+            sati,
+            nsat: p.nsat,
+            dia_ip,
+            dia_ic,
+            af11: dia.af11[..dia.nspecx].to_vec(),
+            sig: p.sig.clone(),
+            dden: p.dden.clone(),
+            ecos: p.ecos[..nth].to_vec(),
+            esin: p.esin[..nth].to_vec(),
+            nspecx: dia.nspecx,
+            nspecy: dia.nspecy,
+        })
+    }
+}

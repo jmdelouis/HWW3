@@ -1,10 +1,12 @@
-//! Propagation-only WW3 model on one GPU (milestone M1): the time loop of
-//! `W3WAVE` for the HWW3 explicit configuration with the source terms off
-//! (`RUN%FLSOU = F`).
+//! WW3 model on one GPU: the time loop of `W3WAVE` for the HWW3 explicit
+//! configuration, propagation only (milestone M1, `RUN%FLSOU = F`) or with
+//! the source terms of the simplified ST4 (milestone M2a, when the source
+//! parameters are given).
 //!
 //! One global step `DTG` (600 s) ending at `TIME`:
 //! 1. currents interpolated in magnitude and direction (`W3UCUR`) and their
-//!    gradients (`UG_GRADIENTS`);
+//!    gradients (`UG_GRADIENTS`); with the source terms, the wind
+//!    interpolated in time and made relative to the current (`W3UWND`);
 //! 2. boundary spectra read when `TIME` passes the next record (`W3IOBC`,
 //!    `W3UBPT`) and imposed (`APPLY_BOUNDARY_CONDITION_VA`);
 //! 3. ice update (`W3UICE`) and water level update (`W3ULEV`) when their next
@@ -12,10 +14,13 @@
 //! 4. sub-cycling count of each component (`PDLIB_W3XYPFSN2`, `LCALC`);
 //! 5. `NTLOC - ITLOCH` ... : `W3KTP3` `ITLOCH` times, the geographic
 //!    propagation of every component (`PDLIB_W3XYPUG`), `W3KTP3` the
-//!    remaining `NTLOC - ITLOCH` times.
+//!    remaining `NTLOC - ITLOCH` times;
+//! 6. with the source terms, `W3SRCE` at every node with `MAPSTA = 1`
+//!    ([`crate::srce`]). The start call of `W3WAVE` (`IT = 0`) is skipped:
+//!    it only sets u*, which the next call computes again without using it.
 //!
 //! Forcing fields are read as `ww3_shel` does at the start of each `W3WAVE`
-//! call: currents are kept between the two records around the time, levels
+//! call: currents and winds are kept between the two records around the time, levels
 //! and ice keep the first record after the call start (the Copernicus Marine
 //! hourly fields of the HWW3 runs are stamped at hh:30).
 
@@ -23,7 +28,10 @@ use crate::device::Real;
 use crate::geom::Geometry;
 use crate::grid::Grid;
 use crate::prop;
+use crate::harness::Params;
+use crate::sources::{sediment, SrcePar, SrceTables};
 use crate::spec::{node_wavenumbers, Spec, DERA, RADIUS};
+use crate::srce::{SourceKernel, SrceArgs};
 use crate::ww3io::{FieldFile, NestFile, Restart, Time};
 use anyhow::{anyhow, bail, Result};
 use cubecl::client::Client;
@@ -48,6 +56,12 @@ pub struct Inputs {
     pub ice: Option<PathBuf>,
     /// Open-boundary spectra written by `ww3_bounc` (`nest.ww3`).
     pub nest: Option<PathBuf>,
+    /// Winds written by `ww3_prnc` (`wind.ww3`).
+    pub wind: Option<PathBuf>,
+    /// Parameter file of the source-term harness (`*.params`, written from
+    /// the `mod_def.ww3` of the run): the source terms are on
+    /// (`RUN%FLSOU = T`) when it is given.
+    pub sources: Option<PathBuf>,
     /// Start time, required for a COLD restart (`ww3_strt`), which has none.
     pub start: Option<Time>,
 }
@@ -80,6 +94,11 @@ pub struct Config {
     /// sub-cycling count `ITER` takes every wet node, coast and open boundary
     /// included; false counts the interior nodes (`IOBP = 1`) only.
     pub bccfl: bool,
+    /// Units per cube of the source kernel (one cube per node).
+    pub units: usize,
+    /// `RWNDC` (namelist `MISC` of `ww3_grid`): part of the current removed
+    /// from the wind.
+    pub rwindc: f32,
 }
 
 impl Default for Config {
@@ -96,6 +115,8 @@ impl Default for Config {
             lanes: 2048,
             host_level: false,
             bccfl: true,
+            units: 128,
+            rwindc: 1.0,
         }
     }
 }
@@ -145,6 +166,8 @@ pub struct Timers {
     pub geographic: f64,
     /// Outputs (H_s, T_m02).
     pub outputs: f64,
+    /// Source terms (`W3SRCE`).
+    pub sources: f64,
     /// Number of frequency sweeps of the geographic propagation.
     pub sweeps: u64,
 }
@@ -210,6 +233,14 @@ pub struct Model<F: Real> {
     tlev: Time,
     ice: Option<Fields>,
     tice: Time,
+    wnd: Option<Fields>,
+    tw0: Option<Time>,
+    twn: Option<Time>,
+    w0: (Vec<f32>, Vec<f32>),
+    wnx: (Vec<f32>, Vec<f32>),
+    /// Ice concentration per node (`ICE`).
+    pub ice_c: Vec<f32>,
+    src: Option<SourceKernel<F>>,
     nest: Option<NestFile>,
     tbpi0: Option<Time>,
     tbpin: Option<Time>,
@@ -291,6 +322,22 @@ pub struct Model<F: Real> {
     d_hs: Handle,
     d_t02: Handle,
     d_en: Handle,
+    // device: wind, ice and source outputs
+    d_ua0: Handle,
+    d_uai: Handle,
+    d_ud0: Handle,
+    d_udi: Handle,
+    /// Wind speed relative to the current per node on the device (`U10`, m/s).
+    pub d_u10: Handle,
+    /// Direction of that wind (`U10D`, rad, towards).
+    pub d_u10d: Handle,
+    d_ice: Handle,
+    d_d50: Handle,
+    d_psic: Handle,
+    /// u* of the last source call per node on the device.
+    pub d_ust: Handle,
+    /// Mean dynamic step of the last source call per node on the device.
+    pub d_dtdyn: Handle,
     _f: PhantomData<F>,
 }
 
@@ -411,6 +458,27 @@ impl<F: Real> Model<F> {
             bidx[i as usize] = b as u32;
         }
         let nb1 = nbnd.max(1);
+        let src = match &inp.sources {
+            Some(p) => {
+                let par = Params::read(p)?;
+                let q = SrcePar::new(&par)?;
+                if q.st.nk != nk || q.st.nth != nth {
+                    bail!("source parameters for {}x{} spectra against {nk}x{nth}", q.st.nk, q.st.nth);
+                }
+                let (d50, psic) = sediment(&par)?;
+                if d50.len() != np || psic.len() != np {
+                    bail!("SED_D50 and SED_PSIC for {} and {} sea points against {np}", d50.len(), psic.len());
+                }
+                let t = SrceTables::new(&q)?;
+                eprintln!("sources: {} (BETAMAX {}, {} units per cube)", p.display(), q.st.bbeta, cfg.units);
+                Some((SourceKernel::<F>::new(&client, &t, cfg.units), d50, psic))
+            }
+            None => None,
+        };
+        let (src, d_d50, d_psic) = match src {
+            Some((k, d, s)) => (Some(k), upf(&d), upf(&s)),
+            None => (None, upf(&[0.0]), upf(&[0.0])),
+        };
         let mut m = Model {
             np,
             ne,
@@ -444,6 +512,13 @@ impl<F: Real> Model<F> {
             tlev: rs.tlev,
             ice: None,
             tice: rs.tice,
+            wnd: None,
+            tw0: None,
+            twn: None,
+            w0: (vec![0.0; np], vec![0.0; np]),
+            wnx: (vec![0.0; np], vec![0.0; np]),
+            ice_c: rs.ice.clone(),
+            src,
             nest,
             tbpi0: None,
             tbpin: None,
@@ -510,6 +585,17 @@ impl<F: Real> Model<F> {
             d_hs: client.empty(np * fb),
             d_t02: client.empty(np * fb),
             d_en: client.empty(np * fb),
+            d_ua0: upf(&vec![0.0; np]),
+            d_uai: upf(&vec![0.0; np]),
+            d_ud0: upf(&vec![0.0; np]),
+            d_udi: upf(&vec![0.0; np]),
+            d_u10: upf(&vec![0.0; np]),
+            d_u10d: upf(&vec![0.0; np]),
+            d_ice: upf(&rs.ice),
+            d_d50,
+            d_psic,
+            d_ust: upf(&vec![0.0; np]),
+            d_dtdyn: upf(&vec![0.0; np]),
             sp,
             client,
             _f: PhantomData,
@@ -517,6 +603,9 @@ impl<F: Real> Model<F> {
         drop(va);
         if let Some(p) = &inp.current {
             m.cur = Some(Fields::open(p)?);
+        }
+        if let Some(p) = &inp.wind {
+            m.wnd = Some(Fields::open(p)?);
         }
         if let Some(p) = &inp.level {
             let mut f = Fields::open(p)?;
@@ -723,6 +812,36 @@ impl<F: Real> Model<F> {
                 self.current_coefficients();
             }
         }
+        // winds: keep TW0 <= t0 < TWN
+        if let Some(f) = self.wnd.as_mut() {
+            let mut changed = false;
+            loop {
+                let need = match self.twn {
+                    None => true,
+                    Some(t) => t <= t0,
+                };
+                if !need {
+                    break;
+                }
+                if !f.advance()? {
+                    bail!("wind file ends before {t0}");
+                }
+                let (t, flds) = f.next.take().unwrap();
+                if self.twn.is_some() {
+                    self.tw0 = self.twn;
+                    std::mem::swap(&mut self.w0, &mut self.wnx);
+                } else {
+                    self.tw0 = Some(t);
+                    self.w0 = (flds[0].clone(), flds[1].clone());
+                }
+                self.twn = Some(t);
+                self.wnx = (flds[0].clone(), flds[1].clone());
+                changed = true;
+            }
+            if changed {
+                self.wind_coefficients();
+            }
+        }
         // levels and ice: read while the last record read is not after t0
         for which in 0..2 {
             let f = if which == 0 { self.lev.as_mut() } else { self.ice.as_mut() };
@@ -814,6 +933,92 @@ impl<F: Real> Model<F> {
         }
     }
 
+    /// `W3UWND` with `FLFRST`: speed and direction of the two wind records
+    /// (`UA0`, `UAI`, `UD0`, `UDI`).
+    fn wind_coefficients(&mut self) {
+        let np = self.np;
+        let tpi = 2.0 * std::f32::consts::PI;
+        let pi = std::f32::consts::PI;
+        let (mut ua0, mut uai, mut ud0, mut udi) = (vec![0f32; np], vec![0f32; np], vec![0f32; np], vec![0f32; np]);
+        for i in 0..np {
+            let (x0, y0) = (self.w0.0[i], self.w0.1[i]);
+            let (xn, yn) = (self.wnx.0[i], self.wnx.1[i]);
+            let a0 = (x0 * x0 + y0 * y0).sqrt();
+            let an = (xn * xn + yn * yn).sqrt();
+            let d0 = if a0 > 1e-7 { (tpi + y0.atan2(x0)) % tpi } else { 0.0 };
+            let dn = if an > 1e-7 { (tpi + yn.atan2(xn)) % tpi } else { d0 };
+            let c0 = if a0 > 1e-7 { d0 } else { dn };
+            let mut dd = dn - c0;
+            if dd.abs() > pi {
+                dd -= tpi * dd.signum();
+            }
+            ua0[i] = a0;
+            uai[i] = an - a0;
+            ud0[i] = c0;
+            udi[i] = dd;
+        }
+        self.d_ua0 = self.upf(&ua0);
+        self.d_uai = self.upf(&uai);
+        self.d_ud0 = self.upf(&ud0);
+        self.d_udi = self.upf(&udi);
+    }
+
+    /// `W3UWND`: the wind of the step, relative to the current of the step.
+    fn update_wind(&mut self) {
+        let np = self.np;
+        let rd = match (self.tw0, self.twn) {
+            (Some(a), Some(b)) => (self.time.secs() - a.secs()) as f32 / ((b.secs() - a.secs()) as f32).max(1e-7),
+            _ => return,
+        };
+        let (c, d) = self.dims(np);
+        unsafe {
+            crate::srce::wind_interp::launch_unchecked::<F>(
+                &self.client,
+                c,
+                d,
+                bf(&self.d_ua0, np),
+                bf(&self.d_uai, np),
+                bf(&self.d_ud0, np),
+                bf(&self.d_udi, np),
+                bf(&self.d_cx, np),
+                bf(&self.d_cy, np),
+                bf(&self.d_u10, np),
+                bf(&self.d_u10d, np),
+                rd,
+                self.cfg.rwindc,
+                self.cur.is_some() as u32,
+                np,
+            );
+        }
+    }
+
+    /// `W3SRCE` at every node with `MAPSTA = 1` (call after the propagation).
+    pub fn sources(&mut self) {
+        let Some(k) = self.src.as_ref() else { return };
+        let mut t = std::time::Instant::now();
+        let args = SrceArgs {
+            va: &self.d_va,
+            wn: &self.d_wn,
+            cg: &self.d_cg,
+            dw: &self.d_dw,
+            u10: &self.d_u10,
+            u10d: &self.d_u10d,
+            ice: &self.d_ice,
+            d50: &self.d_d50,
+            psic: &self.d_psic,
+            nflag: &self.d_nflag,
+            ust: &self.d_ust,
+            dtdyn: &self.d_dtdyn,
+        };
+        k.launch(&self.client, &args, self.cfg.dtg, false, self.np, self.nk, self.nth);
+        self.tick(5, &mut t);
+    }
+
+    /// Whether the source terms are on.
+    pub fn has_sources(&self) -> bool {
+        self.src.is_some()
+    }
+
     /// `W3IOBC` / `W3UBPT`: boundary spectra around `TIME`, interpolated to the points.
     fn update_boundary(&mut self) -> Result<()> {
         let nspec = self.nk * self.nth;
@@ -903,6 +1108,7 @@ impl<F: Real> Model<F> {
         }
         let (tin, ice) = (*tin, flds[0].clone());
         self.tice = tin;
+        self.d_ice = self.upf(&ice);
         let ficen = 0.5f32;
         let mut zero = vec![];
         for i in 0..self.np {
@@ -919,6 +1125,7 @@ impl<F: Real> Model<F> {
                 }
             }
         }
+        self.ice_c = ice;
         eprintln!("{}: ice update from {tin}, {} nodes reset", self.time, zero.len());
         self.zero_nodes(&zero);
         self.upload_flags();
@@ -1398,6 +1605,7 @@ impl<F: Real> Model<F> {
             1 => self.timers.iter += e,
             2 => self.timers.ktp3 += e,
             3 => self.timers.geographic += e,
+            5 => self.timers.sources += e,
             _ => self.timers.outputs += e,
         }
         *t = std::time::Instant::now();
@@ -1416,6 +1624,7 @@ impl<F: Real> Model<F> {
         self.time = Time::from_secs(t_start.secs() + dtg as i64);
         self.itstep += 1;
         self.update_currents();
+        self.update_wind();
         self.update_boundary()?;
         self.apply_boundary();
         self.update_ice()?;
@@ -1455,6 +1664,7 @@ impl<F: Real> Model<F> {
     pub fn step(&mut self) -> Result<()> {
         let (ntloc, itloch, facth, fack) = self.prepare()?;
         self.propagate(ntloc, itloch, facth, fack);
+        self.sources();
         Ok(())
     }
 
