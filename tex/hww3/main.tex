@@ -1703,6 +1703,63 @@ Slurm jobs 4118215, 4118220 and 4118221 (WW3), and 4120563, 4120564 and
 \label{tab:m1}
 \end{table}
 
+\paragraph{Milestone M2a (in progress).} M2a adds the source terms with the
+simplified ST4: \texttt{SINTABLE = 0}, with no stress tables, and
+\texttt{SDSCUM = 0}, with no cumulative breaking term. The other source
+terms are the DIA (\texttt{W3SNL1}), \texttt{W3SLN1}, \texttt{W3SDB1} and
+\texttt{W3SBT4}, integrated by \texttt{W3SRCE}.
+\begin{itemize}
+\item \emph{References.} WW3 runs on the hpc cluster with these two
+settings, everything else as in the grid v5 $K=4$ explicit run. The first
+covers 48 hours from the restart of 8 January (Slurm job 4122569,
+27 core-hours on 32 cores, with restarts after the first three steps). The
+second is a cold-started week, 1--8 January (job 4122614, 64 cores). The
+48-hour run takes \SI{64}{s} per model hour on 32 cores against \SI{17}{s}
+with the propagation alone: in WW3 the source terms cost about three
+times the propagation.
+\item \emph{Harness.} A Fortran program linked against the hpc WW3 library
+calls the routines of \texttt{W3SRCE} node by node. It writes their
+inputs and outputs, and the WW3 parameters and tables they read.
+\item \emph{CPU ports.} Double-precision transcriptions of every source
+term and of the whole \texttt{W3SRCE} integration reproduce WW3 on 1\,869
+nodes to the round-off of its single precision (Table~\ref{tab:m2src}).
+The dynamic steps (1 to 60 per node) and the decisions of the limiter are
+the same at every node.
+\end{itemize}
+What remains for M2a:
+\begin{itemize}
+\item the wind forcing (\texttt{W3UWND});
+\item the GPU kernels and the time loop;
+\item the 48-hour and one-week comparisons with the references, with the
+validation scores.
+\end{itemize}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lr}
+\toprule
+routine & largest relative difference \\
+\midrule
+\texttt{W3SPR4}, \texttt{CALC\_USTAR} & $2.6\times10^{-6}$ \\
+\texttt{W3SIN4} (tail stress in line) & $3.4\times10^{-6}$ \\
+\texttt{W3SLN1} & $5.3\times10^{-6}$ \\
+\texttt{W3SNL1} (DIA) & $1.1\times10^{-6}$ \\
+\texttt{W3SDS4} (no cumulative term) & $1.7\times10^{-5}$ \\
+\texttt{W3SDB1} & $3.6\times10^{-8}$ \\
+\texttt{W3SBT4} & $5.0\times10^{-5}$ \\
+\texttt{W3SRCE}, spectrum after \SI{600}{s} & $4.3\times10^{-6}$ \\
+\texttt{W3SRCE}, mean dynamic step & $8.9\times10^{-6}$ \\
+\bottomrule
+\end{tabular}
+\caption{Milestone M2a: double-precision CPU ports of the source terms
+against WW3 on 1\,869 nodes of the restart of 8 January 2026 00\,h (Slurm
+job 4123121). Largest difference over the nodes, relative to WW3, or to
+the largest value of the node for spectra. The tables WW3 interpolates in
+single precision (error function, friction factor) set the larger values
+of \texttt{W3SDS4} and \texttt{W3SBT4}.}
+\label{tab:m2src}
+\end{table}
+
 
 \appendix
 \section{Reproducing}
@@ -1773,6 +1830,10 @@ figures) is described step by step in the Sphinx documentation,
   the same scripts with \texttt{RSTRIDE} and \texttt{RCOUNT} for WW3 and
   \texttt{STEPS\_REF} for \texttt{hww3-prop check-steps}
   (\texttt{docs/reproducing.md}).
+\item Table~\ref{tab:m2src}: the references with
+  \texttt{scripts/m2\_ww3\_ref\_hpc.slurm}, the harness with
+  \texttt{scripts/m2\_src\_harness\_hpc.slurm}, then
+  \texttt{hww3-src check} (\texttt{docs/reproducing.md}).
 \end{itemize}
 
 \end{document}
