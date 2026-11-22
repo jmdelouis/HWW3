@@ -10,9 +10,16 @@
 //! $$ \Delta t_i = S_i \Big/ \sum_{T \ni i} \max(0, K_{i,T}), $$
 //!
 //! with $S_i$ a third of the area of the triangles around $i$ (`SI`), and the
-//! global step is the minimum over the interior nodes (`IOBP = 1`; open and
-//! coastal boundary nodes are left out unless `FSBCCFL`). The explicit
-//! schemes sub-cycle: each component takes `ceil(DT / min Δt_i)` steps.
+//! global step is the minimum over the nodes with `IOBP = 1 .OR. FSBCCFL`
+//! (`PDLIB_W3XYPFSN2`). `FSBCCFL` is `UGBCCFL` of the `UNST` namelist of
+//! `ww3_grid`, true by default and in the HWW3 runs, so WW3 counts every wet
+//! node, coastal and open-boundary nodes included; with `UGBCCFL = F` it
+//! counts the interior nodes only. The explicit schemes sub-cycle: each
+//! component takes `ceil(DT / min Δt_i)` steps. A boundary node has an open
+//! fan of triangles, and one in one or two triangles has a step 2–3 times
+//! shorter than an interior node of the same size (`h / 3c` for a single
+//! triangle of height `h`, against about `0.87 a / c` for a regular
+//! hexagon of side `a`).
 //!
 //! For a velocity $c$ in direction $\theta$, $\Delta t_i = L_i(\theta)/c$
 //! with $L_i(\theta) = S_i / \sum_T \max(0, \tfrac12\mathbf e_\theta\cdot\mathbf n_{i,T})$
@@ -355,7 +362,7 @@ pub struct CflReport {
     /// frequency of the fastest component (`SPECTRUM%FREQ1`, Hz)
     pub freq_hz: f64,
     /// smallest explicit step over the interior nodes (s): the step of the
-    /// explicit schemes before sub-cycling
+    /// explicit schemes before sub-cycling with `UGBCCFL = F`
     pub dt_min_s: f64,
     /// (lon, lat, nside, depth m) of the node that sets `dt_min_s`
     pub worst_node: (f64, f64, u32, f64),
@@ -363,7 +370,21 @@ pub struct CflReport {
     pub n_below_dtxy: usize,
     /// sub-cycles of the fastest component for a step of `TIMESTEPS%DTXY`
     pub subcycles_at_dtxy: u32,
-    /// per nside, from nside_min to nside_max
+    /// smallest explicit step over every node, coastal and open-boundary
+    /// nodes included (s): the step of WW3 with `UGBCCFL = T`, its default
+    pub dt_min_all_s: f64,
+    /// (lon, lat, nside, depth m) of the node that sets `dt_min_all_s`
+    pub worst_node_all: (f64, f64, u32, f64),
+    /// boundary nodes whose explicit step is below `TIMESTEPS%DTXY`
+    pub n_boundary_below_dtxy: usize,
+    /// sub-cycles of the fastest component for a step of `TIMESTEPS%DTXY`
+    /// counting every node, as WW3 with `UGBCCFL = T`
+    pub subcycles_at_dtxy_all: u32,
+    /// whether the explicit steps returned per node (`raw/dt_explicit.f64`)
+    /// and the explicit-scheme limit count the boundary nodes
+    /// (`refine_bathy.cfl_boundary`)
+    pub boundary_counted: bool,
+    /// per nside, from nside_min to nside_max (interior nodes)
     pub per_nside: Vec<LevelCfl>,
 }
 
@@ -375,7 +396,9 @@ fn quantile(v: &mut [f64], q: f64) -> f64 {
     v[((v.len() - 1) as f64 * q).round() as usize]
 }
 
-/// Explicit step per node (s, +inf on boundary nodes) and the report.
+/// Explicit step per node (s; +inf on the boundary nodes unless `boundary`,
+/// WW3's `FSBCCFL`) and the report, which gives the interior and the
+/// every-node figures in both cases.
 #[allow(clippy::too_many_arguments)]
 pub fn explicit_steps(
     nodes: &[[f64; 3]],
@@ -389,18 +412,25 @@ pub fn explicit_steps(
     dir_offset: f64,
     dtxy: f64,
     levels: std::ops::RangeInclusive<u8>,
+    boundary: bool,
 ) -> (Vec<f64>, Vec<f64>, CflReport) {
     let (len, interior) = cfl_length(nodes, tris, nth, dir_offset);
     let cg: Vec<f64> = depth.par_iter().map(|&h| group_speed(freq1, h)).collect();
     let (dtv, _) = explicit_dt(nodes, tris, &cg, nth, dir_offset);
-    let dt: Vec<f64> = (0..nodes.len()).map(|i| if interior[i] { dtv[i] } else { f64::INFINITY }).collect();
+    let dt_int: Vec<f64> = (0..nodes.len()).map(|i| if interior[i] { dtv[i] } else { f64::INFINITY }).collect();
     let cell = |d: u8| R_EARTH * (std::f64::consts::PI / 3.0).sqrt() / (1u64 << d) as f64;
-    let mut worst = (f64::INFINITY, 0usize);
-    for i in 0..dt.len() {
-        if dt[i] < worst.0 {
-            worst = (dt[i], i);
+    let argmin = |v: &[f64]| {
+        let mut w = (f64::INFINITY, 0usize);
+        for (i, &x) in v.iter().enumerate() {
+            if x < w.0 {
+                w = (x, i);
+            }
         }
-    }
+        w
+    };
+    let worst = argmin(&dt_int);
+    let worst_all = argmin(&dtv);
+    let dt = dt_int;
     let mut per = Vec::new();
     for d in levels {
         let idx: Vec<usize> = (0..dt.len()).filter(|&i| interior[i] && level[i] == d).collect();
@@ -417,15 +447,21 @@ pub fn explicit_steps(
         });
     }
     let w = worst.1;
+    let wa = worst_all.1;
     let report = CflReport {
         freq_hz: freq1,
         dt_min_s: worst.0,
         worst_node: (lon[w], lat[w], 1u32 << level[w], depth[w]),
         n_below_dtxy: dt.iter().filter(|&&x| x < dtxy).count(),
         subcycles_at_dtxy: (dtxy / worst.0).ceil() as u32,
+        dt_min_all_s: worst_all.0,
+        worst_node_all: (lon[wa], lat[wa], 1u32 << level[wa], depth[wa]),
+        n_boundary_below_dtxy: (0..dtv.len()).filter(|&i| !interior[i] && dtv[i] < dtxy).count(),
+        subcycles_at_dtxy_all: (dtxy / worst_all.0).ceil() as u32,
+        boundary_counted: boundary,
         per_nside: per,
     };
-    (dt, len, report)
+    (if boundary { dtv } else { dt }, len, report)
 }
 
 #[cfg(test)]
@@ -467,5 +503,38 @@ mod tests {
         let (dt2, _) = explicit_dt(&nodes, &tris, &c2, 36, 0.0);
         assert!((dt2[0] - len[0] / (50.0 / 3.0)).abs() < 1e-9 * dt2[0]);
         assert!(dt2[0] < len[0] / 10.0);
+    }
+
+    #[test]
+    fn boundary_nodes_are_counted_on_request() {
+        // regular hexagon: the six rim nodes are boundary nodes in two triangles
+        let e = 1e-4;
+        let mut nodes = vec![[1.0, 0.0, 0.0]];
+        for k in 0..6 {
+            let a = k as f64 * std::f64::consts::PI / 3.0;
+            let v = [1.0, e * a.cos(), e * a.sin()];
+            let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            nodes.push([v[0] / n, v[1] / n, v[2] / n]);
+        }
+        let tris: Vec<[u32; 3]> = (0..6).map(|k| [0, 1 + k as u32, 1 + ((k + 1) % 6) as u32]).collect();
+        let (level, depth, ll) = (vec![0u8; 7], vec![100.0; 7], vec![0.0; 7]);
+        let run = |b| explicit_steps(&nodes, &tris, &level, &depth, &ll, &ll, 0.0373, 36, 0.0, 600.0, 0..=0, b);
+        let (dt0, _, r0) = run(false);
+        let (dt1, _, r1) = run(true);
+        assert!(dt0[1..].iter().all(|x| x.is_infinite()));
+        assert_eq!(dt0[0], dt1[0]);
+        // rim node: SI = a²/(2√3), Σ max(0, K) = (√3/2) a c, so a / 3c against
+        // (√3/2) a / c at the centre
+        for &d in &dt1[1..] {
+            assert!((d / dt1[0] - 2.0 / (3.0 * 3f64.sqrt())).abs() < 1e-3, "{}", d / dt1[0]);
+        }
+        let m = dt1[1..].iter().cloned().fold(f64::INFINITY, f64::min);
+        assert_eq!(r0.dt_min_s, dt0[0]);
+        for r in [&r0, &r1] {
+            assert_eq!(r.dt_min_all_s, m);
+            assert_eq!(r.subcycles_at_dtxy_all, (600.0 / m).ceil() as u32);
+            assert_eq!(r.n_boundary_below_dtxy, 6);
+        }
+        assert!(!r0.boundary_counted && r1.boundary_counted);
     }
 }

@@ -15,19 +15,20 @@ sum of the sub-steps over the components for one 600 s step; a *frequency
 sweep* is one sub-step of all directions of one frequency, and a step
 needs $\sum_f \max_\theta \mathrm{ITER}$ of them.
 
-| Grid | Nodes | Triangles | Interior / coast / open | $S$ (`explicit_cost.py`) | Sweeps per step | ITER at $f_1$ | Sweeps per step, every wet node | ITER at $f_1$, every wet node |
-|---|---|---|---|---|---|---|---|---|
-| Channel–Biscay box of v4 | 21,425 | 41,313 | 19,872 / 1,358 / 195 | 3,079 (3,080) | 92 | 6–8 | 208 | 8–17 |
-| v4 | 794,613 | 1,531,542 | 734,829 / 58,443 / 1,341 | 3,678 (3,678) | 110 | 8–10 | 258 | 18–24 |
-| v5 $K=4$ | 424,123 | 807,832 | 382,296 / 40,775 / 1,052 | 2,837 (2,835) | 83 | 4–5 | 287 | 19–26 |
+| Grid | Nodes | Triangles | Interior / coast / open | $S$ (`explicit_cost.py`) | Sweeps per step | ITER at $f_1$ | $S$, every wet node | Sweeps per step, every wet node | ITER at $f_1$, every wet node |
+|---|---|---|---|---|---|---|---|---|---|
+| Channel–Biscay box of v4 | 21,425 | 41,313 | 19,872 / 1,358 / 195 | 3,079 (3,080) | 92 | 6–8 | 6,308 | 208 | 8–17 |
+| v4 | 794,613 | 1,531,542 | 734,829 / 58,443 / 1,341 | 3,678 (3,678) | 110 | 8–10 | 8,326 | 258 | 18–24 |
+| v5 $K=4$ | 424,123 | 807,832 | 382,296 / 40,775 / 1,052 | 2,837 (2,835) | 83 | 4–5 | 9,003 | 287 | 19–26 |
 
 A coast node propagates 18.9 of the 36 directions on average.
 
-The M0 counts (columns 5 to 7), like `scripts/explicit_cost.py`, take the
-interior nodes only. WW3 runs with `FSBCCFL = T` (the default of `UGBCCFL`)
-and counts the coast and open-boundary nodes as well (see
-[Coast nodes](#coast-nodes-the-sub-cycling-count)), which gives the last
-two columns (`hww3-wave info`, without currents).
+The M0 counts (columns 5 to 7) take the interior nodes only, as
+`scripts/explicit_cost.py --interior-only`. WW3 runs with `FSBCCFL = T`
+(the default of `UGBCCFL`) and counts the coast and open-boundary nodes as
+well (see [Coast nodes](#coast-nodes-the-sub-cycling-count)), which gives
+the last three columns (`hww3-wave info` and `scripts/explicit_cost.py`,
+which agree exactly, without currents).
 
 ### Sweep times
 
@@ -264,9 +265,12 @@ sweeps.
 
 - The M0 per-day times (14.8 s on grid v4, 6.2 s on grid v5 $K=4$) used
   the interior count; with that of WW3 they are 34.6 and 21.3 s.
-- `scripts/explicit_cost.py` and the sub-step cap `cfl_substeps` of
-  `hww3-grid`, which shaped grid v5, count the interior nodes only, as M0
-  did; the coast cells now set the explicit cost of WW3 on these grids.
+- The sub-step cap `cfl_substeps` of `hww3-grid`, which shaped grid v5,
+  counted the interior nodes only, as M0 did; the coast cells set the
+  explicit cost of WW3 on these grids. `scripts/explicit_cost.py` now
+  counts every wet node (`--interior-only` for the former count) and
+  `hww3-grid` counts them with `refine_bathy.cfl_boundary`; see
+  [Validation](validation.md), grid v5, for the consequences.
 
 ## Milestone M2a: the source terms (in progress)
 

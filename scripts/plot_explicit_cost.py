@@ -35,7 +35,10 @@ def do_map(gdir, prefix, out, boxes):
     level = np.fromfile(raw + "level.u8", dtype=np.uint8).astype(int)
     z = np.load(prefix + ".npz")
     res = json.load(open(prefix + ".json"))
-    req, interior = z["reqmax"].astype(float), z["interior"]
+    # nodes counted in ITER: every wet node, or the interior ones with
+    # --interior-only (files written before that option: interior only)
+    interior = z["counted"] if "counted" in z else z["interior"]
+    req = np.where(interior, z["reqmax"].astype(float), 0.0)
     worst = float(req.max())
     it1 = int(np.ceil(worst - 1e-9))
     # discrete colours: local sub-steps 1 .. ceil(max)
@@ -67,7 +70,7 @@ def do_map(gdir, prefix, out, boxes):
                 label=f"nside {2 ** d} ({m.sum():,} nodes, median {np.median(req[m]):.1f})")
     ah.set_yscale("log")
     ah.set_xlabel("local sub-steps per 600 s (max over the components)")
-    ah.set_ylabel("interior nodes")
+    ah.set_ylabel("nodes counted in ITER")
     for k in range(1, it1 + 1):
         ah.axvline(k, color="0.85", lw=0.6, zorder=0)
     ah.legend(fontsize=8, loc="upper right")

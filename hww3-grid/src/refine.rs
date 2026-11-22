@@ -41,6 +41,13 @@
 //! of the long swell is large (it peaks near `kh = 1.2`, about 180 m for
 //! 0.0373 Hz) and keeps them in shallow water. The pipeline then merges the
 //! cells of the nodes that still exceed K into their parent and rebuilds.
+//! WW3 also counts the coastal and open-boundary nodes (`UGBCCFL = T`, its
+//! default), whose CFL length is about half that of an interior node (median
+//! 0.47 cell sizes against 0.83 on grid v5 K=4), and the block mean depth
+//! counts land as `min_depth_m`, so a coastal block looks shallower than the
+//! node it makes. With `cfl_boundary` the blocks holding land are therefore
+//! also capped at the mean depth of their wet samples with
+//! `cfl_boundary_efficiency`, and the rebuilds count the boundary nodes.
 
 use crate::bathy::Bathy;
 use crate::config::BathyRefine;
@@ -120,6 +127,11 @@ pub struct CflCap {
     pub dt_min: f64,
     /// assumed CFL length divided by the cell size
     pub efficiency: f64,
+    /// with `cfl_boundary`, the CFL length divided by the cell size assumed
+    /// for the blocks that hold land samples (the coastal cells), whose cap
+    /// then uses the mean depth of their wet samples, the depth their node
+    /// will get, instead of the block mean that counts land as `min_depth_m`
+    pub boundary_efficiency: Option<f64>,
 }
 
 /// Finest depth in [dmin, dmax] whose explicit step at water depth `h` (m),
@@ -233,7 +245,9 @@ pub struct BathyRefinement {
 
 /// Average the bathymetry on blocks, apply the size functions and the grade
 /// limit, and list the cells to split. With `cfl`, the depth required by a
-/// block is capped by [`cfl_cap_depth`] at the block depth.
+/// block is capped by [`cfl_cap_depth`] at the block depth, and with
+/// `cfl.boundary_efficiency` a block holding land is also capped at the mean
+/// depth of its wet samples with that efficiency.
 pub fn bathy_refinement(
     b: &Bathy,
     earth: &Earth,
@@ -247,8 +261,9 @@ pub fn bathy_refinement(
     let deg_km = earth.radius * std::f64::consts::PI / 180.0 / 1e3;
     let block = ((smooth_km / deg_km / m.dlat.abs()).round() as usize).max(1);
     let (nx, ny) = (m.nlon / block, m.nlat / block);
-    // block means: depth h (land counted as min_depth) and wet flag
-    let hb: Vec<(f32, bool)> = (0..ny)
+    // block means: depth h (land counted as min_depth), wet flag, mean depth
+    // of the wet samples and land flag
+    let hb: Vec<(f32, bool, f32, bool)> = (0..ny)
         .into_par_iter()
         .flat_map_iter(|jb| {
             let mut row = Vec::with_capacity(nx);
@@ -262,7 +277,8 @@ pub fn bathy_refinement(
                     }
                 }
                 let h = (s / (block * block) as f64).max(p.min_depth_m);
-                row.push((h as f32, nw > 0));
+                let hw = if nw > 0 { (s / nw as f64).max(p.min_depth_m) } else { p.min_depth_m };
+                row.push((h as f32, nw > 0, hw as f32, (nw as usize) < block * block));
             }
             row
         })
@@ -283,7 +299,7 @@ pub fn bathy_refinement(
             let lat = lat_c(jb);
             let mut row = Vec::with_capacity(nx);
             for ib in 0..nx {
-                let (h0, wet) = hb[jb * nx + ib];
+                let (h0, wet, _, _) = hb[jb * nx + ib];
                 if !wet {
                     row.push((f32::NAN, f32::INFINITY));
                     continue;
@@ -331,7 +347,11 @@ pub fn bathy_refinement(
                 let hash = layer.hash(lon.to_radians(), beta);
                 let mut r = required_depth(earth, t[k] as f64, dmin, dmax);
                 if let Some(c) = &cfl {
-                    let cap = cfl_cap_depth(earth, c, hb[k].0 as f64, dmin, dmax);
+                    let mut cap = cfl_cap_depth(earth, c, hb[k].0 as f64, dmin, dmax);
+                    if let (Some(e), true) = (c.boundary_efficiency, hb[k].3) {
+                        let cb = CflCap { efficiency: e, ..*c };
+                        cap = cap.min(cfl_cap_depth(earth, &cb, hb[k].2 as f64, dmin, dmax));
+                    }
                     if cap < r {
                         r = cap;
                         capped += 1;
@@ -404,6 +424,8 @@ mod tests {
             cfl_substeps: 0.0,
             cfl_efficiency: 0.8,
             cfl_passes: 0,
+            cfl_boundary: false,
+            cfl_boundary_efficiency: 0.45,
         }
     }
 
@@ -470,7 +492,7 @@ mod tests {
     #[test]
     fn cfl_cap_keeps_the_explicit_step() {
         let e = Earth::new(Ellipsoid::Wgs84);
-        let cap = CflCap { freq: 0.0373, dt_min: 120.0, efficiency: 0.8 };
+        let cap = CflCap { freq: 0.0373, dt_min: 120.0, efficiency: 0.8, boundary_efficiency: None };
         for h in [5.0, 20.0, 50.0, 180.0, 1000.0, 4000.0] {
             let d = cfl_cap_depth(&e, &cap, h, 7, 11);
             let cg = crate::cfl::group_speed(cap.freq, h);

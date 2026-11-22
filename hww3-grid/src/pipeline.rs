@@ -58,8 +58,9 @@ pub struct Summary {
     pub cfl_passes: u32,
     /// cells merged into their parent by these rebuilds
     pub n_cfl_merged: usize,
-    /// interior nodes still needing more than `cfl_substeps` sub-steps for the
-    /// lowest frequency (0 without the limit)
+    /// nodes still needing more than `cfl_substeps` sub-steps for the lowest
+    /// frequency (0 without the limit): the interior nodes, and the boundary
+    /// nodes too with `refine_bathy.cfl_boundary`
     pub n_cfl_above: usize,
     /// bad boundary triangles removed (including pinch removal after trimming)
     pub n_trimmed: usize,
@@ -190,8 +191,9 @@ fn find(p: &mut [u32], mut i: u32) -> u32 {
 /// documentation) and return it with its [`Summary`]. Nothing is written.
 ///
 /// With the explicit-scheme limit (`refine_bathy.cfl_substeps` = K > 0),
-/// the cells of the interior nodes whose explicit step for the lowest model
-/// frequency is still below `DTXY / K` are merged into their parent (their
+/// the cells of the interior nodes (and of the coastal and open-boundary
+/// nodes with `refine_bathy.cfl_boundary`) whose explicit step for the lowest
+/// model frequency is still below `DTXY / K` are merged into their parent (their
 /// parent is no longer split by the criteria) and the grid is rebuilt, at
 /// most `cfl_passes` times or until no cell is added. When the parent of
 /// such a node was already merged (the 2:1 balance split it again), the
@@ -290,6 +292,7 @@ fn build_once(cfg: &Config, nosplit: Option<&std::collections::HashSet<u64>>) ->
             freq: cfg.ww3.freq1,
             dt_min: cfg.ww3.dtxy / p.cfl_substeps,
             efficiency: p.cfl_efficiency,
+            boundary_efficiency: p.cfl_boundary.then_some(p.cfl_boundary_efficiency),
         });
         refine::bathy_refinement(&bathy, &earth, p, dmin, dmax, cap)
     });
@@ -476,6 +479,7 @@ fn build_once(cfg: &Config, nosplit: Option<&std::collections::HashSet<u64>>) ->
         w.dir_offset,
         w.dtxy,
         dmin..=dmax,
+        cfg.refine_bathy.as_ref().is_some_and(|p| p.cfl_boundary),
     );
     grid.dt_explicit = dt;
     grid.cfl_length = len;
@@ -559,7 +563,7 @@ pub fn write(cfg: &Config, grid: &Grid, summary: &Summary) -> Result<()> {
             "depth.f64": "mean water depth over wet samples (m, positive down)",
             "tri.u32": "triangles, 3 x 0-based node indices, counter-clockwise",
             "obc.u32": "0-based open-boundary node indices",
-            "dt_explicit.f64": "largest explicit WW3 time step of the node for the lowest model frequency, s (inf on boundary nodes)",
+            "dt_explicit.f64": "largest explicit WW3 time step of the node for the lowest model frequency, s (inf on boundary nodes unless refine_bathy.cfl_boundary)",
             "cfl_length.f64": "geometric CFL length of the node, m: S_i / max over directions of sum of positive K/c (w3profsmd)",
             "slope.f64": "mean bathymetry slope |grad h| of the cell (with refine_bathy)",
             "target_km.f64": "cell size required by the depth and slope criteria, km (with refine_bathy)"

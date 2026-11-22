@@ -80,6 +80,8 @@ the grade limit.
 | `cfl_substeps` | 0 | cap on the explicit sub-steps of the lowest frequency per `ww3.dtxy` (see [Algorithm](algorithm.md), section 10); 0 disables it |
 | `cfl_efficiency` | 0.8 | CFL length, in cell sizes, assumed by the cap during the refinement |
 | `cfl_passes` | 3 | largest number of builds used to remove the nodes still above `cfl_substeps` |
+| `cfl_boundary` | false | count the coastal and open-boundary nodes in the cap, as WW3 does with `UGBCCFL = T` (its default): coastal blocks are capped at the depth of their wet samples with `cfl_boundary_efficiency`, and the passes merge the cells of the boundary nodes above `cfl_substeps` too. Experimental: on the North Atlantic it closes the Danish straits (see [Algorithm](algorithm.md), section 10) |
+| `cfl_boundary_efficiency` | 0.45 | CFL length, in cell sizes, assumed for the coastal blocks with `cfl_boundary` (median of the coastal nodes of grids v3 to v5: 0.46–0.47, against 0.76–0.83 inside) |
 
 ### `quality`
 

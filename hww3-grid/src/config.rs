@@ -232,10 +232,31 @@ pub struct BathyRefine {
     /// (default 3).
     #[serde(default = "default_cfl_passes")]
     pub cfl_passes: u32,
+    /// Count the coastal and open-boundary nodes in the explicit-scheme
+    /// limit (default false: the interior nodes only, as grids v5 were
+    /// built). WW3 counts them when `UGBCCFL` of the `UNST` namelist of
+    /// `ww3_grid` is true, its default and the HWW3 setting
+    /// (`PDLIB_W3XYPFSN2`, `FSBCCFL`), and a coastal node in one or two
+    /// triangles needs 2–3 times the sub-steps of an interior node of the
+    /// same size; with this option the rebuilds also merge the cells of the
+    /// boundary nodes above `cfl_substeps` into their parent. Experimental:
+    /// on the North Atlantic with K = 4 it closes the Danish straits, and
+    /// `keep_largest_component` then drops the Baltic.
+    #[serde(default)]
+    pub cfl_boundary: bool,
+    /// CFL length divided by the cell size assumed by `cfl_boundary` for the
+    /// coastal blocks during the refinement (default 0.45; the coastal nodes
+    /// of grids v3 to v5 have a median of 0.46–0.47, against 0.76–0.83
+    /// inside).
+    #[serde(default = "default_cfl_boundary_efficiency")]
+    pub cfl_boundary_efficiency: f64,
 }
 
 fn default_cfl_efficiency() -> f64 {
     0.8
+}
+fn default_cfl_boundary_efficiency() -> f64 {
+    0.45
 }
 fn default_cfl_passes() -> u32 {
     3
@@ -396,8 +417,8 @@ impl Config {
             if !(p.wave_time_s > 0.0 || p.wl > 0.0) || p.slp < 0.0 || p.grade < 0.0 || !(p.min_depth_m > 0.0) {
                 bail!("refine_bathy: wl or wave_time_s must be > 0, min_depth_m > 0, slp and grade >= 0");
             }
-            if p.cfl_substeps < 0.0 || !(p.cfl_efficiency > 0.0) {
-                bail!("refine_bathy: cfl_substeps must be >= 0 and cfl_efficiency > 0");
+            if p.cfl_substeps < 0.0 || !(p.cfl_efficiency > 0.0) || !(p.cfl_boundary_efficiency > 0.0) {
+                bail!("refine_bathy: cfl_substeps must be >= 0, cfl_efficiency and cfl_boundary_efficiency > 0");
             }
         }
         let d = &self.domain;

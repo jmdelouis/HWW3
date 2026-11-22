@@ -432,13 +432,17 @@ python scripts/subdomain.py grids/natl_v4 sub_v4_s2430 -13 2.5 42.5 51.5 30 24  
 python scripts/explicit_cost.py sub_v4_s2430 sub_v4_s2430_cost "v4 Channel-Biscay 24x30"
 ```
 
+(every wet node counted, as WW3 with `UGBCCFL = T`; `--interior-only` for
+the interior count used at first).
+
 | | grid v4 | grid v5 $K=4$ |
 |---|---|---|
 | nodes (nside 128 / 256 / 512 / 1024 / 2048) | 21,425 (19 / 281 / 1,211 / 5,211 / 14,703) | 11,492 (19 / 281 / 1,211 / 8,558 / 1,423) |
 | triangles | 41,313 | 21,796 |
 | open-boundary / coastal boundary nodes | 195 / 1,358 | 146 / 1,050 |
-| $S$ per 600 s step, 36 × 32 (ITER at 0.0373 Hz) | 3,080 (8) | 2,619 (5) |
-| $S$ per 600 s step, 24 × 30 | 2,006 | 1,698 |
+| $S$ per 600 s step, 36 × 32 (ITER at 0.0373 Hz), interior nodes | 3,080 (8) | 2,619 (5) |
+| $S$ per 600 s step, 36 × 32 (ITER at 0.0373 Hz), every wet node as WW3 | 6,308 (17) | 6,041 (15) |
+| $S$ per 600 s step, 24 × 30, interior nodes / every wet node | 2,006 / 4,152 | 1,698 / 3,977 |
 
 The box holds 58 of the 268 buoys (46 Channel and Biscay, 9 southern North
 Sea, 3 Celtic Sea; 49 with $T_{m02}$). This is where the buoy errors are
@@ -603,8 +607,10 @@ sweep and its transpose in three variants, each in CubeCL and in CUDA C.
   4120565). With the count of WW3 the sweep times below stand, and the step
   times and per-day times grow by 2.3 on grid v4 and 3.5 on grid v5 $K=4$
   (0.240 and 0.148 s per step, 34.6 and 21.3 s per model day).
-  `scripts/explicit_cost.py` and the `cfl_substeps` cap of `hww3-grid`
-  still count the interior nodes only.
+  `scripts/explicit_cost.py` now counts them too ($S$ = 8,326 sub-steps
+  per step on grid v4 and 9,003 on grid v5 $K=4$, against 3,678 and 2,835),
+  and the `cfl_substeps` cap of `hww3-grid` does with
+  `refine_bathy.cfl_boundary`.
 
 **Platforms.**
 

@@ -36,6 +36,11 @@ def bnodes(t, n):
 bfull = bnodes(tri, len(lon))[used]
 bsub = bnodes(st, len(used))
 openb = bsub & ~bfull
+if os.path.exists(raw + "obc.u32"):  # open-boundary nodes of the full grid in the box
+    obc = np.zeros(len(lon), bool)
+    obc[np.fromfile(raw + "obc.u32", np.uint32)] = True
+    openb |= bsub & obc[used]
+np.flatnonzero(openb).astype(np.uint32).tofile(out + "/raw/obc.u32")
 txt = open(gdir + "/ww3_grid.nml").read()
 if nk:
     txt = re.sub(r"(SPECTRUM%NK\s*=\s*)\d+", r"\g<1>%d" % nk, txt)

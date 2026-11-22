@@ -221,9 +221,16 @@ For each spectral component the largest stable step at node $i$ is
 $$ \Delta t_i = S_i \Big/ \sum_{T\ni i}\max(0, K_{i,T}), $$
 
 with $S_i$ a third of the area of the triangles around $i$ (`SI`). The
-global step is the minimum over the interior nodes (open and coastal
-boundary nodes are left out unless `FSBCCFL`), and each component is
-sub-cycled `ceil(DT / min Δt_i)` times. For a speed $c$ in direction
+global step is the minimum over the nodes with `IOBP = 1 .OR. FSBCCFL`
+(`PDLIB_W3XYPFSN2`), and each component is sub-cycled
+`ceil(DT / min Δt_i)` times. `FSBCCFL` is `UGBCCFL` of the `UNST` namelist
+of `ww3_grid`, true by default and in the HWW3 runs, so WW3 counts every
+wet node, coastal and open-boundary nodes included. A boundary node has an
+open fan of triangles: in a single triangle of height $h$ its step is
+$h/3c$, in two triangles of a regular mesh of side $a$ it is $a/3c$,
+against about $0.87\,a/c$ for an interior node. On grid v5 $K=4$ the median
+CFL length of the coastal nodes is 0.47 cell sizes against 0.83 inside, and
+the coastal nodes set the sub-cycling of every component. For a speed $c$ in direction
 $\theta$, $\Delta t_i = L_i(\theta)/c$ with a CFL length $L_i(\theta)$ that
 depends only on the triangles. `hww3-grid` computes $L_i$, the minimum over
 the model directions, and $\Delta t_i$ with the WW3 formula above for the
@@ -232,10 +239,15 @@ component), each triangle using the mean speed of its three vertices as
 WW3 does, currents excluded (grid v4 and earlier reported $L_i/c_g$ with
 the speed at the node; their triangles do not depend on it, since the CFL
 flips use $L_i$ only). The summary (`cfl`) gives the smallest
-step, the node that sets it, the number of sub-cycles at `dtxy` and, per
-nside, the minimum, 1 % quantile and median of $\Delta t_i$ and of
-$L_i$ divided by the cell size (the efficiency); `raw/dt_explicit.f64` and
-`raw/cfl_length.f64` hold the values per node.
+step over the interior nodes, the node that sets it and the number of
+sub-cycles at `dtxy` (`dt_min_s`, `worst_node`, `subcycles_at_dtxy`, WW3
+with `UGBCCFL = F`), the same over every node (`dt_min_all_s`,
+`worst_node_all`, `subcycles_at_dtxy_all`, WW3 with its default
+`UGBCCFL = T`) and, per nside, the minimum, 1 % quantile and median of
+$\Delta t_i$ and of $L_i$ divided by the cell size (the efficiency) over
+the interior nodes; `raw/dt_explicit.f64` and `raw/cfl_length.f64` hold
+the values per node (`dt_explicit` is infinite on the boundary nodes unless
+`refine_bathy.cfl_boundary`).
 
 The fully implicit scheme used in the North Atlantic runs (`IMPTOTAL`) has
 no such limit; these numbers matter for the explicit schemes and measure
@@ -269,6 +281,38 @@ The summary gives the number of capped blocks (`n_cfl_capped_blocks`),
 the passes made, the merged cells (`n_cfl_merged`) and the nodes still above
 $K$ (`n_cfl_above`). Each pass is a full build, so 10 passes take about
 ten times as long as one.
+
+**Coastal nodes (`refine_bathy.cfl_boundary`).** Both steps above count
+the interior nodes only, and so did grids v5; but WW3 counts the coastal and
+open-boundary nodes too (`UGBCCFL = T`), and on grid v5 $K=4$ the lowest
+frequency then needs 19–26 sub-steps instead of 4–5. With `cfl_boundary`
+the cap counts them as well:
+
+1. a bathymetry block holding land samples is also capped with the mean
+   depth of its wet samples, the depth its node will get (the block mean
+   counts land as `min_depth_m`, so a coastal block looks shallower than
+   its node), and with $\eta_b$ = `cfl_boundary_efficiency` (0.45) instead
+   of $\eta$. With $K=4$ this forbids nside 2048 at the coast where
+   $c_g > 9.6$ m/s (deeper than about 10 m) and nside 1024 where
+   $c_g > 19.1$ m/s (deeper than about 49 m);
+2. the passes also mark the parents of the coastal and open-boundary nodes
+   still above $K$.
+
+On a synthetic island (`tests/synthetic.rs`, 3000 s step, $K=4$) the
+interior count leaves 20 sub-steps for the lowest frequency when every node
+counts; with `cfl_boundary` none is left above 4, for 11 % fewer nodes.
+Without the first step the passes stall: the land-side blocks with a few
+wet samples are refined to the finest level and the 2:1 balance re-splits
+the coastal cells next to them.
+
+On the North Atlantic (grid v5 $K=4$ with `cfl_boundary`, PBS job 7967384,
+16.7 min for 10 passes on 8 cores) the sub-cycling of WW3 is halved, but
+the grid is not usable as it stands: the coarser coastal cells close the
+Danish straits, so the Baltic (and a few Arctic channels) are no longer
+connected and `keep_largest_component` drops them, and 5,262 coastal nodes
+at nside 1024 stay above $K$ after the last pass, their parents re-split by
+the balance each time (see [Validation](validation.md), grid v5). Narrow
+passages need protecting before this option can build a grid.
 
 ## 11. Validation
 

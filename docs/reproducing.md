@@ -264,6 +264,16 @@ for k in 5 4; do
 done
 ```
 
+The sub-cycling counted as WW3 does (every wet node, `UGBCCFL = T`;
+`--interior-only` gives the counts of `results/natl_v{3,4,5k5,5k4}_explicit_cost.json`),
+without current, 3 to 6 min per grid on a workstation:
+
+```bash
+for g in v3 v4 v5k5 v5k4; do
+  python scripts/explicit_cost.py grids/natl_$g results/natl_${g}_explicit_cost_bccfl "grid $g"
+done
+```
+
 Scores on the window of the grid-v4 explicit run, the cells made coarser
 and the differences with grid v4 (run v4 interpolated on the v5 nodes):
 

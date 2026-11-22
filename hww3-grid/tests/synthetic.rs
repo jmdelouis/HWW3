@@ -182,6 +182,8 @@ fn island_bathy_refinement() {
         cfl_substeps: 0.0,
         cfl_efficiency: 0.8,
         cfl_passes: 0,
+        cfl_boundary: false,
+        cfl_boundary_efficiency: 0.45,
     });
     let (grid, s) = pipeline::build(&cfg).unwrap();
     println!("{}", serde_json::to_string_pretty(&s).unwrap());
@@ -235,6 +237,38 @@ fn island_bathy_refinement() {
     assert!(s1.n_cfl_capped_blocks > 0);
     assert!(g1.uniq.len() < g0.uniq.len());
     assert!(s1.n_cfl_above * 20 < above0, "{} {above0}", s1.n_cfl_above);
+    assert!(!s1.cfl.boundary_counted);
+    assert!(s1.cfl.subcycles_at_dtxy_all >= s1.cfl.subcycles_at_dtxy);
+
+    // counting the coastal nodes as WW3 does with UGBCCFL = T: the coastal
+    // blocks are capped at their wet depth with a coastal CFL efficiency, the
+    // rebuilds also merge the cells of the coastal nodes above K, and no node
+    // is left above K
+    if let Some(p) = cfg.refine_bathy.as_mut() {
+        p.cfl_boundary = true;
+        p.cfl_passes = 6;
+    }
+    let (g2, s2) = pipeline::build(&cfg).unwrap();
+    println!(
+        "coastal nodes counted: {} nodes, {} above {k} sub-steps, {} merged cells, {} passes, sub-cycles at dtxy \
+         {} (interior) / {} (every node), against {} / {} with the interior count",
+        g2.uniq.len(),
+        s2.n_cfl_above,
+        s2.n_cfl_merged,
+        s2.cfl_passes,
+        s2.cfl.subcycles_at_dtxy,
+        s2.cfl.subcycles_at_dtxy_all,
+        s1.cfl.subcycles_at_dtxy,
+        s1.cfl.subcycles_at_dtxy_all
+    );
+    assert!(s2.mesh.is_valid());
+    assert!(s2.cfl.boundary_counted);
+    assert!(g2.dt_explicit.iter().all(|d| d.is_finite()));
+    assert!(s2.n_cfl_merged > s1.n_cfl_merged);
+    assert!(s2.cfl.subcycles_at_dtxy_all < s1.cfl.subcycles_at_dtxy_all);
+    assert_eq!(s2.n_cfl_above, 0);
+    assert!(s2.cfl.subcycles_at_dtxy_all as f64 <= k, "{}", s2.cfl.subcycles_at_dtxy_all);
+    assert!(g2.uniq.len() < g1.uniq.len());
 }
 
 /// Ear clipping keeps all triangles counter-clockwise.
