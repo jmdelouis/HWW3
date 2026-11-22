@@ -707,7 +707,15 @@ Datarmor.
   wind relative to the current). After the first three steps from the
   restart of 8 January, the spectra agree with the WW3 restarts to within
   1 mm in $H_s$ at all but 13 of 371,000 nodes, at most 7.9 mm (job
-  4138987). The 48 h comparison is next.
+  4138987).
+- **Targets met.** Over 48 h from 8 January and over 1–8 January, the RMS
+  difference in $H_s$ against WW3 is 2.1 and 2.5 µm at the median node,
+  0.09 and 0.11 mm at the 99th percentile (targets 2.1 cm and 20 cm), and
+  the altimeter and buoy scores of the week are WW3's to 1 µm (jobs
+  4139369 to 4139371). One A100 takes 146 s per model day. A few nodes
+  (8 of 371,000) have one-hour spikes of up to 23 cm, which a
+  double-precision run reproduces exactly. Their cause is being looked for
+  with WW3 restarts during one of them.
 
 Details and the list of what remains are in
 [GPU model results](wave_results.md).
@@ -723,7 +731,12 @@ Details and the list of what remains are in
   `CALC_USTAR` with `TAUT`, the tail of `W3SIN4` with `TAUHFT2` and the
   cumulative term of `W3SDS4` reproduce WW3 to 1.5e-7, 2.7e-6 and 1.7e-5
   on 1,869 nodes, and the whole `W3SRCE` step to 3.9e-6 (job 4139132).
-  The GPU kernel has the same branches, still to check on a GPU.
+- **GPU.** The kernel with the same branches reproduces WW3 to 4.0e-6 on
+  the harness nodes (job 4139172). Over 48 h from 8 January, the RMS
+  difference in $H_s$ is 2.0 µm at the median node, 77 µm at the 99th
+  percentile and 2.1 cm at worst (job 4162034 against 4139131), at
+  127 s per model day on one A100, 11.7 times 32 cores. The week and its
+  scores against `natl_v5k4_jan2026_exp` are next.
 
 ## 10. Other routes, briefly
 

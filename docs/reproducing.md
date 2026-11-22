@@ -456,6 +456,35 @@ go through the validation scripts on the window of the explicit runs
 sbatch --export=ALL,WW3NC=$R/runs/m2_week/ww3.202601.nc,GPU=$R/m2/out_JOBID,OUT=$R/m2/val_week scripts/m2_scores_hpc.slurm
 ```
 
+The same 48 h in double precision on the GPU, and WW3 restarts every
+10 minutes from 9 January 00:50 to 02:00 (around the spike of node 79649):
+
+```bash
+sbatch -t 01:30:00 --export=ALL,HOURS=48,EXTRA=--f64 scripts/m2_prop_hpc.slurm
+sbatch -t 03:00:00 --export=ALL,MODE=dev,HOURS=26,RSTART=89400,RSTRIDE=600,RCOUNT=8,TAG=_diag9,FLIST=HS scripts/m2_ww3_ref_hpc.slurm
+```
+
+### Milestone M2b: the full ST4
+
+The calibrated namelists unchanged (`ST4=full`), the harness on their
+`mod_def.ww3`, then the GPU with the parameter file of that harness:
+
+```bash
+sbatch --export=ALL,MODE=dev,ST4=full,TAG=_full,RSTRIDE=600,RCOUNT=3 scripts/m2_ww3_ref_hpc.slurm
+sbatch --export=ALL,RUN=$R/runs/m2_dev_full,OUT=src_8jan_full.bin,NODES=169562+130464+165663+229656+147650 scripts/m2_src_harness_hpc.slurm
+target/release/hww3-src check $R/m2/harness/src_8jan_full.bin
+sbatch --export=ALL,HARNESS=src_8jan_full.bin scripts/m2_src_gpu_hpc.slurm
+D=$R/runs/m2_dev_full
+sbatch --export=ALL,PARAMS=src_8jan_full.bin.params,STEPS_REF=$D/restart001.ww3:$D/restart002.ww3:$D/restart003.ww3 scripts/m2_prop_hpc.slurm
+sbatch --export=ALL,PARAMS=src_8jan_full.bin.params,HOURS=48,EXTRA=--wind-out scripts/m2_prop_hpc.slurm
+python3 scripts/m1_compare_nc.py $D/ww3.202601.nc $R/m2/out_JOBID --worst 20 --grid $R/grids/natl_v5k4
+# the week: the restart after the first step of a cold-started run, then against the
+# explicit run natl_v5k4_jan2026_exp (its ww3.202601.nc copied from Datarmor to $R/refs)
+sbatch -t 00:30:00 --export=ALL,MODE=week,ST4=full,HOURS=1,RSTRIDE=600,RCOUNT=1,TAG=_start_full,FLIST=HS scripts/m2_ww3_ref_hpc.slurm
+sbatch -t 02:00:00 --export=ALL,PARAMS=src_8jan_full.bin.params,RESTART=$R/runs/m2_week_start_full/restart001.ww3,HOURS=168,EXTRA=--wind-out scripts/m2_prop_hpc.slurm
+sbatch --export=ALL,WW3NC=$R/refs/natl_v5k4_jan2026_exp/ww3.202601.nc,GPU=$R/m2/out_JOBID,OUT=$R/m2/val_week_full scripts/m2_scores_hpc.slurm
+```
+
 ## 9. Note
 
 ```bash

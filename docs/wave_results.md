@@ -272,7 +272,7 @@ sweeps.
   `hww3-grid` counts them with `refine_bathy.cfl_boundary`; see
   [Validation](validation.md), grid v5, for the consequences.
 
-## Milestone M2a: the source terms (in progress)
+## Milestone M2a: the source terms (targets met)
 
 M2a adds the source terms of the HWW3 configuration with the simplified
 ST4: `SINTABLE = 0` in `&SIN4` (no stress tables: u* by Newton iterations
@@ -441,6 +441,54 @@ harness does not test, is the other input that differs. This is not
 verified yet. The dynamic step and cut-off frequency of WW3 (`DTD`, `FC`)
 at these steps would confirm it.
 
+### 48 h and the week against WW3
+
+Hourly $H_s$ and $T_{m02}$ of the GPU model against the WW3 references
+(`scripts/m1_compare_nc.py`; RMS difference over the hours at each of the
+371,278 nodes where both are defined, then its median, 99th percentile and
+maximum over the nodes):
+
+| Run | GPU (one A100) | WW3 | $H_s$: median / p99 / max | $T_{m02}$: median / p99 / max | Energy |
+|---|---|---|---|---|---|
+| 48 h from 8 January 00 h (jobs 4139023, 4139369) | 291.7 s, 146 s per model day | 3,064 s on 32 ranks | 2.1 µm / 86 µm / 2.3 cm | 5.0e-6 / 3.3e-4 / 0.57 s | 1.4e-6 |
+| 1–8 January, from the WW3 restart of 00:10 (jobs 4139117, 4139370) | 1,002 s, 143 s per model day | 5,003 s on 64 ranks | 2.5 µm / 0.11 mm / 1.9 cm | 6.4e-6 / 4.9e-4 / 0.63 s | 3.7e-6 |
+
+The section 6 targets are 2.1 cm at the median node and 20 cm at the 99th
+percentile, the difference between the explicit and implicit runs of grid
+v4. The GPU model is four orders of magnitude below them. The hourly wind
+it applies (written with `--wind-out`) is WW3's to 1e-6 m/s at the median
+node and 5.5e-6 m/s at worst. One A100 runs the 48 h ten times as fast as
+32 cores of the hpc cluster.
+
+The scores of the week (job 4139371, window of the explicit runs) are the
+same for both:
+
+| | WW3 | GPU |
+|---|---|---|
+| Altimeters, 45,518 blocks: bias / RMSE of $H_s$ | +1.1586 / 28.3882 cm | +1.1585 / 28.3882 cm |
+| Buoys, 252: bias / RMSE of $H_s$ | −3.5877 / 32.2130 cm | −3.5877 / 32.2130 cm |
+| Buoys, 171: bias / RMSE of $T_{m02}$ | −0.4666 / 1.2116 s | −0.4666 / 1.2116 s |
+
+**Nodes above 1 cm.** Eight nodes in each run have an RMS difference above
+1 cm. In the 48 h run they are in the fjords of Lofoten and Troms
+(68–71° N), with $H_s$ of 0.05–0.2 m under 3–4 m/s of wind, and in the
+western Channel and on the Bahamas banks. In the week they are in the
+archipelago of the Gulf of Finland, in Passamaquoddy Bay (Bay of Fundy), in
+Ungava Bay (ice concentration up to 0.4) and, once, in a Labrador Sea storm
+($H_s$ 8 m, 26 m/s of wind). Each is a spike of one or two hours: at node
+79649, 0.055 m on the GPU against 0.178 m in WW3 on 9 January 02 h, then
+within 1 mm an hour later. In the Labrador Sea, 7.92 against 8.07 m for one
+hour.
+
+These spikes are not round-off. The same 48 h in double precision on the
+GPU (job 4162035) has the same spikes at the same nodes and hours, while
+the two GPU runs differ by at most 4 mm. They are also larger than the
+millimetre differences of the first three steps. So at these nodes WW3 and
+the GPU model compute something differently for an hour. The cause is not
+found yet. WW3 is writing restarts every 10 minutes from 9 January 00:50
+to 02:00 (job 4162053), to compare the full spectra at node 79649 during
+its spike.
+
 ## Milestone M2b: the full ST4 (in progress)
 
 M2b runs the source terms of the calibrated configuration: the stress
@@ -474,4 +522,26 @@ on average.
 The GPU kernel has the same branches. `CUMULW` depends only on the two
 frequencies and on the direction difference, so it goes to the device as
 a table of $32 \times 32 \times 36$ values, checked against every used
-entry of the matrix. The GPU check of these branches waits for a GPU.
+entry of the matrix. On the harness nodes (job 4139172), the kernel
+reproduces the full `W3SRCE` of WW3 to 4.0e-6 in single precision
+(0.9 µm in $H_s$), with no node taking another number of dynamic steps, and
+the CPU transcription to 4.6e-8 in double precision. A step on 373,800
+nodes takes 0.81 s, against 0.97 s with the simplified ST4: the table
+look-ups cost less than the Newton iterations and the 50-point tail, and
+more than pay for the cumulative term.
+
+### First steps and 48 h
+
+`check-steps` against the restarts of the calibrated reference (job
+4162033) finds at most 6 interior nodes above 1 mm and none above 1 cm
+after each of the first three steps (largest 4.4 mm). Over 48 h from
+8 January (GPU job 4162034 against the WW3 reference 4139131, which took
+2,982 s on 32 ranks, 26 core-hours):
+
+| $H_s$: median / p99 / max | $T_{m02}$: median / p99 / max | Energy | Wind | GPU |
+|---|---|---|---|---|
+| 2.0 µm / 77 µm / 2.1 cm | 4.9e-6 / 3.2e-4 / 0.16 s | 1.1e-6 | 1e-6 m/s (median) | 254 s, 127 s per model day |
+
+The worst node, 134247 on the Normandy coast at 6.8 m of depth, has the
+same one-hour spikes as in M2a (1.94 against 2.08 m on 9 January 01 h). One
+A100 runs the 48 h 11.7 times as fast as 32 cores.

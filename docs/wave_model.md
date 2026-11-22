@@ -21,10 +21,13 @@ reference that every part of the GPU model is checked against.
   32 cores. It stays within 1.5 µm of WW3 in $H_s$ at the median node and
   0.71 mm at the worst node, once the sub-cycling count includes the coast
   nodes as WW3 does.
-- **Milestone M2a (in progress)**, the simplified ST4 source terms: the CPU
-  transcriptions of every source term and of the `W3SRCE` integration
-  reproduce WW3 to its single-precision round-off; the wind forcing, the
-  GPU kernels and the time loop come next.
+- **Milestone M2a (targets met)**, the simplified ST4 source terms: over
+  48 h and over 1–8 January the GPU model stays within 2.5 µm of WW3 in
+  $H_s$ at the median node and 0.11 mm at the 99th percentile, and its
+  altimeter and buoy scores are WW3's, at 146 s per model day on one A100.
+- **Milestone M2b (in progress)**, the calibrated full ST4 (stress tables,
+  cumulative breaking term): 2.0 µm at the median node over 48 h, at
+  127 s per model day.
 
 Details and numbers are in [GPU model results](wave_results.md), the
 schemes in [Numerics of the GPU model](wave_numerics.md).

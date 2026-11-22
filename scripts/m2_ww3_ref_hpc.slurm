@@ -22,7 +22,8 @@
 # the cumulative breaking term, SDSCUM = -0.40, both WW3 defaults).
 # Forcing (1-10 January) in $S/m2/forcing. Hourly fields FLIST (default those
 # of natl_v5k4_jan2026_exp) in $S/runs/m2_<MODE><TAG>/ww3.*.nc; with RSTRIDE,
-# also RCOUNT restarts (full spectra) every RSTRIDE s from the start,
+# also RCOUNT restarts (full spectra) every RSTRIDE s from the start (or
+# from RSTART s after the start),
 # restart001.ww3 ... there.
 #   sbatch --export=ALL,MODE=dev,RSTRIDE=600,RCOUNT=3 scripts/m2_ww3_ref_hpc.slurm
 #   sbatch --export=ALL,MODE=week scripts/m2_ww3_ref_hpc.slurm
@@ -86,8 +87,9 @@ cat > ww3_shel.nml <<NML
   DATE%FIELD%STOP   = '$STOP'
 NML
 if [ -n "$RSTRIDE" ]; then
-  R0=$(date -u -d "$T0 UTC + $RSTRIDE seconds" +'%Y%m%d %H%M%S')
-  R1=$(date -u -d "$T0 UTC + $((RSTRIDE * ${RCOUNT:-1})) seconds" +'%Y%m%d %H%M%S')
+  RS=${RSTART:-$RSTRIDE}
+  R0=$(date -u -d "$T0 UTC + $RS seconds" +'%Y%m%d %H%M%S')
+  R1=$(date -u -d "$T0 UTC + $((RS + RSTRIDE * (${RCOUNT:-1} - 1))) seconds" +'%Y%m%d %H%M%S')
   cat >> ww3_shel.nml <<NML
   DATE%RESTART%START  = '$R0'
   DATE%RESTART%STRIDE = '$RSTRIDE'
