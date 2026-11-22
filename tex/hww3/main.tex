@@ -47,13 +47,14 @@ matches ten altimeters with a bias of \SI{+0.041}{m}, an RMSE of
 \SI{0.35}{m} and a correlation of 0.979; at 268 moored buoys, mostly
 coastal, the hourly $H_s$ has a bias of \SI{-0.005}{m} and an RMSE of
 \SI{0.37}{m}. The month takes \SI{19.5}{h} on 112 cores with the implicit
-scheme. The explicit scheme is twice as slow: its sub-cycling is global
-and set by about a thousand coastal nodes of \SI{3}{km} in fjords and
-Arctic channels, and with the nodes kept on HEALPix pixel centres a
-better grid could remove at most about a third of its propagation sweeps.
-Capping the explicit sub-steps during the grid construction (grid v5,
-424\,123 nodes for at most 4 sub-steps) brings the explicit run down to
-1.23 times the implicit run on grid v4, with unchanged altimeter scores
+scheme. The explicit scheme is twice as slow. Its sub-cycling is global.
+WW3 counts every wet node in it, so the coastal nodes set it: their open
+fan of triangles needs two to three times the sub-steps of an interior
+node. Measured, the sub-steps make only about a tenth of the explicit
+cost. Capping the explicit sub-steps of the interior nodes during the grid
+construction (grid v5, 424\,123 nodes) brings the explicit run down to
+1.23 times the implicit run on grid v4 through its fewer nodes, with
+unchanged altimeter scores
 but a buoy $H_s$ RMSE \SI{2}{cm} higher, lost at a few buoys sheltered by
 islands and headlands whose \SI{3}{km} cells were removed.
 Adding the FES2014 tide to the Copernicus currents and sea level leaves the
@@ -249,8 +250,8 @@ v1 & \texttt{natl\_datarmor.json}    & 502\,690 & distance-to-coast refinement, 
 v2 & \texttt{natl\_v2\_datarmor.json} & 502\,408 & edge flips and boundary trimming: angles \ang{20}--\ang{130} \\
 v3 & \texttt{natl\_v3\_datarmor.json} & 794\,613 & depth, slope and Rossby-radius size functions (OceanMesh2D) \\
 \textbf{v4} & \texttt{natl\_v4\_datarmor.json} & 794\,613 & alternated diagonals, CFL-driven flips (reference) \\
-v5, $K=5$ & \texttt{natl\_v5k5\_datarmor.json} & 515\,624 & v4 with at most 5 explicit sub-steps (Sec.~\ref{sec:v5}) \\
-v5, $K=4$ & \texttt{natl\_v5k4\_datarmor.json} & 424\,123 & v4 with at most 4 explicit sub-steps \\
+v5, $K=5$ & \texttt{natl\_v5k5\_datarmor.json} & 515\,624 & v4 with at most 5 explicit sub-steps inside (Sec.~\ref{sec:v5}) \\
+v5, $K=4$ & \texttt{natl\_v5k4\_datarmor.json} & 424\,123 & v4 with at most 4 explicit sub-steps inside \\
 \bottomrule
 \end{tabular}
 \caption{North Atlantic grid versions (\texttt{configs/}). Every version
@@ -387,9 +388,14 @@ n_k$ the flux coefficients of a triangle ($\boldsymbol\lambda$ half the mean
 nodal advection velocity, $\mathbf n_k$ the inward normal of the edge
 opposite vertex $k$, of length that edge), the largest stable step at node
 $i$ is $\Delta t_i = S_i/\sum_{T\ni i}\max(0,K_{i,T})$, $S_i$ being a third of
-the area of the triangles around $i$; the global step is the minimum over
-the interior nodes, and each spectral component is sub-cycled
-$\lceil \mathrm{DT}/\min\Delta t_i\rceil$ times. For a speed $c$,
+the area of the triangles around $i$. The global step is the minimum over
+the nodes with \texttt{IOBP = 1 .OR. FSBCCFL}, and each spectral component
+is sub-cycled $\lceil \mathrm{DT}/\min\Delta t_i\rceil$ times.
+\texttt{FSBCCFL} is \texttt{UGBCCFL} of the \texttt{UNST} namelist of
+\texttt{ww3\_grid}. It is true by default and in every run of this note,
+so every wet node counts, coastal and open-boundary nodes included. The
+analyses of grids v4 and v5 below first took the interior nodes only;
+Section~\ref{sec:coastcfl} gives the count of WW3. For a speed $c$,
 $\Delta t_i=L_i/c$ with a CFL length $L_i$ (minimum over the 36 directions)
 that depends only on the triangles; \texttt{hww3-grid} now computes it for
 every node, with $c$ the group speed of the lowest model frequency at the
@@ -418,8 +424,9 @@ Grid v4 (\texttt{configs/natl\_v4\_datarmor.json}, PBS job 7935472,
 160\,814 blocks are alternated and 55\,985 edges are flipped for the CFL
 condition (Table~\ref{tab:v4}, Fig.~\ref{fig:v4}). In the equatorial band
 the share of north--south edges falls from 31 to 17\,\% and that of
-east--west edges rises from 1 to 15\,\%. The smallest explicit step, for
-the fastest component (\SI{0.0373}{Hz}), rises from 59.6 to \SI{64.7}{s}
+east--west edges rises from 1 to 15\,\%. The smallest explicit step of the
+interior nodes, for the fastest component (\SI{0.0373}{Hz}), rises from
+59.6 to \SI{64.7}{s}
 (11 to 10 sub-cycles for a \SI{600}{s} step), the smallest CFL length at
 every level by 7 to 12\,\% and the median by 5 to 11\,\%. The largest
 angle reaches the \ang{130} bound (2\,550 triangles above \ang{120}
@@ -570,33 +577,38 @@ comparison covers 1--7 January.
 \SI{2115}{s} with the implicit scheme: the explicit runs are 1.99 (v3)
 and 2.04 (v4) times slower, and the cold-start day costs \SI{6.5}{ks}
 against \SI{3.3}{ks}. With the explicit scheme grid v4 is 2.9\,\% slower
-than grid v3, although it needs 3.4\,\% fewer propagation sweeps
-(below): the propagation is not the only cost of the explicit run, and
-the share of the source terms (dynamic step, \texttt{DTMIN}
-\SI{10}{s}) and of the other split steps was not measured.
+than grid v3. Counted over the interior nodes it needs 3.4\,\% fewer
+propagation sweeps (below), but counted as WW3 does, over every wet node,
+5.1\,\% more. The sub-steps make about 10\,\% of the explicit run, as
+measured later on grid v5 (Section~\ref{sec:coastcfl}); the rest is the
+source terms (dynamic step, \texttt{DTMIN} \SI{10}{s}) and the other
+split steps.
 
 \paragraph{Sub-cycling.} In \texttt{PDLIB\_W3XYPFSN2}
 (\texttt{w3profsmd\_pdlib.F90}) each spectral component $(f,\theta)$ is
 advected with $\mathrm{ITER}(f,\theta)=\lceil\mathrm{DT}/\min_i\Delta
-t_i(f,\theta)\rceil$ sub-steps, the minimum being taken over all the
-interior nodes of the domain (\texttt{MPI\_ALLREDUCE}): one node sets the
-sub-cycling of the whole grid for that component.
+t_i(f,\theta)\rceil$ sub-steps, the minimum being taken over the nodes of
+the whole domain (\texttt{MPI\_ALLREDUCE}), every wet node in our runs:
+one node sets the sub-cycling of the whole grid for that component.
 \texttt{scripts/explicit\_cost.py} recomputes $\Delta t_i$ from the grid
 with the WW3 formula (Sec.~\ref{sec:v4}) for the 32 frequencies and 36
 directions, with the group speed at the node depth and no current. It
 gives the number of sweeps per global step,
 $S=\sum_{f,\theta}\mathrm{ITER}$, and for every node the number of
 sub-steps that this node alone would impose (maximum over the
-components). On grid v4, ITER falls from 10 at \SI{0.0373}{Hz} to 1
-above \SI{0.33}{Hz} and $S=3678$, 3.2 times the 1152 sweeps of one sweep
-per component (grid v3: $S=3806$). Adding the largest Copernicus current
-of the month to the group speed would raise $S$ by at most 4\,\% (3833).
+components). Over the interior nodes, as the script first counted, ITER
+on grid v4 falls from 10 at \SI{0.0373}{Hz} to 1 above \SI{0.33}{Hz} and
+$S=3678$, 3.2 times the 1152 sweeps of one sweep per component (grid v3:
+$S=3806$). Adding the largest Copernicus current of the month to the
+group speed would raise $S$ by at most 4\,\% (3833). Counted as WW3 does,
+ITER is 18--24 at \SI{0.0373}{Hz} and $S=8326$ (grid v3: 7923), set by
+the coastal nodes (Section~\ref{sec:coastcfl}).
 
 \paragraph{Costly nodes.} Fig.~\ref{fig:xcost_map} maps the local
 sub-steps. They follow the resolution, with medians of 0.3, 0.6, 1.3,
 2.5 and 4.7 at $\nside=128$ to 2048; the 551\,192 interior nodes at
-$\nside=2048$ (75\,\% of the interior nodes) need about 5. The global
-ITER is set by the tail of this distribution: the 1\,090 nodes above 7
+$\nside=2048$ (75\,\% of the interior nodes) need about 5. Over the
+interior nodes, ITER is set by the tail of this distribution: the 1\,090 nodes above 7
 sub-steps, all at $\nside=2048$, lie in the channels of the Canadian
 Arctic Archipelago, the Norwegian fjords, the Hebrides and around
 Svalbard (boxes A--D), at depths of 50 to \SI{550}{m}. Two factors
@@ -607,12 +619,14 @@ is 1.2 times its deep-water value (\SI{25}{m/s} instead of
 reach the angle bounds and the CFL length falls to 0.50--0.60 cell sizes
 instead of a median of 0.84 at $\nside=2048$. The worst node
 (\ang{85.3}W, \ang{73.1}N, \SI{161}{m}, CFL length \SI{1.62}{km} for a
-\SI{3.2}{km} cell) alone imposes 9.15 sub-steps.
+\SI{3.2}{km} cell) alone imposes 9.15 sub-steps. Counted as WW3 does, the
+coastal nodes, left out of this map, need up to 2.5 times more and set
+ITER instead (Section~\ref{sec:coastcfl}).
 
 \paragraph{What the grid can still gain.} With the vertices kept on
 HEALPix pixel centres, the grid can change only through its connectivity
-or the level of its nodes. Three estimates bound the gain
-(Fig.~\ref{fig:xcost_curves}). Excluding the worst nodes from the
+or the level of its nodes. Three estimates, made with the interior
+count, bound the gain (Fig.~\ref{fig:xcost_curves}). Excluding the worst nodes from the
 minimum lowers $S$ by 3\,\% for 100 nodes, 7\,\% for 10\,000 and 12\,\%
 for 100\,000 (3554, 3421, 3243). Moving every node above $K$ sub-steps
 one HEALPix level coarser, which halves its sub-steps, gives $S=3490$
@@ -745,9 +759,12 @@ shelf (Fig.~\ref{fig:v5_levels}) the \SI{3}{km} cells disappear along the
 Atlantic and Mediterranean coasts, where the depth exceeds the limit
 within a few cells of the shore, and remain in the shallow southern North
 Sea, the Wadden Sea, the Kattegat and the Baltic.
-\texttt{scripts/explicit\_cost.py} (PBS jobs 7958758 and 7958756) gives
-ITER 6 and 5 at \SI{0.0373}{Hz} instead of 10, and $S=3168$ and 2835
-sweeps per step instead of 3678 ($-14$ and $-23\,\%$, Table~\ref{tab:v5}).
+Over the interior nodes, \texttt{scripts/explicit\_cost.py} (PBS jobs
+7958758 and 7958756) gives ITER 6 and 5 at \SI{0.0373}{Hz} instead of 10,
+and $S=3168$ and 2835 sweeps per step instead of 3678 ($-14$ and
+$-23\,\%$, Table~\ref{tab:v5}). Counted as WW3 does, the cap changes
+nothing: ITER stays at 19--26 and $S$ rises to 9046 and 9003 against 8326
+on grid v4 (Section~\ref{sec:coastcfl}).
 
 \paragraph{Wall time.} The run with open-boundary spectra was repeated on
 both grids, with the implicit and the explicit scheme, from 1 January
@@ -761,13 +778,12 @@ the implicit run on grid v4 (\SI{2115}{s}). The implicit runs gain as
 much: 1380 and \SI{1058}{s}, 0.65 and 0.50 times grid v4, close to the
 ratio of the nodes (0.65 and 0.53). On the same grid the explicit scheme
 therefore stays 2.2 ($K=5$) and 2.5 ($K=4$) times slower than the implicit
-one. The gain of the explicit runs is also smaller than the product of
-the sweeps by the nodes predicts ($S N$ falls by 44 and 59\,\%): the
+one. The gain of the explicit runs follows the nodes, not the interior
+sweeps. With the interior count, $S N$ falls by 44 and 59\,\%, while the
 explicit time per node and per model day rises from \SI{5.43}{ms} (v4) to
-5.79 and \SI{6.13}{ms} as $S$ decreases, while the implicit time per node
-stays at 2.5--\SI{2.7}{ms}. Part of the explicit cost thus does not scale
-with the nodes of each rank, for example the exchange between the 112
-ranks after each sub-step; it was not profiled.
+5.79 and \SI{6.13}{ms}; the implicit time per node stays at
+2.5--\SI{2.7}{ms}. Counted as WW3 does, $S$ rises by 9 and 8\,\%, which
+the rising time per node follows (Section~\ref{sec:coastcfl}).
 
 \paragraph{Accuracy.} Over 4 January 00\,h -- 7 January 21\,h the
 altimeter scores do not change (Table~\ref{tab:v5val}): RMSE \SI{0.283}{m}
@@ -818,10 +834,10 @@ headlands. $K=5$ costs more (1.41) for the same buoy loss. The implicit
 scheme on the same grids is 2.2 to 2.5 times cheaper again, with the same
 loss.
 Grid v4 remains the reference; grid v5 is a cheaper option when the
-coastal shelter of islands at 36--\SI{600}{m} depth is not needed. Most
-of the explicit gain comes from the smaller number of nodes, not from the
-sub-cycling, which the cap only reduces from 3.2 to 2.5 sweeps per
-component.
+coastal shelter of islands at 36--\SI{600}{m} depth is not needed. The
+explicit gain comes from the smaller number of nodes. Counted as WW3 does,
+the cap does not reduce the sub-cycling (7.2 sweeps per component on grid
+v4, 7.8 on grid v5), since the coastal nodes it left out set it.
 
 \begin{table}[H]
 \centering\small
@@ -837,7 +853,9 @@ v5, $K=4$  & 424\,123 & 243\,291 & 115\,884 &  5 & 2835 & 1058 & 2601 \\
 \end{tabular}
 \caption{Grids v4 and v5: nodes at the two finest levels (the coarser
 levels are unchanged), explicit sub-steps of the lowest frequency and
-sweeps per \SI{600}{s} step from \texttt{scripts/explicit\_cost.py}, and
+sweeps per \SI{600}{s} step from \texttt{scripts/explicit\_cost.py} over
+the interior nodes, as the cap counts them (counted as WW3 does: see
+Table~\ref{tab:coastcfl}), and
 wall time of \texttt{ww3\_shel} per model day from 2 January 00\,h to 7
 January 20\,h on 112 ranks.}
 \label{tab:v5}
@@ -885,6 +903,90 @@ $H_s$ of grid v5, difference of the mean $H_s$ and RMS of the hourly
 difference.}
 \label{fig:v5_diff}
 \end{figure}
+
+\subsection{Sub-cycling counted as WW3 does}\label{sec:coastcfl}
+The GPU model (Section~\ref{sec:diff}, milestone M1) showed that the
+sub-step counts above take too few nodes. In \texttt{PDLIB\_W3XYPFSN2}
+the step limit is taken over the nodes with
+\texttt{IOBP = 1 .OR. FSBCCFL}. \texttt{FSBCCFL}, the \texttt{UGBCCFL} of
+the \texttt{UNST} namelist of \texttt{ww3\_grid}, is true by default and
+was true in every run (\texttt{ww3\_grid.out}). WW3 thus counts the coastal
+and open-boundary nodes, which \texttt{explicit\_cost.py} and the cap of
+grid v5 left out. The script now counts them by default and agrees
+exactly with the GPU model (Table~\ref{tab:coastcfl}).
+\begin{itemize}
+\item \emph{The coast sets the sub-cycling.} On every grid a coastal node
+sets ITER for 1\,148 to 1\,152 of the 1\,152 components. The median CFL
+length of the coastal nodes is 0.46--0.47 cell sizes, against 0.76--0.83
+inside: their fan of triangles is open, and a node in one or two
+triangles needs 2--3 times the sub-steps of an interior node of the same
+size. The worst are $\nside=2048$ coastal nodes 60--\SI{290}{m} deep in
+the Canadian Arctic Archipelago, Greenland, western Norway, the Hebrides
+and the Greater Antilles, up to 25.6 sub-steps.
+\item \emph{Grid v5 did not lower it.} $S$ rises from 8326 on grid v4 to
+9046 ($K=5$) and 9003 ($K=4$). On grid v5 $K=4$, 24\,820 coastal nodes
+need more than 4 sub-steps, against 42 interior ones. The explicit gain of
+grid v5 comes from its fewer nodes.
+\item \emph{Share of the explicit cost, measured.} WW3 was run twice on
+grid v5 $K=4$ with its sources, 12 hours from 8 January 00\,h on the same
+32 cores of one hpc node (Slurm job 4135981). A \SI{600}{s} step takes
+\SI{10.32}{s} with \texttt{UGBCCFL = T} and \SI{9.61}{s} with
+\texttt{UGBCCFL = F}, 6.9\,\% less for 68\,\% fewer sub-steps ($S$ 9003
+and 2835). The sub-steps thus make about 10\,\% of the explicit run,
+although the geographic propagation takes 24\,\% of it. On Datarmor,
+counting the interior nodes only would save about 7\,\% on grid v5 $K=4$
+(about \SI{2420}{s} instead of \SI{2601}{s} per model day) and 6\,\% on
+grid v4 (about \SI{4080}{s} instead of \SI{4318}{s}). Most of the
+explicit cost, about twice the implicit one, is not set by the
+sub-cycling.
+\item \emph{\texttt{UGBCCFL = F} is stable but changes the coast.} Over
+these 12 hours $H_s$ differs from the default run by \SI{0.77}{mm} RMS at
+the median node and \SI{1.2}{cm} at the 99th percentile. 68 coastal nodes
+differ by more than \SI{5}{cm}, up to \SI{0.35}{m} in the Gulf of Maine
+(local CFL number 2.6), and $T_{m02}$ by up to \SI{3.4}{s} at a coastal
+node. There is no NaN, and the largest $H_s$ is \SI{7.45}{m} in both
+runs.
+\item \emph{A coastal cap.} The new option
+\texttt{refine\_bathy.cfl\_boundary} of \texttt{hww3-grid} also caps the
+blocks holding land, with the depth of their wet samples and a coastal
+CFL efficiency of 0.45, and counts the boundary nodes in the passes. A
+test build of grid v5 $K=4$ with it (PBS job 7967384) halves the
+sub-cycling, but it is not usable as it stands:
+  \begin{itemize}
+  \item the coarser coastal cells close the Danish straits, so the Baltic
+  is dropped, with a few Arctic channels and fjords: 15\,576 nodes of grid
+  v5 $K=4$ have no node within \SI{30}{km};
+  \item 5\,262 coastal nodes at $\nside=1024$ stay above $K$;
+  \item the nearest node is coarser for 76 of the 252 buoys.
+  \end{itemize}
+With the measured 10\,\% share it would cost about \SI{2160}{s} per model
+day, the saving coming almost entirely from its fewer nodes. Narrow
+passages need protecting before such a cap can build a grid.
+\end{itemize}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrrrrr}
+\toprule
+ & & coastal & \multicolumn{2}{c}{$S$} & ITER at & sweeps & explicit \\
+grid & nodes & nodes & interior & all & \SI{0.0373}{Hz} & per step & (s/day) \\
+\midrule
+v3 & 794\,613 & 58\,443 & 3806 & 7923 & 17--23 & 248 & 4196 \\
+v4 & 794\,613 & 58\,443 & 3678 & 8326 & 18--24 & 258 & 4318 \\
+v5, $K=5$ & 515\,624 & 45\,666 & 3168 & 9046 & 19--26 & 286 & 2988 \\
+v5, $K=4$ & 424\,123 & 40\,775 & 2835 & 9003 & 19--26 & 287 & 2601 \\
+coastal cap (test) & 369\,200 & 20\,803 & -- & 4867 & 10--13 & 153 & -- \\
+\bottomrule
+\end{tabular}
+\caption{Sub-cycling of the explicit scheme counted over the interior
+nodes and over every wet node, as WW3 does with \texttt{UGBCCFL = T}
+(\texttt{scripts/explicit\_cost.py}, no current). \emph{ITER} and
+\emph{sweeps}: count of WW3. \emph{Explicit}: \texttt{ww3\_shel} per model
+day on 112 Datarmor cores (Tables~\ref{tab:explicit} and~\ref{tab:v5}).
+\emph{Coastal cap}: the test build of grid v5 $K=4$ with
+\texttt{cfl\_boundary}.}
+\label{tab:coastcfl}
+\end{table}
 
 \subsection{WW3 build and grid preprocessing}\label{sec:build}
 WW3 \texttt{develop} (commit \texttt{dea641c}) is built on Datarmor with
