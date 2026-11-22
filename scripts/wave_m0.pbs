@@ -1,0 +1,31 @@
+#!/bin/bash
+#PBS -N hww3_wave_m0c
+#PBS -q gpu
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64gb
+#PBS -l walltime=01:30:00
+#PBS -j oe
+#PBS -o /home1/scratch/jmdeloui/HWW3/logs/wave_m0c.log
+#
+# Milestone M0 of docs/differentiable.md on one Datarmor A100 with the
+# fallback backend of hww3-wave (CUDA C kernels, NVRTC, cudarc): N-scheme
+# sweep and transpose on the Channel-Biscay box of grid v4, on grid v4 and on
+# grid v5 K=4. The GPU nodes run driver 470.239.06 (CUDA 11.4 at most), which
+# rejects the PTX of NVRTC 12.1, so the kernels are compiled with the NVRTC of
+# CUDA 11.4. Built on the login node with
+#   CUDARC_CUDA_VERSION=11040 cargo build --release --no-default-features --features cuda-c
+# (CARGO_TARGET_DIR=$S/target_wave_c).
+
+S=/home1/scratch/jmdeloui/HWW3
+export LD_LIBRARY_PATH=/appli/cuda/11.4u1/lib64:$LD_LIBRARY_PATH
+nvidia-smi --query-gpu=name,memory.total,driver_version,clocks.max.memory --format=csv
+export RAYON_NUM_THREADS=8
+B=$S/target_wave_c/release/hww3-wave
+R=$S/results
+J=${PBS_JOBID%%.*}
+
+/usr/bin/time -v $B bench /home1/datawork/jmdeloui/HWW3/grids/natl_v4 --box -13 2.5 42.5 51.5 \
+    --backend cuda-c --reps 400 --f64 --reference --out $R/wave_m0c_box_v4_$J.json
+/usr/bin/time -v $B bench /home1/datawork/jmdeloui/HWW3/grids/natl_v4 --backend cuda-c --reps 200 --f64 \
+    --reference --out $R/wave_m0c_v4_$J.json
+/usr/bin/time -v $B bench $S/grids/natl_v5k4 --backend cuda-c --reps 200 --f64 --reference \
+    --out $R/wave_m0c_v5k4_$J.json

@@ -1,0 +1,99 @@
+#!/bin/bash
+#PBS -N hww3_prop
+#PBS -q mpi_4
+#PBS -l select=4:ncpus=28:mpiprocs=28:mem=115g
+#PBS -l walltime=04:00:00
+#PBS -j oe
+#PBS -o /home1/scratch/jmdeloui/HWW3/logs/natl_prop_run.log
+# Propagation-only WW3 run, the Fortran reference of milestone M1 of
+# docs/differentiable.md: from restart001.ww3 of the grid v5 K=4 explicit run
+# (8 January 2026 00 h), 48 h with the currents, levels, ice and boundary
+# spectra of that run and the source terms off (RUN%FLSOU = F), hourly H_s
+# and T_m02. GEO=1 also turns refraction and frequency shift off
+# (RUN%FLCTH = RUN%FLCK = F), to check the geographic propagation alone.
+# IDEAL=1 starts instead from an idealised swell made by ww3_strt (Gaussian
+# packet, 0.08 Hz, centred at 25W 47N, 3 deg spread, H_max 3 m) without
+# forcing or boundary spectra.
+#   qsub scripts/natl_prop_run.pbs
+#   qsub -v GEO=1,RUN=natl_v5k4_jan2026_geo scripts/natl_prop_run.pbs
+#   qsub -v IDEAL=1,RUN=natl_v5k4_ideal scripts/natl_prop_run.pbs
+set -e
+R=/home1/datawork/jmdeloui/HWW3
+S=/home1/scratch/jmdeloui/HWW3
+NC=/appli/netCDF/netcdf-4.8.1_impi-2017.2.174
+source /usr/share/Modules/3.2.10/init/bash
+module purge
+module load intel-comp/20 impi/2019.9.304
+export LD_LIBRARY_PATH=$R/opt/lib:$NC/lib:$LD_LIBRARY_PATH
+B=$R/opt/ww3/bin
+E=$S/runs/natl_v5k4_jan2026_exp
+D=$S/runs/${RUN:-natl_v5k4_jan2026_prop}
+START='20260108 000000'
+STOP='20260110 000000'
+mkdir -p $D; cd $D
+for f in natl.msh natl.obc; do ln -sf $(readlink -f $E/$f) .; done
+cp $E/namelists_natl.nml $E/ST4TABUHF2.bin .
+SEDGEO=""
+[ -n "$GEO" ] && SEDGEO="-e s/^\( *RUN%FLCTH *=\).*/\1 F/ -e s/^\( *RUN%FLCK *=\).*/\1 F/"
+sed -e 's/^\( *RUN%FLSOU *=\).*/\1 F/' $SEDGEO $(readlink -f $E/ww3_grid.nml) > ww3_grid.nml
+grep -E "RUN%" ww3_grid.nml
+$B/ww3_grid > ww3_grid.out 2>&1 || { tail -40 ww3_grid.out; exit 1; }
+FORC=T
+if [ -n "$IDEAL" ]; then
+  FORC=F
+  cat > ww3_strt.inp <<INP
+\$ Idealised swell for the M1 propagation check
+  1
+  0.08  0.01  270.  2  -25.  3.  47.  3.  3.0
+INP
+  $B/ww3_strt > ww3_strt.out 2>&1 || { tail -30 ww3_strt.out; exit 1; }
+  tail -5 ww3_strt.out
+else
+  for f in current.ww3 level.ww3 ice.ww3 nest.ww3; do ln -sf $(readlink -f $E/$f) .; done
+  ln -sf $E/restart001.ww3 restart.ww3
+fi
+cat > ww3_shel.nml <<NML
+! Propagation only (RUN%FLSOU = F) from restart001.ww3 of natl_v5k4_jan2026_exp.
+&DOMAIN_NML
+  DOMAIN%START  = '$START'
+  DOMAIN%STOP   = '$STOP'
+/
+&INPUT_NML
+  INPUT%FORCING%WATER_LEVELS = '$FORC'
+  INPUT%FORCING%CURRENTS     = '$FORC'
+  INPUT%FORCING%WINDS        = 'F'
+  INPUT%FORCING%ICE_CONC     = '$FORC'
+/
+&OUTPUT_TYPE_NML
+  TYPE%FIELD%LIST = 'HS T02'
+/
+&OUTPUT_DATE_NML
+  DATE%FIELD%START  = '$START'
+  DATE%FIELD%STRIDE = '3600'
+  DATE%FIELD%STOP   = '$STOP'
+/
+NML
+cat > ww3_ounf.nml <<NML
+&FIELD_NML
+  FIELD%TIMESTART  = '$START'
+  FIELD%TIMESTRIDE = '3600'
+  FIELD%TIMECOUNT  = '49'
+  FIELD%LIST       = 'HS T02'
+  FIELD%SAMEFILE   = T
+  FIELD%TYPE       = 4
+/
+&FILE_NML
+  FILE%PREFIX  = 'ww3.'
+  FILE%NETCDF  = 4
+/
+NML
+NP=$(wc -l < $PBS_NODEFILE)
+echo "ranks: $NP  nodes: $(sort -u $PBS_NODEFILE | tr '\n' ' ')"
+t0=$(date +%s)
+mpirun -np $NP -machinefile $PBS_NODEFILE $B/ww3_shel > ww3_shel.out 2>&1
+t1=$(date +%s)
+echo "ww3_shel wall: $((t1-t0)) s"
+grep -E "Elapsed|Initialization" ww3_shel.out
+$B/ww3_ounf > ww3_ounf.out 2>&1
+echo "ww3_ounf wall: $(( $(date +%s)-t1 )) s"
+ls -la

@@ -1,0 +1,33 @@
+[package]
+name = "hww3-wave"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "GPU kernels of the WAVEWATCH III explicit N scheme on HWW3 grids (CubeCL and Burn, or CUDA C)"
+repository = "https://github.com/jmdelouis/HWW3"
+
+[features]
+default = ["cubecl"]
+# CubeCL kernels with Burn tensors and tape (needs glibc >= 2.34 to build: cubecl-llvm)
+cubecl = ["dep:burn", "dep:burn-cubecl", "dep:burn-autodiff", "dep:cubecl", "dep:futures-lite"]
+# fallback: CUDA C kernels compiled with NVRTC, launched through cudarc
+cuda-c = ["dep:cudarc"]
+
+[dependencies]
+rayon = "1"
+serde_json = "1"
+anyhow = "1"
+# Burn without fusion, so that a float tensor's primitive is a plain CubeCL tensor
+burn = { version = "0.22.1", default-features = false, features = ["std", "cuda", "autodiff", "extension"], optional = true }
+burn-cubecl = { version = "0.22.1", default-features = false, features = ["std", "cuda"], optional = true }
+burn-autodiff = { version = "0.22.1", default-features = false, features = ["std"], optional = true }
+cubecl = { version = "0.11.4", default-features = false, features = ["std", "cuda"], optional = true }
+futures-lite = { version = "2", optional = true }
+cudarc = { version = "0.19.10", default-features = false, features = ["std", "driver", "nvrtc", "fallback-dynamic-loading", "cuda-version-from-build-system"], optional = true }
+
+[[bin]]
+name = "hww3-prop"
+required-features = ["cubecl"]
+
+[profile.release]
+opt-level = 3
