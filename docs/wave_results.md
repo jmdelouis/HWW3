@@ -480,14 +480,38 @@ Ungava Bay (ice concentration up to 0.4) and, once, in a Labrador Sea storm
 within 1 mm an hour later. In the Labrador Sea, 7.92 against 8.07 m for one
 hour.
 
-These spikes are not round-off. The same 48 h in double precision on the
-GPU (job 4162035) has the same spikes at the same nodes and hours, while
-the two GPU runs differ by at most 4 mm. They are also larger than the
-millimetre differences of the first three steps. So at these nodes WW3 and
-the GPU model compute something differently for an hour. The cause is not
-found yet. WW3 is writing restarts every 10 minutes from 9 January 00:50
-to 02:00 (job 4162053), to compare the full spectra at node 79649 during
-its spike.
+The same 48 h in double precision on the GPU (job 4162035) has the same
+spikes at the same nodes and hours. The two GPU runs differ by 0.14 µm in
+$H_s$ at the median node, and at most by 4.2 mm RMS (2.6 cm in one hour) at
+the same Lofoten node, 77687. WW3 then wrote restarts every 10 minutes from
+9 January 00:50 to 02:00 (job 4162053, 11 core-hours), and `check-steps`
+compared the spectra at those times (job 4162054):
+
+- At node 79649, a coast node of a fjord at 180 m depth, the difference
+  is entirely in the highest bands, 26 to 31. These bands carry energy in
+  one model and almost none in the other, in turn: band 27 holds 1.2e-3
+  on the GPU against 1.7e-7 in WW3 at 00:50, and 5e-5 against 1.6e-3 at
+  01:50. Above the index `NKH` of the cut-off frequency, `W3SRCE`
+  replaces the spectrum by the tail of the band below. So when `NKH`
+  changes, these bands are either grown by the wind or reset.
+- From WW3's own state at 00:50, the harness at these nodes (Slurm job
+  4162062) finds that the CPU transcription of `W3SRCE` reproduces WW3 to
+  4.8e-7. The cut-off frequency agrees to 8e-8 and the limiter decisions
+  are the same, and the GPU kernel reproduces the CPU transcription to
+  4.6e-8. These nodes take up to 47 dynamic steps in a 600 s step, against
+  2.4 on average, so the high frequencies there grow fast under 3–4 m/s of
+  wind.
+
+So the source terms are right at these nodes. Where the young sea grows
+this fast near the cut-off, differences of the order of the
+single-precision round-off decide, from step to step, whether the top
+bands are grown or reset. The order of the operations, fused
+multiply-adds and the elementary functions differ between WW3 and the GPU
+and are the same in its two precisions. So the GPU runs follow each other
+more closely than they follow WW3. This is the high-frequency cause seen
+in the first steps, amplified where the dynamic step is shortest. It
+leaves the median and the 99th percentile four orders of magnitude below
+the targets.
 
 ## Milestone M2b: the full ST4 (in progress)
 
@@ -545,3 +569,28 @@ after each of the first three steps (largest 4.4 mm). Over 48 h from
 The worst node, 134247 on the Normandy coast at 6.8 m of depth, has the
 same one-hour spikes as in M2a (1.94 against 2.08 m on 9 January 01 h). One
 A100 runs the 48 h 11.7 times as fast as 32 cores.
+
+### The week against the explicit run of grid v5 $K=4$
+
+The GPU model with the full ST4 ran 1–8 January from the restart written
+after the first step of a 1 h cold-started WW3 run with the calibrated
+namelists (Slurm job 4162036, 360 s on 32 ranks, 3 core-hours). It is
+compared with `natl_v5k4_jan2026_exp`, the explicit run made on Datarmor,
+whose hourly fields were copied to hpc (GPU job 4162038, comparison
+4162039, scores 4162040):
+
+| $H_s$: median / p99 / max | $T_{m02}$: median / p99 / max | Energy | GPU |
+|---|---|---|---|
+| 2.2 µm / 0.10 mm / 3.0 cm | 6.2e-6 / 4.8e-4 / 0.25 s | 1.2e-5 | 868 s, 124 s per model day |
+
+| | WW3 (`natl_v5k4_jan2026_exp`) | GPU |
+|---|---|---|
+| Altimeters, 45,518 blocks: bias / RMSE of $H_s$ | −1.5034 / 28.2527 cm | −1.5034 / 28.2527 cm |
+| Buoys, 252: bias / RMSE of $H_s$ | −5.3770 / 32.4627 cm | −5.3770 / 32.4627 cm |
+| Buoys, 171: bias / RMSE of $T_{m02}$ | −0.4238 / 1.2095 s | −0.4238 / 1.2095 s |
+
+The scores of the WW3 run are those of its validation on Datarmor
+(`results/natl_v5k4_jan2026_exp_val_stats.json`). The nodes above 1 cm are
+the same kind as in M2a: Ungava Bay, the Gulf of Finland, Svalbard, the
+Canadian Arctic, the Orinoco delta. Grid v4 remains, for the comparison
+with its explicit run and the speed target of 430 s per model day.

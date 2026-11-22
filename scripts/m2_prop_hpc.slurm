@@ -23,8 +23,9 @@
 #   CARGO_TARGET_DIR=$S/target_wave cargo build --release --bin hww3-prop
 
 S=/scratch/jmdeloui/HWW3
-D=$S/m2/forcing
-G=$S/grids/natl_v5k4
+# forcing and grid (FORCING=$S/m2/forcing_v4 GRID=$S/grids/natl_v4 for grid v4)
+D=${FORCING:-$S/m2/forcing}
+G=${GRID:-$S/grids/natl_v5k4}
 B=${BIN:-$S/target_wave/release/hww3-prop}
 J=$SLURM_JOB_ID
 P=$S/m2/harness/${PARAMS:-src_8jan_c.bin.params}

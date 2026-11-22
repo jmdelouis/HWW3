@@ -713,9 +713,12 @@ Datarmor.
   0.09 and 0.11 mm at the 99th percentile (targets 2.1 cm and 20 cm), and
   the altimeter and buoy scores of the week are WW3's to 1 µm (jobs
   4139369 to 4139371). One A100 takes 146 s per model day. A few nodes
-  (8 of 371,000) have one-hour spikes of up to 23 cm, which a
-  double-precision run reproduces exactly. Their cause is being looked for
-  with WW3 restarts during one of them.
+  (8 of 371,000) have one-hour spikes of up to 23 cm in the highest
+  frequency bands. These are young seas that take up to 47 dynamic steps
+  per step, where round-off-level differences decide whether the bands
+  above the cut-off are grown or reset to the tail. From WW3's own state
+  the source terms agree to 4.8e-7 there (jobs 4162035, 4162053, 4162054
+  and 4162062).
 
 Details and the list of what remains are in
 [GPU model results](wave_results.md).
@@ -735,8 +738,13 @@ Details and the list of what remains are in
   the harness nodes (job 4139172). Over 48 h from 8 January, the RMS
   difference in $H_s$ is 2.0 µm at the median node, 77 µm at the 99th
   percentile and 2.1 cm at worst (job 4162034 against 4139131), at
-  127 s per model day on one A100, 11.7 times 32 cores. The week and its
-  scores against `natl_v5k4_jan2026_exp` are next.
+  127 s per model day on one A100, 11.7 times 32 cores.
+- **Week on grid v5 $K=4$.** Against the explicit run
+  `natl_v5k4_jan2026_exp` over 1–8 January, the RMS difference in $H_s$
+  is 2.2 µm at the median node and 0.10 mm at the 99th percentile. The
+  altimeter and buoy scores are those of WW3 to 1 µm, at 124 s per model
+  day (jobs 4162038 to 4162040). Grid v4 (its explicit run and the speed
+  target) is next.
 
 ## 10. Other routes, briefly
 

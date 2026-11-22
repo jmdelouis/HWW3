@@ -31,8 +31,10 @@ S=/scratch/jmdeloui/HWW3
 MODE=${MODE:-dev}
 ST4=${ST4:-simplified}
 FLIST=${FLIST:-HS T02 FP DIR WND ICE CUR WLV}
-I=$S/runs/test_grid_v5k4
-FO=$S/m2/forcing
+# grid set-up (natl.msh, natl.obc, ww3_grid.nml, namelists_natl.nml) and forcing;
+# SETUP=$S/runs/setup_v4 FORCING=$S/m2/forcing_v4 for grid v4
+I=${SETUP:-$S/runs/test_grid_v5k4}
+FO=${FORCING:-$S/m2/forcing}
 D=$S/runs/m2_$MODE${TAG}
 B=$S/opt/ww3/bin
 source /etc/profile.d/modules.sh
@@ -66,7 +68,7 @@ for f in wind.ww3 current.ww3 level.ww3 ice.ww3 nest.ww3; do ln -sf $FO/$f .; do
 rm -f restart.ww3
 [ "$MODE" = dev ] && ln -sf $S/m1/v5k4/restart001.ww3 restart.ww3
 cat > ww3_shel.nml <<NML
-! HWW3 North Atlantic, grid v5 K=4, explicit scheme, ST4 $ST4 (simplified:
+! HWW3 North Atlantic, set-up $(basename $I), explicit scheme, ST4 $ST4 (simplified:
 ! SINTABLE = 0, SDSCUM = 0; full: as calibrated): M2 reference, mode $MODE.
 &DOMAIN_NML
   DOMAIN%START  = '$START'
