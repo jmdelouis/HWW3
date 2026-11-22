@@ -1815,10 +1815,14 @@ terms are the DIA (\texttt{W3SNL1}), \texttt{W3SLN1}, \texttt{W3SDB1} and
 settings, everything else as in the grid v5 $K=4$ explicit run. The first
 covers 48 hours from the restart of 8 January (Slurm job 4122569,
 27 core-hours on 32 cores, with restarts after the first three steps). The
-second is a cold-started week, 1--8 January (job 4122614, 64 cores). The
-48-hour run takes \SI{64}{s} per model hour on 32 cores against \SI{17}{s}
-with the propagation alone: in WW3 the source terms cost about three
-times the propagation.
+second is a cold-started week, 1--8 January (job 4122614, 88 core-hours
+on 64 cores). The 48-hour run takes \SI{64}{s} per model hour on 32 cores
+against \SI{17}{s} with the propagation alone: in WW3 the source terms
+cost about three times the propagation. The validation scripts run
+unchanged on the hpc cluster. Over 4--7 January the week scores a bias of
+\SI{+1.2}{cm} and an RMSE of \SI{28.4}{cm} against 45\,518 altimeter
+blocks (\SI{-1.5}{cm} and \SI{28.3}{cm} for the calibrated explicit run),
+and \SI{-3.6}{cm} and \SI{32.2}{cm} against 252 buoys (job 4139219).
 \item \emph{Harness.} A Fortran program linked against the hpc WW3 library
 calls the routines of \texttt{W3SRCE} node by node. It writes their
 inputs and outputs, and the WW3 parameters and tables they read.
@@ -1827,38 +1831,84 @@ term and of the whole \texttt{W3SRCE} integration reproduce WW3 on 1\,869
 nodes to the round-off of its single precision (Table~\ref{tab:m2src}).
 The dynamic steps (1 to 60 per node) and the decisions of the limiter are
 the same at every node.
+\item \emph{GPU kernel.} One CubeCL launch runs the whole \texttt{W3SRCE}
+integration of a step, one block of 128 threads per node with the
+spectrum in shared memory. On the harness nodes it reproduces WW3 to
+$3.1\times10^{-6}$ in single precision (\SI{0.9}{\micro\metre} in $H_s$),
+with the same number of dynamic steps at every node (job 4138915). A step
+of source terms on 373\,800 nodes takes \SI{0.97}{s} on one A100, so 48
+hours of grid v5 $K=4$ should take about \SI{345}{s} with the
+propagation.
+\item \emph{Time loop.} \texttt{hww3-prop} runs the source kernel after the
+propagation of each step, with the wind interpolated as \texttt{W3UWND}
+does and taken relative to the current. After the first three steps from
+the restart of 8 January, $H_s$ agrees with the WW3 restarts within
+\SI{1}{mm} at all but 13 of 371\,000 nodes, \SI{7.9}{mm} at most (job
+4138987). The remaining differences sit in the high-frequency bands of a
+few nodes, probably discrete decisions (tail index, number of dynamic
+steps) taken differently near a threshold; this is not verified yet.
 \end{itemize}
 What remains for M2a:
 \begin{itemize}
-\item the wind forcing (\texttt{W3UWND});
-\item the GPU kernels and the time loop;
-\item the 48-hour and one-week comparisons with the references, with the
-validation scores.
+\item the 48-hour and one-week GPU runs, their comparison with the
+references and their scores, chained on the hpc cluster and waiting for
+a GPU;
+\item the observation operators and the first finite-difference
+gradients.
 \end{itemize}
+
+\paragraph{Milestone M2b (started).} M2b runs the source terms of the
+calibrated configuration, with the stress tables of \texttt{INSIN4}
+(\texttt{SINTABLE = 1}) and the directional cumulative breaking term of
+\texttt{W3SDS4} (\texttt{SDSCUM = -0.40}, through the matrix
+\texttt{CUMULW}). Both are WW3 defaults, so the namelists of the explicit
+runs are used unchanged.
+\begin{itemize}
+\item The WW3 reference covers 48 hours from the restart of 8 January,
+with restarts after the first three steps (Slurm job 4139131, \SI{50}{min}
+on 32 cores).
+\item The harness also writes the stress tables and \texttt{CUMULW}. The
+CPU ports with these branches reproduce WW3 as closely as in M2a
+(Table~\ref{tab:m2src}, job 4139132), with the same flags and limiter
+decisions at every node.
+\item The GPU kernel has the same branches; \texttt{CUMULW} depends only on
+the two frequencies and the direction difference, and goes to the device
+as a table of $32\times32\times36$ values. Its check, and the GPU runs,
+wait for a GPU.
+\end{itemize}
+The targets of M2b are those of M2a, against the existing explicit runs on
+grids v5 $K=4$ and v4, and at least ten times the speed of the Fortran
+explicit scheme, i.e. under \SI{430}{s} per model day on grid v4.
 
 \begin{table}[H]
 \centering\small
-\begin{tabular}{lr}
+\begin{tabular}{lrr}
 \toprule
-routine & largest relative difference \\
+routine & M2a & M2b \\
 \midrule
-\texttt{W3SPR4}, \texttt{CALC\_USTAR} & $2.6\times10^{-6}$ \\
-\texttt{W3SIN4} (tail stress in line) & $3.4\times10^{-6}$ \\
-\texttt{W3SLN1} & $5.3\times10^{-6}$ \\
-\texttt{W3SNL1} (DIA) & $1.1\times10^{-6}$ \\
-\texttt{W3SDS4} (no cumulative term) & $1.7\times10^{-5}$ \\
-\texttt{W3SDB1} & $3.6\times10^{-8}$ \\
-\texttt{W3SBT4} & $5.0\times10^{-5}$ \\
-\texttt{W3SRCE}, spectrum after \SI{600}{s} & $4.3\times10^{-6}$ \\
-\texttt{W3SRCE}, mean dynamic step & $8.9\times10^{-6}$ \\
+\texttt{W3SPR4}, \texttt{CALC\_USTAR} & $2.6\times10^{-6}$ & $1.5\times10^{-7}$ \\
+\texttt{W3SIN4} & $3.4\times10^{-6}$ & $4.1\times10^{-6}$ \\
+\texttt{W3SLN1} & $5.3\times10^{-6}$ & \\
+\texttt{W3SNL1} (DIA) & $1.1\times10^{-6}$ & \\
+\texttt{W3SDS4} & $1.7\times10^{-5}$ & $1.7\times10^{-5}$ \\
+\texttt{W3SDB1} & $3.6\times10^{-8}$ & \\
+\texttt{W3SBT4} & $5.0\times10^{-5}$ & \\
+\texttt{W3SRCE}, spectrum after \SI{600}{s} & $4.3\times10^{-6}$ & $3.9\times10^{-6}$ \\
+\texttt{W3SRCE}, mean dynamic step & $8.9\times10^{-6}$ & $1.3\times10^{-5}$ \\
+\texttt{W3SRCE} on the GPU, single precision & $3.1\times10^{-6}$ & \\
 \bottomrule
 \end{tabular}
-\caption{Milestone M2a: double-precision CPU ports of the source terms
-against WW3 on 1\,869 nodes of the restart of 8 January 2026 00\,h (Slurm
-job 4123121). Largest difference over the nodes, relative to WW3, or to
-the largest value of the node for spectra. The tables WW3 interpolates in
-single precision (error function, friction factor) set the larger values
-of \texttt{W3SDS4} and \texttt{W3SBT4}.}
+\caption{Milestones M2a and M2b: double-precision CPU ports of the source
+terms against WW3 on 1\,869 nodes of the restart of 8 January 2026 00\,h
+(Slurm jobs 4123121 and 4139132), and the GPU kernel of M2a (job 4138915).
+Largest difference over the nodes, relative to WW3, or to the largest
+value of the node for spectra. M2a: simplified ST4 (no stress tables, no
+cumulative term). M2b: the calibrated ST4, given for the routines whose
+code changes (\texttt{CALC\_USTAR} with \texttt{TAUT}, the tail stress of
+\texttt{W3SIN4} with \texttt{TAUHFT2}, the cumulative term of
+\texttt{W3SDS4}). The tables WW3 interpolates in single precision (error
+function, friction factor) set the larger values of \texttt{W3SDS4} and
+\texttt{W3SBT4}.}
 \label{tab:m2src}
 \end{table}
 
