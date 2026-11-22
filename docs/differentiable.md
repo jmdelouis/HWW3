@@ -1,6 +1,8 @@
 # Differentiable WW3 on GPU in Rust: design and cost
 
-*Design note, November 2026. Nothing described here is implemented yet.*
+*Design note, November 2026. Milestone M0 has been run (section 9.1):
+the N-scheme sweep and its transpose on one A100. Nothing else described
+here is implemented yet.*
 
 The aim is the gradient of the misfit between the HWW3 WAVEWATCH III
 configuration and the observations already used for validation: along-track
@@ -27,11 +29,12 @@ estimates use:
 | Scope | The HWW3 explicit configuration only: N scheme (`EXPFSN`), ST4, DIA (`NL1`), `LN1`, `DB1`, `BT4`, `MLIM`, ice as an obstruction (`IC0`), currents, sea level, open-boundary spectra, on the `hww3-grid` mesh, on one A100. |
 | Fortran to port | About 7,400 active lines (19,200 raw lines) out of the 259,054 lines of `model/src`. The physics (ST4, DIA, LN1, DB1, BT4, source integration) is 2,157 active lines; the propagation is 1,432. |
 | Decisions (21 November 2026) | Kernels in CubeCL, with Burn for tensors, tape and checkpointing. Only the CUDA crates are installed (no Rust nightly with Enzyme for now). ST4 is simplified first, then ported in full: the aim is a complete WW3. The first target is M2, with finite-difference gradients, before any adjoint work. |
+| Milestone M0 (22 November 2026) | **Go.** The CubeCL kernels, driven through Burn, run the N-scheme sweep and its transpose on one A100 of the Ifremer hpc cluster. One frequency sweep on grid v4 takes 0.93 ms in single precision, under the 1.3 ms threshold. The dot-product tests pass, and Burn's `backward()` returns the transpose kernel's output exactly. CubeCL does not build on Datarmor (glibc 2.19), so development continues on the hpc cluster. |
 | Smallest useful version | The forward model on GPU, validated against the Fortran explicit runs. Gradients with respect to a handful of parameters (`BETAMAX` first) then come from finite differences in double precision, with no AD code. |
 | Cost to that point | **M2a**, with a simplified ST4 that WW3 also runs (`SINTABLE = 0`, `SDSCUM = 0`): 26–52 person-weeks for one developer who knows WW3, Rust and GPUs (central value about 35), or 10–28 weeks of Jean-Marc's time with coding assistants writing most of the code (central value about 16). **M2b**, with the full ST4: 30–59 person-weeks (about 40), or 11–31 weeks of his time (about 18). |
 | Cost to reverse mode for the fields (milestone M4) | 52–98 person-weeks for one developer (central value about 70). For Jean-Marc with assistants: 17–48 weeks (central value about 30). |
 | AD in Rust on GPU today | No tool differentiates Rust GPU kernels automatically. The kernels are written in CubeCL, with Burn for tensors and the tape. The adjoint of the propagation is written by hand: it is the transposed operator. The adjoints of the source terms are written by hand too, or the source terms are written as Burn tensor operations so that Burn differentiates them. `std::autodiff` (Enzyme) works on the CPU only; it is not installed for now, and the reference derivatives come from finite differences in double precision. |
-| Expected speed | 40–550 s per model day on one A100 for grid v4, against 4,318 s for the Fortran explicit scheme on 112 cores: 8 to 100 times faster. The micro-benchmark of milestone M0 narrows this range. |
+| Expected speed | 40–550 s per model day on one A100 for grid v4, against 4,318 s for the Fortran explicit scheme on 112 cores: 8 to 100 times faster. Milestone M0 measured the geographic propagation alone: 14.8 s per model day on grid v4 and 6.2 s on grid v5 $K=4$, 1.5 times the bandwidth estimate. |
 | Biggest cost drivers | How faithful the ST4 port must be; hand-written adjoints of the source terms; debugging against the Fortran. |
 
 ## 1. Scope
@@ -275,12 +278,12 @@ Calendar time depends on his availability. At half time, M2a takes roughly
 
 | tool | state | use here |
 |---|---|---|
-| Burn 0.22 with the CubeCL backends | Tape-based reverse mode over tensor operations (`Autodiff<B>`). Balanced gradient checkpointing is available. Custom CubeCL kernels are opaque to the tape and need a hand-written backward. CUDA, ROCm, Vulkan and WebGPU. | **chosen**: tensors and tape; custom kernels for the propagation (hand backward); source terms either as tensor operations (automatic backward) or as fused kernels (hand backward) |
-| CubeCL | Rust GPU kernels (`#[cube]`), compiled just in time to CUDA, HIP or WGSL, generic over the float type (f32 or f64) | **chosen**: language of all kernels |
+| Burn 0.22 with the CubeCL backends | Tape-based reverse mode over tensor operations (`Autodiff<B>`). Balanced gradient checkpointing is available. Custom CubeCL kernels are opaque to the tape and need a hand-written backward. CUDA, ROCm, Vulkan and WebGPU. | **chosen**: tensors and tape; custom kernels for the propagation (hand backward); source terms either as tensor operations (automatic backward) or as fused kernels (hand backward). M0: a sub-step of the N scheme works as a tape operation whose backward is the transpose kernel |
+| CubeCL | Rust GPU kernels (`#[cube]`), compiled just in time to CUDA, HIP or WGSL, generic over the float type (f32 or f64). Version 0.11 needs glibc 2.34: it builds on the Ifremer hpc cluster, not on Datarmor (glibc 2.19) | **chosen**: language of all kernels. M0: as fast as the same kernels in CUDA C (3 % slower to 11 % faster), and f64 works |
 | `std::autodiff` (Enzyme) | Nightly Rust: `rustup component add enzyme`, `lto = "fat"`, `-Zautodiff=Enable`; experimental, CPU. `std::offload` (GPU) is planned but was not confirmed in nightly. | not installed for now. It could later give reference derivatives of the per-node source functions on the CPU; until then the references are finite differences in double precision |
 | `rustc_codegen_nvvm` (Rust-CUDA) | Rebooted in 2025, pinned nightly, last crates.io release 2022 | not recommended |
-| NVIDIA CUDA Rust: `cuda-oxide` (SIMT) and `cutile-rs` (tiles) | Announced September 2026, experimental. `cuda-oxide` 0.3 (October 2026) needs a pinned nightly and CUDA 12 or later; `cutile-rs` needs CUDA 13.3 (Datarmor modules stop at CUDA 12.1). Both need compute capability 8.0 (A100). | a later option for kernels in ordinary generic Rust, where dual numbers would work |
-| `cudarc` with CUDA C kernels (NVRTC) | Stable and widely used; CubeCL's CUDA backend is built on it | fallback if M0 shows CubeCL too limiting |
+| NVIDIA CUDA Rust: `cuda-oxide` (SIMT) and `cutile-rs` (tiles) | Announced September 2026, experimental. `cuda-oxide` 0.3 (October 2026) needs a pinned nightly and CUDA 12 or later; `cutile-rs` needs CUDA 13.3 (the driver of the Datarmor A100 nodes supports CUDA 11.4 at most; the hpc cluster has CUDA 13.0). Both need compute capability 8.0 (A100). | a later option for kernels in ordinary generic Rust, where dual numbers would work |
+| `cudarc` with CUDA C kernels (NVRTC) | Stable and widely used; CubeCL's CUDA backend is built on it | M0 fallback, not needed. It runs the same kernels on the Datarmor A100s, compiled with the NVRTC of CUDA 11.4, as a cross-check |
 
 **What must be written by hand, in every option:**
 
@@ -289,7 +292,10 @@ Calendar time depends on his availability. At half time, M2a takes roughly
     $N^{m+1} = L_c N^m$ for each component $c$. The $I_c$ sub-steps of a
     600 s step use the same $L_c$, so the adjoint is $(L_c^T)^{I_c}$. It is
     the same triangle loop with gather and scatter swapped, and it needs no
-    stored sub-steps. Dot-product tests check it to machine precision.
+    stored sub-steps. Dot-product tests check it to machine precision. At
+    M0 they pass to round-off: normwise errors of at most
+    $2.2 \times 10^{-10}$ in single precision, relative errors of at most
+    $1.4 \times 10^{-12}$ in double precision (section 9.1).
   - Derivatives with respect to depth, sea level and currents go through
     $c_g$ and need the sub-step states, which are recomputed per frequency.
 - **The adjoint of the spectral propagation.** It is linear and transposed
@@ -305,7 +311,8 @@ Calendar time depends on his availability. At half time, M2a takes roughly
 
 - Finite differences in double precision on the GPU cost no code: CubeCL
   kernels are generic over f64. For $p$ parameters they need $p+1$ forward
-  runs.
+  runs. At M0 a double-precision sweep costs 1.9 times a single-precision
+  one.
 - Tangent kernels give the exact directional derivative in one run with
   $p$ tangent lanes and need no checkpointing.
 - Dual numbers carried by generic kernels would avoid writing tangent
@@ -327,7 +334,7 @@ the effective bandwidth for gather-heavy kernels, and 8 TFLOP/s of FP32
 
 | per 600 s step, grid v4 | work | time |
 |---|---|---|
-| geographic propagation | $\sum_f \max_\theta I = 110$ frequency sweeps × 794,613 nodes × about 800 B (row of 36 directions read and written, neighbour rows, coefficients) = 70 GB | 0.07 s |
+| geographic propagation | $\sum_f \max_\theta I = 110$ frequency sweeps × 794,613 nodes × about 800 B (row of 36 directions read and written, neighbour rows, coefficients) = 70 GB | 0.07 s (measured at M0: 0.103 s) |
 | spectral propagation | about four passes over the state, 30 GB | 0.03 s |
 | one source evaluation | about $1.5 \times 10^6$ flop per node, dominated by the ST4 cumulative term (a matrix product over the lower frequencies, circulant in direction) = 1.2 TFLOP | 0.15 s |
 | sources | 1 to 4 evaluations per step on average (WW3's dynamic step) | 0.15–0.6 s |
@@ -351,6 +358,17 @@ Depending on how the WAM6-GPU time splits between propagation and sources
   Fortran explicit scheme on 112 cores: 8–100 times faster.
 - **Grid v5 $K=4$:** about half of the v4 figure (fewer nodes, 83 frequency
   sweeps instead of 110), against 2,601 s.
+- **Measured at M0 (geographic propagation only, single precision).**
+  - One 600 s step takes 0.103 s on grid v4 (14.8 s per model day) and
+    0.043 s on grid v5 $K=4$ (6.2 s). The transposed step takes 16.4 and
+    7.0 s per model day.
+  - That is 1.5 times the bandwidth estimate. The kernels move 156 to
+    339 GB/s: instruction count and gather latency bound them, not DRAM
+    bandwidth.
+  - Computing the coefficients of the 32 frequencies again at every step,
+    when the currents or the sea level change, adds about 11 %.
+  - With this time the bandwidth estimate for grid v4 becomes 41–106 s
+    per model day; the full range stays 40–550 s.
 - **The lower end** is reached with fused kernels and one or two source
   evaluations per step.
 - **Burn tensor operations for the sources** put the speed-up nearer to the
@@ -358,7 +376,8 @@ Depending on how the WAM6-GPU time splits between propagation and sources
 - **The simplified ST4 of M2a** has no directional cumulative term. A source
   evaluation is then limited by memory traffic (about 20 GB, 0.02 s) rather
   than by flops. The bandwidth estimate falls to 17–26 s per model day on
-  grid v4, set by the propagation.
+  grid v4, set by the propagation; with the geographic propagation
+  measured at M0 it is 22–31 s.
 - **A 7-day forward run on grid v5 $K=4$** should take between 2 and
   30 minutes.
 
@@ -533,7 +552,7 @@ coastal-scale corrections can therefore be computed on uniform maps.
 
 | milestone | content | go if | pw (one developer) |
 |---|---|---|---|
-| M0 | Rust stable with the CubeCL and Burn crates and their CUDA backend on a Datarmor A100; N-scheme sweep and its transpose on grids v4 and v5 $K=4$ with the sub-cycling of `cfl.rs` | a frequency sweep on grid v4 within twice the bandwidth estimate (about 1.3 ms); dot-product test passes; the toolchain builds on the GPU nodes with the CUDA 12.1 module. Otherwise switch the kernels to `cudarc` and CUDA C | 1–2 |
+| M0 | Rust stable with the CubeCL and Burn crates and their CUDA backend on one A100; N-scheme sweep and its transpose on grids v4 and v5 $K=4$ with the sub-cycling of `cfl.rs` | a frequency sweep on grid v4 within twice the bandwidth estimate (about 1.3 ms); dot-product test passes; the toolchain builds and runs on the GPU nodes. Otherwise switch the kernels to `cudarc` and CUDA C. **Done: go** (section 9.1) | 1–2 |
 | M1 | propagation-only model: geographic and spectral propagation, depth, currents, sea level, boundary spectra, ice mask, restart reader | the propagation-only targets of section 6 | 10–18 |
 | M2a | forward model with the simplified ST4 (`SINTABLE = 0`, `SDSCUM = 0`), DIA, LN1, DB1, BT4, integration and limiter, outputs, observation operators | the targets with sources of section 6 against the WW3 run with the same settings. **First gradients:** finite differences in double precision for `BETAMAX` and a few parameters, at GPU speed, to build and test the calibration chain | 15–32 |
 | M2b | full ST4: the stress tables `TAUT`, `TAUHFT`, `TAUHFT2` and the directional cumulative term (`SDSCUM = −0.40`) | the targets with sources of section 6 against the existing explicit runs, and at least 10 times the Fortran explicit speed (under 430 s per model day on grid v4). **First scientific gradients** with respect to the parameters of the calibrated configuration | 4–7 |
@@ -547,6 +566,88 @@ Two decision points follow from the plan:
   (finite differences or M3) are enough for the first scientific results.
 - **Before M4,** choose between hand-written fused adjoints and Burn tensor
   operations for the source terms, based on the M0 and M2 timings.
+
+### 9.1 Result of M0 (21–22 November 2026)
+
+**Go: the three criteria are met.** M1 started on 22 November 2026.
+
+**What was built.** The crate `hww3-wave` reads an HWW3 grid and builds
+what WW3 builds for `PDLIB_W3XYPFSN2`: inward normals, the boundary flags,
+the nodal velocities and `ITER(f, θ)`. It holds the explicit N-scheme
+sweep and its transpose in three variants, each in CubeCL and in CUDA C.
+
+- All variants are gathers over the triangles around a node, with no
+  atomics.
+- `two_phase_x4` computes the triangle values first, then gathers them at
+  the nodes, four directions per thread.
+- The sub-cycling matches `scripts/explicit_cost.py`: $S$ = 3,678 on grid
+  v4 (110 frequency sweeps per step) and 2,837 on grid v5 $K=4$ (83).
+
+**Platforms.**
+
+- **Datarmor.** CubeCL 0.11, the version Burn 0.22 needs, does not build:
+  its CUDA backend needs a prebuilt LLVM that requires glibc 2.34, and
+  Datarmor has glibc 2.19. The driver of the A100 nodes (470.239.06)
+  supports CUDA 11.4 at most, so PTX from the NVRTC of the CUDA 12.1
+  module is rejected (PBS job 7964674).
+- **Ifremer hpc cluster.** CubeCL and Burn build and run there: RHEL 9.4,
+  glibc 2.34, A100-SXM4-80GB (the same GPU as Datarmor), CUDA 13.0. This
+  answers decision 1: CubeCL with Burn, developed on the hpc cluster.
+- **Fallback.** The same kernels in CUDA C, compiled by the NVRTC of
+  CUDA 11.4 and launched through `cudarc`, run on a Datarmor A100 (PBS
+  job 7964774). They stay as a cross-check.
+
+**Sweep times**, single precision, `two_phase_x4`, one A100. CubeCL is
+Slurm job 4115275 on the hpc cluster; CUDA C is PBS job 7964774 on
+Datarmor.
+
+| grid | forward sweep, CubeCL / CUDA C | transpose sweep, CubeCL / CUDA C | 600 s step (CubeCL), forward / transpose | s per model day (CubeCL), forward / transpose |
+|---|---|---|---|---|
+| v4 | 0.93 / 0.95 ms | 1.03 / 1.07 ms | 0.103 / 0.114 s | 14.8 / 16.4 |
+| v5 $K=4$ | 0.51 / 0.50 ms | 0.58 / 0.57 ms | 0.043 / 0.048 s | 6.2 / 7.0 |
+| Channel–Biscay box (v4) | 0.033 / 0.033 ms | 0.034 / 0.035 ms | 3.0 / 3.1 ms | 0.43 / 0.45 |
+
+- **Against the threshold.** On grid v4, 0.93 ms against 1.3 ms, and
+  1.5 times the bandwidth estimate of 0.64 ms. A simpler kernel with one
+  thread per (node, direction) takes 1.95 ms; computing the triangle
+  values first brings it to 1.26 ms.
+- **CubeCL against CUDA C.** From 3 % slower to 11 % faster in single
+  precision. Writing the kernels in Rust costs nothing measurable here.
+- **Double precision.** 1.9 times single precision (1.77 ms on grid v4).
+  It works in CubeCL; the block size of the f64 kernels was not tuned.
+- **What the times cover.** The geographic propagation only: no spectral
+  propagation, no source terms, no checkpointing.
+
+**Checks.**
+
+- **Dot-product tests**
+  $\langle L\,\delta x, \bar y\rangle = \langle \delta x, L^T \bar y\rangle$
+  for one sub-step and for a 600 s step of frequencies 1, 17 and 32, on
+  the three grids, with both backends:
+  - single precision: normwise errors of at most $2.2 \times 10^{-10}$
+    (relative errors up to $3.1 \times 10^{-6}$ where the products
+    cancel, on grid v5 $K=4$);
+  - double precision: relative errors of at most $1.4 \times 10^{-12}$.
+- **Through Burn.** With a sub-step as an operation of Burn's tape, the
+  test passes with a relative error of $3.8 \times 10^{-8}$ on grid v4.
+  The gradient that `backward()` returns is identical, bit for bit, to the
+  output of the transpose kernel.
+- **Against WW3's loop.** The GPU step is compared with
+  `PDLIB_W3XYPFSN2` written as in WW3 (loop over triangles with scatter)
+  and run on the CPU in double precision. The largest difference is
+  $1.6 \times 10^{-6}$ of the largest value in single precision and
+  $2.4 \times 10^{-15}$ in double precision.
+
+**Left for later milestones.**
+
+- **The clip.** The forward step clips negative values (`max(0, ·)`); the
+  transpose of M0 is that of the linear part. The tangent and adjoint
+  steps (M3, M4) must also apply the clip mask, rebuilt from the stored
+  forward state.
+- **Coefficients.** Recomputing the triangle coefficients of the 32
+  frequencies takes 0.012 s on grid v4, about 11 % of a step, when the
+  currents or the sea level change at every step.
+- **Tuning.** The transposes are 10–14 % slower than the forward sweeps.
 
 ## 10. Other routes, briefly
 
@@ -675,7 +776,8 @@ Earlier work worth knowing:
 |---|---|
 | the Rust port departs from WW3 (splitting order, boundary flags, coastal nodes, source integration) | the propagation-only test before the sources; kernel-by-kernel harness; comparison with the existing explicit runs |
 | GPU races and single-precision accumulation in the N-scheme scatter | node-centred gather formulation (no atomics) or graph colouring; double-precision build for the checks |
-| Rust GPU tools still young (CubeCL, Burn; `cuda-oxide` experimental; GPU Enzyme not available) | M0 tests the toolchain first; fallback to `cudarc` with CUDA C kernels |
+| Rust GPU tools still young (CubeCL, Burn; `cuda-oxide` experimental; GPU Enzyme not available) | M0 passed with CubeCL and Burn (section 9.1); the same kernels in CUDA C through `cudarc` stay as a cross-check |
+| CubeCL and Burn do not build on Datarmor (glibc 2.19, A100 driver limited to CUDA 11.4) | development on the Ifremer hpc cluster (A100, glibc 2.34, CUDA 13.0); the CUDA C kernels run on the Datarmor A100s |
 | hand-written adjoints of ST4 are long and error-prone | the simplified ST4 first; forward-mode tangents first, checked against double-precision finite differences; CPU `std::autodiff` derivatives of the same per-node functions if the nightly toolchain is installed later; or Burn tensor operations for the source terms |
 | parameters and forcing compensate each other (`BETAMAX` was raised to make up for ERA5 winds that are too weak in storms) | calibrate the parameters with the forcing fixed, and the reverse, before any joint fit; $T_{m02}$ and wave-age-dependent errors; multi-scale priors |
 | memory for reverse mode on grid v4 | grid v5 $K=4$ for learning, host-memory snapshots, two GPUs (at most two per user) |
@@ -685,11 +787,15 @@ Earlier work worth knowing:
 
 1. **Kernel language.** CubeCL for the kernels, with Burn for tensors, tape
    and checkpointing. `cudarc` with CUDA C kernels remains the fallback if
-   M0 fails.
-2. **Installs on the Datarmor scratch.** The CUDA crates only: Burn, CubeCL
-   and their CUDA backend, with the stable Rust toolchain. No Rust nightly
-   with the Enzyme component for now, so the reference derivatives come from
-   finite differences in double precision.
+   M0 fails. M0 passed on 22 November 2026 (section 9.1): CubeCL with
+   Burn, developed on the Ifremer hpc cluster because CubeCL does not
+   build on Datarmor. The CUDA C kernels stay as a cross-check on
+   Datarmor.
+2. **Installs.** The CUDA crates only: Burn, CubeCL and their CUDA backend,
+   with the stable Rust toolchain, on the Datarmor and hpc scratch spaces.
+   On the hpc cluster the CubeCL build also downloads its prebuilt LLVM,
+   as agreed. No Rust nightly with the Enzyme component for now, so the
+   reference derivatives come from finite differences in double precision.
 3. **Fidelity to ST4.** A simplified ST4 first (M2a: `SINTABLE = 0`,
    `SDSCUM = 0`, which WW3 also runs), then the full ST4 (M2b). The aim is a
    complete WW3.
