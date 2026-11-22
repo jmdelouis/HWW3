@@ -60,6 +60,10 @@ Adding the FES2014 tide to the Copernicus currents and sea level leaves the
 altimeter scores unchanged and lowers the buoy $T_{m02}$ RMSE from 1.32 to
 \SI{1.26}{s}, mostly at the shallow buoys of the English Channel, where the
 model now follows the tidal modulation of $H_s$ and $T_{m02}$.
+A differentiable WW3 written in Rust for one GPU, aimed at learning chains,
+has been costed and started. On an A100 its N-scheme propagation sweep and
+the transposed sweep take about \SI{1}{ms} per frequency on grid v4, and
+the geographic propagation costs \SI{15}{s} per model day.
 \end{abstract}
 
 \section{Motivation}
@@ -877,7 +881,7 @@ difference.}
 \label{fig:v5_diff}
 \end{figure}
 
-\subsection{WW3 build and grid preprocessing}
+\subsection{WW3 build and grid preprocessing}\label{sec:build}
 WW3 \texttt{develop} (commit \texttt{dea641c}) is built on Datarmor with
 Intel Fortran 19.1.3 and Intel MPI 2019.9 (\texttt{scripts/build\_ww3.pbs},
 \SI{5.5}{min}), with the switches of \texttt{ww3/switch\_hww3}: PDLIB with
@@ -888,6 +892,26 @@ made by an old gfortran) on top of the system netCDF-C 4.8.1, and ParMETIS
 4.0.3 with METIS 5.1.0. Intel's preprocessor drops the quotes of
 \texttt{-DENDIANNESS='big\_endian'}, so \texttt{FILE\_ENDIAN} is set in
 \texttt{constants.F90} before compiling.
+
+The same commit is also built on the Ifremer hpc cluster (RHEL 9.4, Slurm).
+This build was set up on 22 November 2026, when the Datarmor scratch file
+system refused every write. \texttt{scripts/build\_ww3\_hpc.slurm} uses the
+same switches, with the oneAPI 2025.2.1 compiler \texttt{ifx}, Intel MPI and
+the system parallel netCDF modules, and takes \SI{139}{s} on 8 cores. CMake
+sets no compiler flags for \texttt{ifx}, which it identifies as IntelLLVM.
+The ifort flags of the Datarmor build that \texttt{ifx} accepts are
+therefore passed explicitly; among them, \texttt{-assume byterecl} keeps
+the record lengths of the Datarmor files. Two checks on grid v5 $K=4$
+(Section~\ref{sec:v5}) compare this build with Datarmor:
+\begin{itemize}
+\item \texttt{ww3\_grid} reproduces \texttt{mapsta.ww3} and
+\texttt{mask.ww3} bit for bit, and the ST4 stress table to within
+$8\times10^{-7}$ relative;
+\item the first \SI{6}{h} of the explicit run, from the same cold start,
+forcing and boundary spectra, match the Datarmor output over the 371\,278
+wet nodes to within \SI{1.4}{mm} in $H_s$ and \SI{4.7}{ms} in $T_{m02}$
+(Slurm jobs 4115990, 4116028 and 4116085).
+\end{itemize}
 
 The open-boundary file follows \texttt{READMSHOBC}: a comment line, then
 \texttt{index 0 node} lines, ended by a comment line; a bare node list is
@@ -1454,6 +1478,137 @@ every low water.}
 \label{fig:tide_series_tm02}
 \end{figure}
 
+\section{Towards a differentiable WW3 on GPU}\label{sec:diff}
+The validation above measures the misfit to the observations, but it does
+not say which input field or parameter causes it. The aim of this part of
+the work is the gradient of that misfit with respect to:
+\begin{itemize}
+\item the forcing fields: wind, currents, sea level and boundary spectra;
+\item the model parameters, \texttt{BETAMAX} first.
+\end{itemize}
+The misfit is computed with the observation operators of
+Section~\ref{sec:validation}: nearest wet node, linear time interpolation
+and block averages, all linear in $H_s$. With this gradient, WW3 can be
+used inside a learning chain: gradient-based calibration, learned
+corrections of the forcing, and hybrid physical and learned source terms.
+The design and its cost are detailed in \texttt{docs/differentiable.md};
+this section summarises the choices and the first measurement.
+
+\paragraph{Route.} The HWW3 explicit configuration is written again, in
+Rust, for one GPU. It covers the N-scheme propagation (\texttt{EXPFSN}) on
+the HEALPix mesh of \texttt{hww3-grid}, ST4, DIA, depth-induced breaking,
+currents, sea level and open-boundary spectra.
+\begin{itemize}
+\item The kernels are written in CubeCL, generic over single and double
+precision, and driven through Burn, whose tape and checkpointing give the
+reverse mode.
+\item For given velocities, one propagation sub-step
+$N^{m+1}=L_c\,N^m$ of component $c$ is linear in $N$. Its adjoint is
+therefore written by hand, as the transposed operator $L_c^T$.
+\item The explicit scheme is chosen for two reasons: its sweeps are local,
+unlike the block Gauss--Seidel solver of the implicit scheme, and grid v5
+already caps its sub-steps (Section~\ref{sec:v5}).
+\end{itemize}
+
+\paragraph{Cost.} In WW3 \texttt{dea641c} preprocessed with the HWW3
+switches, the routines of the configuration amount to 7\,420 active Fortran
+lines (19\,185 raw): 2\,157 for the physics and 1\,432 for the propagation.
+The estimate is made per component and includes the tests against the
+Fortran. Table~\ref{tab:diffcost} gives it per milestone. The expected
+forward speed on one A100 is 40--\SI{550}{s} per model day on grid v4,
+against \SI{4318}{s} for the Fortran explicit scheme on 112 cores.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lp{6.2cm}rr}
+\toprule
+milestone & content & one developer & author with assistants \\
+\midrule
+M2a & GPU forward model with a simplified ST4 that WW3 also runs
+(\texttt{SINTABLE = 0}, \texttt{SDSCUM = 0}); finite-difference gradients
+for a few parameters & 26--52 & 10--28 \\
+M2b & same with the full ST4 & 30--59 & 11--31 \\
+M4 & reverse mode for the forcing fields & 52--98 & 17--48 \\
+\bottomrule
+\end{tabular}
+\caption{Estimated cost of the differentiable WW3, cumulated up to each
+milestone, in weeks. ``One developer'' counts person-weeks of someone who
+knows WW3, Rust and GPUs. ``Author with assistants'' counts the author's
+own time when coding assistants write most of the code. Validation and
+debugging against the Fortran runs are the least compressible part.}
+\label{tab:diffcost}
+\end{table}
+
+\paragraph{Milestone M0.} The first milestone tests the toolchain on the
+most expensive kernel. The crate \texttt{hww3-wave}:
+\begin{itemize}
+\item reads an HWW3 grid and rebuilds what WW3 builds for
+\texttt{PDLIB\_W3XYPFSN2}: inward normals, boundary flags, nodal velocities
+and sub-step counts;
+\item runs the N-scheme sweep and its transpose as gathers over the
+triangles around each node, with no atomics;
+\item has the same kernels in CubeCL and, as a cross-check, in CUDA C
+through \texttt{cudarc}.
+\end{itemize}
+
+CubeCL 0.11 does not build on Datarmor (glibc 2.19), and the driver of the
+Datarmor A100 nodes accepts CUDA 11.4 at most. The CubeCL kernels therefore
+run on an A100-SXM4-80GB of the Ifremer hpc cluster (CUDA 13.0, Slurm job
+4115275), and the CUDA C kernels on a Datarmor A100 (PBS job 7964774).
+
+Table~\ref{tab:m0} gives the times.
+\begin{itemize}
+\item On grid v4, a frequency sweep takes \SI{0.93}{ms} in single
+precision: under the \SI{1.3}{ms} threshold set before the test, and 1.5
+times the bandwidth estimate.
+\item A \SI{600}{s} step needs 110 frequency sweeps with the sub-cycling of
+Section~\ref{sec:explicit} and takes \SI{0.103}{s}. The geographic
+propagation alone thus costs \SI{14.8}{s} per model day on grid v4 and
+\SI{6.2}{s} on grid v5 $K=4$.
+\item CubeCL is between 3\,\% slower and 11\,\% faster than CUDA C. Double
+precision costs 1.9 times single precision.
+\end{itemize}
+
+Three checks pass:
+\begin{itemize}
+\item the dot-product tests
+$\langle L\,\delta x,\bar y\rangle=\langle\delta x, L^T\bar y\rangle$ pass
+to round-off: normwise errors up to $2.2\times10^{-10}$ in single
+precision, relative errors up to $1.4\times10^{-12}$ in double precision;
+\item with a sub-step recorded on Burn's tape, the gradient returned by
+\texttt{backward()} is identical, bit for bit, to the output of the
+transpose kernel;
+\item the GPU step agrees with \texttt{PDLIB\_W3XYPFSN2}, written as in WW3
+and run on the CPU, to $1.6\times10^{-6}$ of the largest value in single
+precision and $2.4\times10^{-15}$ in double precision.
+\end{itemize}
+
+Milestone M1, the propagation-only model checked against Fortran runs
+without source terms, started on 22 November 2026. Its Fortran references
+can be run with the hpc build of WW3 (Section~\ref{sec:build}).
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+grid & sweep (ms) & transpose (ms) & \SI{600}{s} step (s) & s per model day \\
+\midrule
+v4 & 0.93 / 0.95 & 1.03 / 1.07 & 0.103 / 0.114 & 14.8 / 16.4 \\
+v5 $K=4$ & 0.51 / 0.50 & 0.58 / 0.57 & 0.043 / 0.048 & 6.2 / 7.0 \\
+Channel--Biscay box (v4) & 0.033 / 0.033 & 0.034 / 0.035 & 0.0030 / 0.0031 & 0.43 / 0.45 \\
+\bottomrule
+\end{tabular}
+\caption{Milestone M0: N-scheme propagation on one A100 in single
+precision.
+\emph{Sweep} and \emph{transpose}: one frequency sweep, given as CubeCL /
+CUDA C.
+\emph{Step} and \emph{model day}: CubeCL only, given as forward /
+transpose; they cover the geographic propagation only, with no spectral
+propagation and no source terms.
+The Channel--Biscay box has 21\,425 nodes.}
+\label{tab:m0}
+\end{table}
+
 \appendix
 \section{Reproducing}
 The complete procedure (sources and data, grid, WW3 build, forcing, runs,
@@ -1509,6 +1664,13 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{qsub -v RUN=natl\_v4\_jan2026\_tide scripts/natl\_v2\_run.pbs},
   \texttt{validate\_altimetry.py}, \texttt{validate\_buoys.py} and
   \texttt{plot\_run\_diff.py} (\texttt{docs/reproducing.md}).
+\item WW3 on the Ifremer hpc cluster (Section~\ref{sec:build}):
+  \texttt{sbatch scripts/build\_ww3\_hpc.slurm} (\texttt{docs/ww3.md}).
+\item Table~\ref{tab:diffcost}: \texttt{docs/differentiable.md}, with the
+  line counts of \texttt{scripts/ww3\_loc.py}.
+\item Table~\ref{tab:m0}: \texttt{docs/differentiable.md}, Section 9.1.
+  The crate \texttt{hww3-wave} and its Slurm script are on a development
+  branch, to be merged with milestone M1.
 \end{itemize}
 
 \end{document}
