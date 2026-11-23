@@ -877,3 +877,59 @@ one with the tables of the parameter file and one with the Rust tables
 after 3 h one node differs by 4.3e-5 m (RMS 1.1e-7 m), a discrete choice
 of the source integration flipped by the 1e-6 difference of the tables,
 as in the M3 checks. In the GPU job (2 cores) the tables take 9.6 s.
+
+### Set-up of the calibration
+
+- **Control vector.** $x = \ln p - \ln p_0$ for `BETAMAX`, `SDSC2`,
+  `NLPROP` and `BJGAM`, from the calibrated values 1.75, −2.2e-5, 2.5e7
+  and 0.73; the wind is that of the forcing.
+- **Model.** Grid v5 $K=4$ with the calibrated full ST4 and the forcing of
+  1–10 January, from the WW3 restart after the first step of the cold
+  start of 1 January; `BETAMAX` with the stress tables of the Rust port.
+- **Windows.** The cold start takes about four days to settle: the
+  altimeter bias of the start run is −93, −51, −24, −12, −1.6, +3.7, +5.3,
+  +5.9 and +6.5 cm on 1 to 9 January. Training on 5 January 12 h – 7
+  January 12 h (24,153 altimeter blocks, 12,247 buoy hours of $H_s$, 8,292
+  of $T_{m02}$), validation on 7 January 13 h – 10 January 00 h (27,935,
+  14,989 and 10,096), both from one run from 1 January, so that the
+  parameters act from the start.
+- **Cost.** $J = \sum (r_{alt}/0.25\,\mathrm{m})^2 + \sum (r_{H_s}/0.30\,\mathrm{m})^2
+  + \sum (r_{T_{m02}}/1.0\,\mathrm{s})^2 + \sum (x/0.25)^2$ over the
+  altimeter blocks and buoy hours of the window, with the matching of the
+  validation scripts (`scripts/cal_obs.py`, which reproduces their scores
+  exactly); the sigmas are close to the RMSEs of the start, so that each
+  kind of observation counts with its number. Buoys whose $T_{m02}$ RMSE
+  exceeds 3 s at the start (2 in training) are kept in the scores and left
+  out of the $T_{m02}$ term.
+- **Method.** Gauss–Newton with the Jacobian of the residuals from four
+  tangent runs per iteration in double precision (`hww3-prop --tangent`,
+  `dhs_` and `dt02_`), each component of the step limited to 0.3; a step
+  is kept only after a value run confirms that $J$ decreased. No finite
+  difference enters the optimisation.
+
+At the start, $J_0 = 47{,}250$ over 44,595 residuals, with
+$\partial J/\partial \ln p$ = +25,108 (`BETAMAX`), −10,585 (`SDSC2`),
++5,913 (`NLPROP`) and −118 (`BJGAM`).
+
+As a control only, the tangent derivatives of the cost and scores over
+8–10 January (48 h tangent runs from the restart of 8 January) were
+compared with the M2b finite differences of the same window, which needed
+no new run (`scripts/cal_fdcheck.py`):
+
+| relative difference | `BETAMAX` (0.1 %) | `SDSC2` | `NLPROP` | `BJGAM` |
+|---|---|---|---|---|
+| $J$ | 4.6 % | 0.4 % | 4.9 % | 7.8 % |
+| altimeter bias / RMSE | 0.7 / 0.3 % | 0.15 / 0.2 % | 0.4 / 1.1 % | 3 / 16 % |
+| buoy $H_s$ bias / RMSE | 0.9 / 44 % | 0.24 / 0.6 % | 5.5 / 13 % | 4 / 8 % |
+| buoy $T_{m02}$ bias | 17 % | 6 % | 3.5 % | 21 % |
+
+The derivatives of $J$ and of the $H_s$ biases agree to a few per cent,
+as the M3 checks predict for aggregates, and those of the RMSEs, small
+differences of nearly equal numbers, less well; the $T_{m02}$ RMSE
+derivatives do not agree (three times larger for `BETAMAX`). The
+$T_{m02}$ tangent itself is right: on the 41–44 % of the nodes where the
+`BETAMAX` differences of steps 1 % and 0.1 % agree, it agrees with them
+to 3–6e-3 at the median node, and the mean of $dT_{m02}$ over these nodes
+to 0.3–0.7 % (5 % at 9 January 00 h, where the mean is near zero). $T_{m02}$ weighs the high-frequency tail by $\sigma^2$, and the
+tail reset above the cut-off index `NKH` makes discrete jumps that the
+finite differences of the aggregates include and the tangent does not.

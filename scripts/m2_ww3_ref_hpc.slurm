@@ -19,7 +19,10 @@
 #   MODE=week  1-8 January 2026, cold start, as natl_v5k4_jan2026_exp
 # With ST4=full the namelists of natl_v5k4_jan2026_exp are kept unchanged:
 # the calibrated full ST4 of milestone M2b (stress tables, SINTABLE = 1, and
-# the cumulative breaking term, SDSCUM = -0.40, both WW3 defaults).
+# the cumulative breaking term, SDSCUM = -0.40, both WW3 defaults); with
+# CAL_BETAMAX, CAL_SDSC2, CAL_NLPROP and CAL_BJGAM, those values of BETAMAX
+# (&SIN4), SDSC2 (&SDS4), NLPROP (&SNL1) and BJGAM (&SDB1) instead
+# (calibration, docs/differentiable.md section 9.5).
 # Forcing (1-10 January) in $S/m2/forcing. Hourly fields FLIST (default those
 # of natl_v5k4_jan2026_exp) in $S/runs/m2_<MODE><TAG>/ww3.*.nc; with RSTRIDE,
 # also RCOUNT restarts (full spectra) every RSTRIDE s from the start (or
@@ -54,7 +57,10 @@ START=$(date -u -d "$T0 UTC" +'%Y%m%d %H%M%S')
 STOP=$(date -u -d "$T0 UTC + $HOURS hours" +'%Y%m%d %H%M%S')
 mkdir -p $D; cd $D
 cp $I/natl.msh $I/natl.obc $I/ww3_grid.nml .
-if [ "$ST4" = full ]; then
+if [ "$ST4" = full ] && [ -n "$CAL_BETAMAX" ]; then
+  sed -e "s|^&SIN4 BETAMAX = 1.75 /\$|\&SIN4 BETAMAX = $CAL_BETAMAX /\n\&SDS4 SDSC2 = $CAL_SDSC2 /\n\&SNL1 NLPROP = $CAL_NLPROP /\n\&SDB1 BJGAM = $CAL_BJGAM /|" \
+      $I/namelists_natl.nml > namelists_natl.nml
+elif [ "$ST4" = full ]; then
   cp $I/namelists_natl.nml .
 else
   # simplified ST4
@@ -63,7 +69,7 @@ else
 fi
 grep -E "SIN4|SDS4|EXPFSN" namelists_natl.nml
 $B/ww3_grid > ww3_grid.out 2>&1 || { tail -40 ww3_grid.out; exit 1; }
-grep -E "SINTABLE|SDSCUM =" ww3_grid.out
+grep -E "SINTABLE|SDSCUM =|BETAMAX =|NLPROP =|SDSC2 =|BJGAM =" ww3_grid.out
 for f in wind.ww3 current.ww3 level.ww3 ice.ww3 nest.ww3; do ln -sf $FO/$f .; done
 rm -f restart.ww3
 [ "$MODE" = dev ] && ln -sf $S/m1/v5k4/restart001.ww3 restart.ww3

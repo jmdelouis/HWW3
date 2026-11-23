@@ -15,7 +15,9 @@ whose T_m02 RMSE in the base run exceeds 3 s are kept for the scores and
 left out of the T_m02 term of the cost (docs/differentiable.md, section 7).
 
 eval: applies the operators to the hourly H_s and T_m02 of RUN_DIR
-(hs_, t02_YYYYMMDDHH.f64, or .f32) and, for each NAME:DIR, to the tangents
+(hs_, t02_YYYYMMDDHH.f64, or .f32, or the hs and t02 of a WW3 netCDF file
+RUN_DIR.nc, masked values taken as undefined) and, for each NAME:DIR, to
+the tangents
 dhs_, dt02_ of DIR: the scores (bias and RMSE), the cost
 J = sum (r_alt / SA)^2 + sum (r_hs / SB)^2 + sum (r_t02 / ST)^2 over the
 observations, and the derivatives of the scores and of J along each
@@ -56,7 +58,20 @@ def hours_of(start, end):
     return [t0 + datetime.timedelta(hours=i) for i in range(n)]
 
 
+_NC = {}
+
+
 def field(d, name, tag, idx=None):
+    if d.endswith(".nc"):
+        # hourly field of a WW3 output file (ww3_ounf), by time
+        if d not in _NC:
+            nc = netCDF4.Dataset(d)
+            t = nc["time"]
+            tt = netCDF4.num2date(t[:], t.units, only_use_cftime_datetimes=False)
+            _NC[d] = (nc, {x.strftime("%Y%m%d%H"): i for i, x in enumerate(tt)})
+        nc, ix = _NC[d]
+        v = np.ma.filled(nc[name][ix[tag], :].astype(np.float64), np.nan)
+        return v if idx is None else v[idx]
     for ext, dt in ((".f64", "<f8"), (".f32", "<f4")):
         p = os.path.join(d, "%s_%s%s" % (name, tag, ext))
         if os.path.exists(p):

@@ -551,6 +551,31 @@ sbatch -t 00:20:00 --export=ALL,TAG=tabchk_ww3,F64=1,HOURS=3,RESTART=$R/m1/v5k4/
 sbatch -t 00:20:00 --export=ALL,TAG=tabchk_rust,BETAMAX=1.75,F64=1,HOURS=3,RESTART=$R/m1/v5k4/restart001.ww3 scripts/cal_run_hpc.slurm
 ```
 
+The calibration (all runs from the restart after the first step of the
+cold start of 1 January, `runs/m2_week_start_full`): the start run to
+10 January, the observation operators of the two windows, then per
+iteration K four tangent runs to 7 January 12 h, the cost and its
+Jacobian, the Gauss–Newton step and a value run at the trial point,
+kept if its cost is lower (`trialK.env` holds the parameters of the
+step, `xK.json` the accepted point):
+
+```bash
+sbatch -t 01:00:00 --export=ALL,TAG=it0_value,BETAMAX=1.75,HOURS=216 scripts/cal_run_hpc.slurm
+ICE=$R/refs/natl_v5k4_jan2026_exp/ww3.202601.nc+$R/runs/m2_dev_full/ww3.202601.nc
+sbatch --export=ALL,SCRIPT=cal_obs.py,ARGS="build $R/cal/op_train.npz $R/cal/it0_value 2026010512 2026010712 $ICE $R/grids/natl_v5k4" scripts/cal_py_hpc.slurm
+sbatch --export=ALL,SCRIPT=cal_obs.py,ARGS="build $R/cal/op_valid.npz $R/cal/it0_value 2026010713 2026011000 $ICE $R/grids/natl_v5k4" scripts/cal_py_hpc.slurm
+for n in BETAMAX SDSC2 NLPROP BJGAM; do      # iteration K, parameters of xK (K = 0: BETAMAX=1.75)
+  sbatch -t 02:00:00 --export=ALL,TAG=itK_$n,HOURS=156,TANGENT=$n,BETAMAX=...,FSDSC2=...,FNLPROP=...,FBJGAM=... scripts/cal_run_hpc.slurm
+done
+D=$R/cal/itK
+python3 scripts/cal_obs.py eval $R/cal/op_train.npz ${D}_BETAMAX BETAMAX:${D}_BETAMAX SDSC2:${D}_SDSC2 NLPROP:${D}_NLPROP BJGAM:${D}_BJGAM --npz $R/cal/itK_eval.npz
+python3 scripts/cal_gn.py $R/cal/itK_eval.npz $R/cal/xK.json $R/cal/gnK.json
+sbatch -t 00:40:00 --export=ALL,TAG=itK+1_trial,HOURS=156,BETAMAX=...,FSDSC2=...,FNLPROP=...,FBJGAM=... scripts/cal_run_hpc.slurm
+python3 scripts/cal_obs.py eval $R/cal/op_train.npz $R/cal/itK+1_trial
+# control only: the start-point derivatives against the M2b finite differences of 8-10 January
+python3 scripts/cal_fdcheck.py $R/cal/op_0810.npz $R/m2/fd/cases.txt fdchk $R/cal/fdcheck.json
+```
+
 ## 9. Note
 
 ```bash

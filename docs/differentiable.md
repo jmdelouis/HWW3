@@ -830,6 +830,19 @@ Details and the list of what remains are in
   needs neither `ww3_grid` nor the harness. A GPU run with the Rust tables
   gives the $H_s$ of a run with WW3's tables to 6.5e-8 m over 2 h (jobs
   4182413 and 4182414, [GPU model results](wave_results.md)).
+- **Set-up.** Control vector $\ln p - \ln p_0$ for `BETAMAX`, `SDSC2`,
+  `NLPROP`, `BJGAM` (wind as given); training on 5 January 12 h – 7
+  January 12 h and validation on 7 January 13 h – 10 January 00 h, after
+  the four days the cold start of 1 January takes to settle; cost over
+  the altimeter blocks and buoy hours of $H_s$ and $T_{m02}$ with sigmas
+  0.25 m, 0.30 m and 1.0 s and a prior of 0.25 on $\ln p$; Gauss–Newton
+  with the Jacobian from four tangent runs per iteration (no finite
+  difference), each step confirmed by a value run. At the start the
+  derivatives of $J$ and of the $H_s$ scores agree with the M2b finite
+  differences to 0.2–8 % (control only), those of the $T_{m02}$ scores
+  less well because of the jumps of the tail reset, while the $T_{m02}$
+  tangent agrees with them node by node to 3–6e-3 where the model is
+  smooth.
 
 ## 10. Other routes, briefly
 
