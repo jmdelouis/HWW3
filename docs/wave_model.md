@@ -25,9 +25,11 @@ reference that every part of the GPU model is checked against.
   48 h and over 1–8 January the GPU model stays within 2.5 µm of WW3 in
   $H_s$ at the median node and 0.11 mm at the 99th percentile, and its
   altimeter and buoy scores are WW3's, at 146 s per model day on one A100.
-- **Milestone M2b (in progress)**, the calibrated full ST4 (stress tables,
-  cumulative breaking term): 2.0 µm at the median node over 48 h, at
-  127 s per model day.
+- **Milestone M2b (targets met)**, the calibrated full ST4 (stress tables,
+  cumulative breaking term): against the explicit runs of grids v5 $K=4$
+  and v4, 2.2 and 3.6 µm at the median node, the same altimeter and buoy
+  scores, at 124 and 220 s per model day on one A100 (target 430 s on grid
+  v4).
 
 Details and numbers are in [GPU model results](wave_results.md), the
 schemes in [Numerics of the GPU model](wave_numerics.md).

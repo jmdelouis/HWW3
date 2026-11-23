@@ -485,6 +485,22 @@ sbatch -t 02:00:00 --export=ALL,PARAMS=src_8jan_full.bin.params,RESTART=$R/runs/
 sbatch --export=ALL,WW3NC=$R/refs/natl_v5k4_jan2026_exp/ww3.202601.nc,GPU=$R/m2/out_JOBID,OUT=$R/m2/val_week_full scripts/m2_scores_hpc.slurm
 ```
 
+Grid v4: its set-up (`natl.msh`, `natl.obc`, `ww3_grid.nml`,
+`namelists_natl.nml` of `natl_v4_jan2026_exp`) to `$R/runs/setup_v4`, its
+forcing of 1–8 January to `$R/m2/forcing_v4` (cut with `ww3_subset.py` as
+for grid v5 $K=4$, from `natl_v4_jan2026_cur` and `natl_v4_jan2026_bnd`),
+its hourly fields to `$R/refs/natl_v4_jan2026_exp`, then:
+
+```bash
+V="SETUP=$R/runs/setup_v4,FORCING=$R/m2/forcing_v4"
+sbatch -t 01:00:00 --mem=160G --export=ALL,MODE=week,ST4=full,$V,HOURS=1,RSTRIDE=600,RCOUNT=1,TAG=_v4start_full,FLIST=HS scripts/m2_ww3_ref_hpc.slurm
+D=$R/runs/m2_week_v4start_full
+sbatch --export=ALL,RUN=$D,RESTART=$D/restart001.ww3,WIND=$R/m2/forcing_v4/wind.ww3,OUT=src_v4_full.bin,STEP=400 scripts/m2_src_harness_hpc.slurm
+sbatch -t 02:00:00 --mem=96G --export=ALL,GRID=$R/grids/natl_v4,FORCING=$R/m2/forcing_v4,PARAMS=src_v4_full.bin.params,RESTART=$D/restart001.ww3,HOURS=165 scripts/m2_prop_hpc.slurm
+python3 scripts/m1_compare_nc.py $R/refs/natl_v4_jan2026_exp/ww3.202601.nc $R/m2/out_JOBID --worst 20 --grid $R/grids/natl_v4
+sbatch --mem=96G --export=ALL,WW3NC=$R/refs/natl_v4_jan2026_exp/ww3.202601.nc,GPU=$R/m2/out_JOBID,OUT=$R/m2/val_v4_full,GRID=$R/grids/natl_v4 scripts/m2_scores_hpc.slurm
+```
+
 ## 9. Note
 
 ```bash

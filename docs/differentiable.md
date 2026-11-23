@@ -743,8 +743,14 @@ Details and the list of what remains are in
   `natl_v5k4_jan2026_exp` over 1–8 January, the RMS difference in $H_s$
   is 2.2 µm at the median node and 0.10 mm at the 99th percentile. The
   altimeter and buoy scores are those of WW3 to 1 µm, at 124 s per model
-  day (jobs 4162038 to 4162040). Grid v4 (its explicit run and the speed
-  target) is next.
+  day (jobs 4162038 to 4162040).
+- **Grid v4, targets met.** Against the explicit run `natl_v4_jan2026_exp`
+  from 1 January 00:10 to 7 January 21 h, the RMS difference in $H_s$ is
+  3.6 µm at the median node and 0.14 mm at the 99th percentile. The
+  altimeter and buoy scores are WW3's to 1 µm, and one A100 takes 220 s per
+  model day against the 430 s of the target (jobs 4162075 to 4162077). The
+  largest differences (5.4 cm RMS) are at the mouth of Ungava Bay in
+  partial ice, over several hours; they are the one open point.
 
 ## 10. Other routes, briefly
 

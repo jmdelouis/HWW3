@@ -513,7 +513,7 @@ in the first steps, amplified where the dynamic step is shortest. It
 leaves the median and the 99th percentile four orders of magnitude below
 the targets.
 
-## Milestone M2b: the full ST4 (in progress)
+## Milestone M2b: the full ST4 (targets met)
 
 M2b runs the source terms of the calibrated configuration: the stress
 tables of `INSIN4` (`SINTABLE = 1`: u* interpolated in `TAUT` by
@@ -592,5 +592,39 @@ whose hourly fields were copied to hpc (GPU job 4162038, comparison
 The scores of the WW3 run are those of its validation on Datarmor
 (`results/natl_v5k4_jan2026_exp_val_stats.json`). The nodes above 1 cm are
 the same kind as in M2a: Ungava Bay, the Gulf of Finland, Svalbard, the
-Canadian Arctic, the Orinoco delta. Grid v4 remains, for the comparison
-with its explicit run and the speed target of 430 s per model day.
+Canadian Arctic, the Orinoco delta.
+
+### Grid v4: comparison and speed
+
+Grid v4 (794,613 nodes) with the full ST4, from the restart written after
+the first step of a 1 h cold-started WW3 run on hpc (Slurm job 4162072,
+630 s on 32 ranks, 5 core-hours), to 7 January 21 h, against the explicit
+run `natl_v4_jan2026_exp` of Datarmor. Its set-up, its forcing of
+1–8 January and its hourly fields were copied to hpc. The harness on the
+v4 state of 1 January 00:10 (job 4162073) finds the `W3SRCE` of WW3 to
+3.5e-6 on 1,695 nodes, with the same decisions.
+
+| $H_s$: median / p99 / max | $T_{m02}$: median / p99 / max | Energy | GPU (one A100) |
+|---|---|---|---|
+| 3.6 µm / 0.14 mm / 5.4 cm | 9.8e-6 / 7.1e-4 / 0.63 s | 1.7e-5 | 1,514 s for 165 h: 220 s per model day |
+
+| | WW3 (`natl_v4_jan2026_exp`) | GPU |
+|---|---|---|
+| Altimeters, 44,670 blocks: bias / RMSE of $H_s$ | −1.7402 / 28.2533 cm | −1.7403 / 28.2534 cm |
+| Buoys, 252: bias / RMSE of $H_s$ | −5.6577 / 30.1013 cm | −5.6577 / 30.1013 cm |
+| Buoys, 171: bias / RMSE of $T_{m02}$ | −0.4151 / 1.2189 s | −0.4151 / 1.2189 s |
+
+(Jobs 4162075 to 4162077.) The WW3 scores are those of its Datarmor
+validation (`results/natl_v4_jan2026_exp_val_stats.json`, `…_buoys_stats.json`).
+The GPU model takes 220 s per model day, under the 430 s of the M2b target
+(ten times the explicit WW3).
+
+The largest differences, up to 5.4 cm RMS and 44 cm in one hour, are in a
+cluster of nodes at the mouth of Ungava Bay (60.2–60.6° N, 64.2–64.6° W),
+from 4 to 7 January. There the ice concentration is 0.35–0.43, which
+scales the source terms, the wind 15–17 m/s and the tidal current
+0.2–0.3 m/s. Unlike the fjord nodes, the differences last several hours and
+change $T_{m02}$ by up to 1.3 s, so they reach more than the top bands. The
+same nodes stand out on grid v5 $K=4$ (up to 28 cm in one hour). This is the
+one open point. The next step is WW3 restarts during an Ungava episode on
+grid v5 $K=4$ and the harness on that state, as was done for the fjords.
