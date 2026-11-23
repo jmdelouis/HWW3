@@ -862,7 +862,13 @@ Details and the list of what remains are in
   the netCDF files); it reproduces linear and uniform synthetic fields to
   single-precision round-off. The comparison with WW3's forcing files
   waits for the netCDF sources, which are on Datarmor.
-- Still to port: the boundary spectra (`ww3_bounc`).
+- **Boundary spectra.** `ww3_bounc` is ported (`hww3_wave::bounc`,
+  `hww3-pre bounc`, with `scripts/bounc_nc.py`); the header and the 1052
+  boundary points of grid v5 $K=4$ are identical to WW3's file. The
+  station choice, weights and spectra wait for the station files.
+- Still to do: the comparison of the forcing and boundary files with WW3's
+  from the real netCDF inputs (on Datarmor), then a GPU run whose inputs
+  all come from Rust.
 
 ## 10. Other routes, briefly
 

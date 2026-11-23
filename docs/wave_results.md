@@ -1022,3 +1022,20 @@ exact values at the 424,123 nodes, and a uniform wind (10, 5 m/s) within
 of the WW3 runs needs their netCDF sources (ERA5 wind and ice, Copernicus
 Marine currents and sea level with the FES2014 tide), which are on
 Datarmor.
+
+### Boundary spectra (`ww3_bounc`)
+
+`hww3_wave::bounc` ports `ww3_bounc` in `WRITE` mode: the spectra of the
+station files (on the spectral grid of the model, as
+`scripts/boundary_spectra.py` writes them, so that the conversion `W3CSPC`
+is not needed; `hww3-pre bounc` stops if it would be) decoded and divided by
+$2\pi$, and for each open-boundary node, in sea-point order, the two
+nearest stations by `DIST_HAVERSINE` (in degrees, single precision) with
+the linear weights of `INTERP = 2`. `ww3io::NestWriter` writes the boundary
+file (`nest.ww3`), and `scripts/bounc_nc.py` reads the netCDF files of
+the stations. With four synthetic stations, the file built for grid v5
+$K=4$ has the header (`NK` 32, `NTH` 36, `XFR` 1.1, `FR1` 0.0373, `TH(1)`
+0) and the 1052 boundary points of the WW3 file of the M2 runs identical
+to the bit (coordinates and order), in 0.2 s. The comparison of the station
+choice, weights and spectra needs the 318 station files of the WW3 run,
+which are on Datarmor.

@@ -582,6 +582,10 @@ sbatch scripts/pre_restart_hpc.slurm
 $R/pyenv/bin/python scripts/prnc_nc.py wind.nc u10+v10 $R/pre/wind_raw --start 20260101 --stop 20260110230000
 target/release/hww3-pre prnc $R/grids/natl_v5k4 --field wind --input $R/pre/wind_raw --out $R/pre/wind.ww3 --msh $R/runs/m2_week_start_full/natl.msh
 target/release/hww3-pre cmp-fields $R/pre/wind.ww3 $R/m2/forcing/wind.ww3
+# the boundary file in Rust (ww3_bounc): the station files read in Python
+$R/pyenv/bin/python scripts/bounc_nc.py spec.list $R/pre/spec_raw
+target/release/hww3-pre bounc $R/grids/natl_v5k4 --input $R/pre/spec_raw --out $R/pre/nest.ww3 --msh $R/runs/m2_week_start_full/natl.msh
+target/release/hww3-pre cmp-nest $R/pre/nest.ww3 $R/m2/forcing/nest.ww3
 # control only: the start-point derivatives against the M2b finite differences of 8-10 January
 python3 scripts/cal_fdcheck.py $R/cal/op_0810.npz $R/m2/fd/cases.txt fdchk $R/cal/fdcheck.json
 ```

@@ -12,12 +12,20 @@
 //!     Compare two forcing files time by time: number of values that
 //!     differ and largest difference, per field, over the times of A found
 //!     in B.
+//! hww3-pre bounc <grid dir> --input DIR --out nest.ww3 [--msh FILE.msh] [--interp 2]
+//!     The boundary file of ww3_bounc (hww3_wave::bounc): the station
+//!     spectra of DIR (written by scripts/bounc_nc.py), and for each
+//!     open-boundary node its two nearest stations and their weights.
+//! hww3-pre cmp-nest A.ww3 B.ww3
+//!     Compare two boundary files: header, boundary points, indices and
+//!     weights, and the spectra time by time.
 //! ```
 
 use anyhow::{bail, Context, Result};
 use hww3_wave::grid::Grid;
+use hww3_wave::bounc::{boundary_nodes, station_weights, RawSpectra};
 use hww3_wave::prnc::{Field, RawInput};
-use hww3_wave::ww3io::{FieldFile, FieldWriter, Time};
+use hww3_wave::ww3io::{FieldFile, FieldWriter, NestFile, NestWriter, Time};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -73,6 +81,22 @@ fn msh_nodes(p: &Path) -> Result<(Vec<f64>, Vec<f64>)> {
     bail!("{}: no $Nodes section", p.display())
 }
 
+/// Node coordinates: those of the gmsh file of `--msh` (checked against
+/// the grid's) or the grid's raw arrays.
+fn node_coordinates(a: &Args, grid: &Grid) -> Result<(Vec<f64>, Vec<f64>)> {
+    Ok(match a.opts.get("--msh") {
+        Some(m) => {
+            let (x, y) = msh_nodes(Path::new(m))?;
+            anyhow::ensure!(x.len() == grid.lon.len(), "{m}: {} nodes, grid {}", x.len(), grid.lon.len());
+            let d = x.iter().zip(&grid.lon).chain(y.iter().zip(&grid.lat)).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+            anyhow::ensure!(d < 1e-5, "{m}: coordinates differ from the grid's by {d:.2e} degree");
+            println!("node coordinates of {m} (within {d:.1e} degree of the grid's)");
+            (x, y)
+        }
+        None => (grid.lon.clone(), grid.lat.clone()),
+    })
+}
+
 fn prnc(a: &Args) -> Result<()> {
     let grid_dir = PathBuf::from(a.pos.first().context("prnc needs the grid directory")?);
     let field = Field::parse(a.opts.get("--field").context("prnc needs --field")?)?;
@@ -83,17 +107,7 @@ fn prnc(a: &Args) -> Result<()> {
     anyhow::ensure!(inp.vars.len() == field.ncomp(), "{} variables in the input for {} components", inp.vars.len(), field.ncomp());
     let t0 = Instant::now();
     let grid = Grid::read(&grid_dir)?;
-    let (x, y) = match a.opts.get("--msh") {
-        Some(m) => {
-            let (x, y) = msh_nodes(Path::new(m))?;
-            anyhow::ensure!(x.len() == grid.lon.len(), "{m}: {} nodes, grid {}", x.len(), grid.lon.len());
-            let d = x.iter().zip(&grid.lon).chain(y.iter().zip(&grid.lat)).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
-            anyhow::ensure!(d < 1e-5, "{m}: coordinates differ from the grid's by {d:.2e} degree");
-            println!("node coordinates of {m} (within {d:.1e} degree of the grid's)");
-            (x, y)
-        }
-        None => (grid.lon.clone(), grid.lat.clone()),
-    };
+    let (x, y) = node_coordinates(a, &grid)?;
     let g = &inp.grid;
     let w = g.weights(&x, &y);
     println!(
@@ -196,11 +210,98 @@ fn cmp_fields(a: &Args) -> Result<()> {
     Ok(())
 }
 
+fn bounc(a: &Args) -> Result<()> {
+    let grid_dir = PathBuf::from(a.pos.first().context("bounc needs the grid directory")?);
+    let inp = RawSpectra::open(Path::new(a.opts.get("--input").context("bounc needs --input")?))?;
+    let out = PathBuf::from(a.opts.get("--out").context("bounc needs --out")?);
+    let interp: i32 = a.opts.get("--interp").map(|s| s.parse()).transpose()?.unwrap_or(2);
+    let t0 = Instant::now();
+    let grid = Grid::read(&grid_dir)?;
+    let (x, y) = node_coordinates(a, &grid)?;
+    let s = &grid.spec;
+    let (nk, nth) = (s.nk, s.nth);
+    let dth = 2.0 * std::f32::consts::PI / nth as f32;
+    let (xfr, fr1, th1) = (s.xfr as f32, s.freq1 as f32, s.thoff as f32 * dth);
+    if inp.needs_conversion(nk, nth, xfr, fr1, th1, dth) {
+        bail!("the station spectra ({} x {}, from {} Hz) are not on the grid of the model: the conversion W3CSPC is not ported", inp.nk, inp.nth, inp.freq[0]);
+    }
+    let nodes = boundary_nodes(&grid.obc)?;
+    let xbpo: Vec<f32> = nodes.iter().map(|&i| x[i] as f32).collect();
+    let ybpo: Vec<f32> = nodes.iter().map(|&i| y[i] as f32).collect();
+    let (ip, rd) = station_weights(&inp.lons, &inp.lats, &xbpo, &ybpo, interp);
+    let mut w = NestWriter::create(&out, nk, nth, xfr, fr1, th1, &xbpo, &ybpo, &ip, &rd)?;
+    let spectra: Vec<Vec<Vec<f32>>> = (0..inp.nst).map(|k| inp.station(k)).collect::<Result<_>>()?;
+    for (it, &t) in inp.times.iter().enumerate() {
+        let at: Vec<Vec<f32>> = spectra.iter().map(|sp| sp[it].clone()).collect();
+        w.write(t, &at)?;
+    }
+    w.finish()?;
+    println!(
+        "{} boundary nodes from {} stations ({} x {} spectra), {} times ({} to {}) written to {} in {:.1} s",
+        nodes.len(),
+        inp.nst,
+        inp.nk,
+        inp.nth,
+        inp.times.len(),
+        inp.times.first().map_or(String::new(), |t| t.to_string()),
+        inp.times.last().map_or(String::new(), |t| t.to_string()),
+        out.display(),
+        t0.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
+fn cmp_nest(a: &Args) -> Result<()> {
+    let (pa, pb) = match a.pos.as_slice() {
+        [p, q] => (Path::new(p), Path::new(q)),
+        _ => bail!("cmp-nest needs two files"),
+    };
+    let mut fa = NestFile::open(pa)?;
+    let mut fb = NestFile::open(pb)?;
+    println!(
+        "header: NK {} {}, NTH {} {}, XFR {} {}, FR1 {} {}, TH1 {} {}, NBI {} {}",
+        fa.nk, fb.nk, fa.nth, fb.nth, fa.xfr, fb.xfr, fa.fr1, fb.fr1, fa.th1, fb.th1, fa.nbi, fb.nbi
+    );
+    anyhow::ensure!(fa.nk == fb.nk && fa.nth == fb.nth && fa.nbi == fb.nbi, "the files differ in size");
+    let maxdiff = |u: &[f32], v: &[f32]| u.iter().zip(v).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+    let ndiff = |u: &[f32], v: &[f32]| u.iter().zip(v).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+    println!(
+        "boundary points: XBPI {} differ (max {:.2e}), YBPI {} differ (max {:.2e}), IPBPI {} differ, RDBPI {} differ (max {:.2e})",
+        ndiff(&fa.xbpi, &fb.xbpi),
+        maxdiff(&fa.xbpi, &fb.xbpi),
+        ndiff(&fa.ybpi, &fb.ybpi),
+        maxdiff(&fa.ybpi, &fb.ybpi),
+        fa.ipbpi.iter().zip(&fb.ipbpi).filter(|(x, y)| x != y).count(),
+        ndiff(&fa.rdbpi, &fb.rdbpi),
+        maxdiff(&fa.rdbpi, &fb.rdbpi)
+    );
+    let (mut times, mut nd, mut worst, mut vmax) = (0usize, 0usize, 0f32, 0f32);
+    loop {
+        match (fa.next()?, fb.next()?) {
+            (Some((ta, sa)), Some((tb, sb))) => {
+                anyhow::ensure!(ta == tb && sa.len() == sb.len(), "record {times}: {ta} with {} spectra against {tb} with {}", sa.len(), sb.len());
+                for (u, v) in sa.iter().zip(&sb) {
+                    nd += ndiff(u, v);
+                    worst = worst.max(maxdiff(u, v));
+                    vmax = u.iter().fold(vmax, |m, x| m.max(x.abs()));
+                }
+                times += 1;
+            }
+            (None, None) => break,
+            _ => bail!("the files have different numbers of times (after {times})"),
+        }
+    }
+    println!("{times} times: {nd} spectral values differ, largest difference {worst:.3e} ({:.2e} of the largest value {vmax:.4e})", worst / vmax.max(f32::MIN_POSITIVE));
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let a = parse()?;
     match a.cmd.as_str() {
         "prnc" => prnc(&a),
         "cmp-fields" => cmp_fields(&a),
+        "bounc" => bounc(&a),
+        "cmp-nest" => cmp_nest(&a),
         other => bail!("unknown command {other}"),
     }
 }

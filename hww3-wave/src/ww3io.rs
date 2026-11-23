@@ -629,6 +629,66 @@ impl NestFile {
     }
 }
 
+/// A boundary file as `ww3_bounc` writes it (`W3IOBC` layout): a header
+/// record (`'WAVEWATCH III BOUNDARY DATA FILE'`, version `'2018-03-01'`,
+/// `NK`, `NTH`, `XFR`, `FR1`, `TH(1)`, `NBO`), a record with the boundary
+/// points (`XBPO`, `YBPO`, `IPBPO(NBO,4)`, `RDBPO(NBO,4)`, column-major),
+/// then per time a record with the time and the number of spectra and one
+/// record per spectrum.
+pub struct NestWriter {
+    w: BufWriter<File>,
+    nspec: usize,
+}
+
+impl NestWriter {
+    /// Create a boundary file and write its header and boundary points
+    /// (`ipbpo`, `rdbpo`: the four indices and weights of each point).
+    pub fn create(p: &Path, nk: usize, nth: usize, xfr: f32, fr1: f32, th1: f32, xbpo: &[f32], ybpo: &[f32], ipbpo: &[[i32; 4]], rdbpo: &[[f32; 4]]) -> Result<NestWriter> {
+        let n = xbpo.len();
+        anyhow::ensure!(ybpo.len() == n && ipbpo.len() == n && rdbpo.len() == n, "boundary points: lengths differ");
+        let mut w = BufWriter::with_capacity(1 << 22, File::create(p).with_context(|| format!("create {}", p.display()))?);
+        let mut h = b"WAVEWATCH III BOUNDARY DATA FILE2018-03-01".to_vec();
+        h.extend((nk as i32).to_be_bytes());
+        h.extend((nth as i32).to_be_bytes());
+        for v in [xfr, fr1, th1] {
+            h.extend(v.to_be_bytes());
+        }
+        h.extend((n as i32).to_be_bytes());
+        write_record(&mut w, &h)?;
+        let mut b = Vec::with_capacity(40 * n);
+        b.extend(xbpo.iter().flat_map(|v| v.to_be_bytes()));
+        b.extend(ybpo.iter().flat_map(|v| v.to_be_bytes()));
+        for j in 0..4 {
+            b.extend(ipbpo.iter().flat_map(|v| v[j].to_be_bytes()));
+        }
+        for j in 0..4 {
+            b.extend(rdbpo.iter().flat_map(|v| v[j].to_be_bytes()));
+        }
+        write_record(&mut w, &b)?;
+        Ok(NestWriter { w, nspec: nk * nth })
+    }
+
+    /// Write the station spectra of one time.
+    pub fn write(&mut self, t: Time, spectra: &[Vec<f32>]) -> Result<()> {
+        let mut h = t.0.to_be_bytes().to_vec();
+        h.extend(t.1.to_be_bytes());
+        h.extend((spectra.len() as i32).to_be_bytes());
+        write_record(&mut self.w, &h)?;
+        for s in spectra {
+            anyhow::ensure!(s.len() == self.nspec, "spectrum of {} values for {}", s.len(), self.nspec);
+            let b: Vec<u8> = s.iter().flat_map(|v| v.to_be_bytes()).collect();
+            write_record(&mut self.w, &b)?;
+        }
+        Ok(())
+    }
+
+    /// Flush the file.
+    pub fn finish(mut self) -> Result<()> {
+        self.w.flush()?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -753,6 +813,29 @@ mod tests {
         assert_eq!(&r.mapsta[2..6], &[1, 2, -1, -2]);
         assert_eq!(&r.mapst2[2..6], &[0, 0, 1, 2]);
         assert_eq!(r.va[2 * nspec + 5], 2005.0);
+    }
+
+    #[test]
+    fn nest_written_back() {
+        let p = tmp("nest_rw");
+        let (nk, nth) = (2, 3);
+        let ip = [[2, 3, 1, 1], [1, 2, 1, 1]];
+        let rd = [[0.75, 0.25, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]];
+        let mut w = NestWriter::create(&p, nk, nth, 1.1, 0.0373, 0.0, &[-20.0, -21.5], &[40.0, 41.0], &ip, &rd).unwrap();
+        let sp: Vec<Vec<f32>> = (0..3).map(|s| (0..6).map(|j| (10 * s + j) as f32).collect()).collect();
+        w.write(Time(20260101, 0), &sp).unwrap();
+        w.write(Time(20260101, 30000), &sp[..2]).unwrap();
+        w.finish().unwrap();
+        let mut f = NestFile::open(&p).unwrap();
+        assert_eq!((f.nk, f.nth, f.xfr, f.fr1, f.th1, f.nbi), (2, 3, 1.1, 0.0373, 0.0, 2));
+        assert_eq!((f.xbpi[1], f.ybpi[0]), (-21.5, 40.0));
+        assert_eq!((&f.ipbpi[..4], &f.rdbpi[..2]), (&[2, 3, 1, 1][..], &[0.75, 0.25][..]));
+        let (t, s) = f.next().unwrap().unwrap();
+        assert_eq!((t, s.len(), s[2][5]), (Time(20260101, 0), 3, 25.0));
+        let (t, s) = f.next().unwrap().unwrap();
+        assert_eq!((t, s.len()), (Time(20260101, 30000), 2));
+        assert!(f.next().unwrap().is_none());
+        std::fs::remove_file(&p).unwrap();
     }
 
     #[test]

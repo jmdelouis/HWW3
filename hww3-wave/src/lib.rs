@@ -39,6 +39,7 @@
 #![warn(missing_docs)]
 
 pub mod backend;
+pub mod bounc;
 pub mod cpu;
 pub mod geom;
 pub mod grid;
