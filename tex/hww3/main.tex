@@ -2272,6 +2272,50 @@ of 1\,\%, and with a step of 0.1\,\% in brackets. Slurm jobs 4163952 to
 \label{tab:m3fd}
 \end{table}
 
+\paragraph{Calibration (in progress).} The calibration trial fits
+\texttt{BETAMAX}, \texttt{SDSC2}, \texttt{NLPROP} and \texttt{BJGAM} on
+grid v5 $K=4$, with the wind fixed, by Gauss--Newton steps whose Jacobians
+come from tangent runs only.
+\begin{itemize}
+\item \emph{Stress tables in Rust.} A new value of \texttt{BETAMAX}
+changes the stress tables that \texttt{ww3\_grid} writes in
+\texttt{mod\_def.ww3}. The Rust port now computes all three:
+\texttt{TABU\_STRESS} (\texttt{TAUT}), and \texttt{TABU\_TAUHF} and
+\texttt{TABU\_TAUHF2} (\texttt{TAUHFT}, \texttt{TAUHFT2}) with their
+derivative with respect to \texttt{BETAMAX} for the tangent. Against the
+tables WW3 wrote for \texttt{BETAMAX} 1.75 and for the four values of the
+finite differences of M2b, they agree to $7.9\times10^{-8}$
+(\texttt{TAUT}) and $0.87$ to $1.13\times10^{-6}$ (\texttt{TAUHFT},
+\texttt{TAUHFT2}) of their largest value, the single-precision round-off
+of WW3, and take \SI{1.8}{s} on 8 threads. \texttt{TAUT} must be iterated
+in single precision, as WW3 does: in double precision it would differ from
+WW3's by up to $1.2\times10^{-4}$ in 474 of its 40\,401 cells, near the
+largest wave-supported stress at winds of 43 to \SI{45}{m/s}, where
+$1-\tau_w/\tau$ cancels in single precision. No other precomputed entry
+depends on the four parameters or on the wind. A new value therefore needs
+neither \texttt{ww3\_grid} nor the Fortran harness.
+\item \emph{Check on the GPU.} Two runs of 3 hours in double precision
+from 8 January, one with the tables of WW3 and one with the Rust tables
+(jobs 4182413 and 4182414), give the same $H_s$ to
+$6.5\times10^{-8}$\,m over two hours. After three hours one node differs
+by $4.3\times10^{-5}$\,m, where the $10^{-6}$ difference of the tables
+flips a discrete choice of the source integration, as in M3.
+\item \emph{Set-up.} The cost sums the squared misfits of the altimeter
+$H_s$ (\SI{0.25}{m}), of the buoy $H_s$ (\SI{0.30}{m}) and $T_{m02}$
+(\SI{1.0}{s}), and a prior of 0.25 on $\ln p$. Its observation operators
+reproduce the scores of the validation scripts exactly, and the tangent
+runs now also give the derivative of $T_{m02}$. The runs start from the
+cold start of 1 January, which takes four days to settle: the daily
+altimeter bias goes from \SI{-93}{cm} on 1 January to \SI{-1.6}{cm} on
+5 January, then $+3.7$ to \SI{+6.5}{cm}. The training window, 5 January
+12\,h to 7 January 12\,h, holds 24\,153 altimeter blocks and 255 buoys
+(12\,247 hours of $H_s$, 8\,292 of $T_{m02}$); the validation window,
+7 January 13\,h to 10 January 00\,h, 27\,935 blocks and 257 buoys. With
+the present parameters the cost is 47\,250 on the training window, of
+which 25\,049 from the altimeters and 13\,335 from the buoy $H_s$. The
+four tangent runs at these parameters are under way.
+\end{itemize}
+
 
 \appendix
 \section{Reproducing}
