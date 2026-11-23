@@ -625,9 +625,63 @@ from 4 to 7 January. There the ice concentration is 0.35–0.43, which
 scales the source terms, the wind 15–17 m/s and the tidal current
 0.2–0.3 m/s. Unlike the fjord nodes, the differences last several hours and
 change $T_{m02}$ by up to 1.3 s, so they reach more than the top bands. The
-same nodes stand out on grid v5 $K=4$ (up to 28 cm in one hour). This is the
-one open point. The next step is WW3 restarts during an Ungava episode on
-grid v5 $K=4$ and the harness on that state, as was done for the fjords.
+same nodes stand out on grid v5 $K=4$ (up to 28 cm in one hour).
+
+They come from the history of the run, not from a step that differs. On
+grid v5 $K=4$, the calibrated WW3 week was rerun with restarts every
+10 minutes from 5 January 00:00 to 02:00 (Slurm job 4162775, 64 cores,
+1 h). Against them, the GPU run from 1 January differs by 13 cm at node
+238271 at 00:00 and the difference grows by about 2.5 cm per step, in the
+peak bands 16 to 20, where in several directions the GPU holds half of
+WW3's energy or less (job 4162776). Started from the WW3 restart of 00:00
+itself (`check-steps --itstep0 576`, job 4163960), the GPU stays within
+5 mm of WW3 over the 12 steps everywhere, and the Ungava nodes are no
+longer among the largest differences. On the same state, the harness finds
+the CPU `W3SRCE` within 2.1e-7 of WW3 at six nodes at the mouth of the bay,
+with the same limiter and breaking decisions and 3 to 40 dynamic steps
+(job 4163959). Each step of the model is therefore WW3's there; the
+difference builds up over days in a fast-growing sea in partial ice, where
+small differences of state are amplified, as with the fjord spikes. The M3
+tangent runs show how fast this happens: a change of $10^{-4}$ of the wind
+flips some discrete choice of `W3SRCE` at most nodes within hours (section
+"The tangent through the time loop").
+
+### Finite-difference gradients
+
+Gradients of the GPU model with the calibrated full ST4 with respect to
+the parameters of M2: 48 h in double precision from the restart of
+8 January 00 h on grid v5 $K=4$, with each parameter multiplied by
+$1 \pm 0.01$, and $1 \pm 0.001$ for the wind and `BETAMAX` (15 runs, Slurm
+jobs 4162941 to 4162955 and 4163276, 20 min each on one A100). `BETAMAX`
+enters the stress tables, so its runs read the tables of perturbed
+`mod_def.ww3` files (`scripts/m2_moddef_hpc.slurm`); the wind is the
+forcing wind times a factor. The responses are the total energy and the
+mean $H_s$ at 10 January 00 h and the scores of 8–10 January against the
+altimeters (22,933 blocks) and the buoys (12,153 hours), job 4163939.
+Derivatives per unit relative change, $\partial R / \partial \ln p$
+(base values: energy 1.0028e5, mean $H_s$ 1.7358 m, altimeters
++6.23 / 25.73 cm, buoys −3.89 / 42.35 cm in $H_s$ and −0.376 / 1.196 s in
+$T_{m02}$):
+
+| $p$ (step) | energy | mean $H_s$ (m) | altimeters: bias / RMSE (m) | buoys $H_s$: bias / RMSE (m) | buoys $T_{m02}$: bias / RMSE (s) |
+|---|---|---|---|---|---|
+| wind (1 %) | 3.347e5 | 2.769 | 2.675 / 0.847 | 1.833 / −0.018 | 1.294 / 0.521 |
+| wind (0.1 %) | 3.346e5 | 2.769 | 2.672 / 0.850 | 1.835 / −0.021 | 1.266 / 0.466 |
+| `BETAMAX` (1 %) | 6.700e4 | 0.564 | 0.530 / 0.159 | 0.444 / −0.017 | 0.193 / 0.116 |
+| `BETAMAX` (0.1 %) | 6.707e4 | 0.564 | 0.530 / 0.159 | 0.442 / −0.017 | 0.183 / 0.097 |
+| `SDSC2` (1 %) | −3.15e4 | −0.264 | −0.254 / −0.072 | −0.206 / 0.018 | −0.091 / 0.003 |
+| `NLPROP` (1 %) | 1.66e4 | 0.146 | 0.146 / 0.038 | 0.094 / −0.010 | 0.238 / −0.070 |
+| `BJGAM` (1 %) | 310 | 0.003 | 0.000 / 0.000 | 0.017 / −0.012 | 0.004 / 0.002 |
+
+The two steps agree to about $10^{-3}$ on the energy, the mean $H_s$ and
+the biases, and to 2–20 % on the RMSEs, which are differences of nearly
+equal numbers. Over two days the energy goes as the wind to the power
+3.3; 1 % more `BETAMAX` raises $H_s$ by 5.6 mm on average and the
+altimeter bias by 5.3 mm, 1 % more `SDSC2` lowers them by 2.6 and 2.5 mm,
+and depth-induced breaking (`BJGAM`) acts only at the buoys of shallow
+water. The $H_s$ RMSE against the buoys falls slightly with the wind,
+`BETAMAX`, `NLPROP` and `BJGAM` and rises with `SDSC2`, while the
+$T_{m02}$ RMSE rises with all but `NLPROP`. The 15 runs take 5 GPU-hours.
 
 ## Milestone M3: tangent kernels (in progress)
 

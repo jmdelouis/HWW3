@@ -571,7 +571,7 @@ coastal-scale corrections can therefore be computed on uniform maps.
 | M0 | Rust stable with the CubeCL and Burn crates and their CUDA backend on one A100; N-scheme sweep and its transpose on grids v4 and v5 $K=4$ with the sub-cycling of `cfl.rs` | a frequency sweep on grid v4 within twice the bandwidth estimate (about 1.3 ms); dot-product test passes; the toolchain builds and runs on the GPU nodes. Otherwise switch the kernels to `cudarc` and CUDA C. **Done: go** (section 9.1) | 1–2 |
 | M1 | propagation-only model: geographic and spectral propagation, depth, currents, sea level, boundary spectra, ice mask, restart reader | the propagation-only targets of section 6. **Targets met** on 22 November 2026: once `ITER` counts the coast nodes as WW3 does, $H_s$ is within 1.5 µm (median node) and 24 µm (99th percentile) RMS of WW3 over 48 h, energy within 2.4e-7, 65 s on one A100 against 813 s on 32 cores (section 9.1, [GPU model results](wave_results.md)) | 10–18 |
 | M2a | forward model with the simplified ST4 (`SINTABLE = 0`, `SDSCUM = 0`), DIA, LN1, DB1, BT4, integration and limiter, outputs, observation operators | the targets with sources of section 6 against the WW3 run with the same settings. **First gradients:** finite differences in double precision for `BETAMAX` and a few parameters, at GPU speed, to build and test the calibration chain | 15–32 |
-| M2b | full ST4: the stress tables `TAUT`, `TAUHFT`, `TAUHFT2` and the directional cumulative term (`SDSCUM = −0.40`) | the targets with sources of section 6 against the existing explicit runs, and at least 10 times the Fortran explicit speed (under 430 s per model day on grid v4). **First scientific gradients** with respect to the parameters of the calibrated configuration | 4–7 |
+| M2b | full ST4: the stress tables `TAUT`, `TAUHFT`, `TAUHFT2` and the directional cumulative term (`SDSCUM = −0.40`) | the targets with sources of section 6 against the existing explicit runs, and at least 10 times the Fortran explicit speed (under 430 s per model day on grid v4). **First scientific gradients** with respect to the parameters of the calibrated configuration. **Done** on 23 November 2026: targets met on grids v5 $K=4$ and v4 at 220 s per model day on grid v4, and finite-difference gradients of the energy, mean $H_s$ and scores for `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM` and the wind (section 9.3) | 4–7 |
 | M3 | tangent kernels for parameters (sources and stress tables) | agreement with the double-precision finite differences to $10^{-4}$ where the model is smooth | 4–7 (optional) |
 | M4 | reverse mode for the fields: adjoint kernels, revolve driver, adjoint of the observation operators, PyTorch bridge | the Taylor test and the comparison with WW3 of section 6; one wind gradient over 7 days on grid v5 $K=4$ in under 3 h | 18–32 (hand-written adjoints) or 12–21 (Burn source terms) |
 | M5 | learning: HEALPix wind corrections, then hybrid source terms | an independent month improves | open |
@@ -755,7 +755,20 @@ Details and the list of what remains are in
   altimeter and buoy scores are WW3's to 1 µm, and one A100 takes 220 s per
   model day against the 430 s of the target (jobs 4162075 to 4162077). The
   largest differences (5.4 cm RMS) are at the mouth of Ungava Bay in
-  partial ice, over several hours; they are the one open point.
+  partial ice, over several hours. Started from a WW3 restart of
+  5 January 00:00 in such an episode on grid v5 $K=4$, the GPU stays within
+  5 mm of WW3 over 2 h, and the harness finds `W3SRCE` within 2.1e-7 of WW3
+  there (jobs 4163959 and 4163960): each step is WW3's, and the difference
+  is built up over days, as for the fjord spikes.
+- **Finite-difference gradients.** 15 runs of 48 h in double precision from
+  8 January on grid v5 $K=4$ (5 GPU-hours, jobs 4162941 to 4162955 and
+  4163276) give the derivatives of the energy, the mean $H_s$ and the
+  scores of 8–10 January with respect to `BETAMAX`, `SDSC2`, `NLPROP`,
+  `BJGAM` and the wind (job 4163939, [GPU model results](wave_results.md)).
+  Steps of 1 % and 0.1 % agree to about $10^{-3}$ on the energy, the mean
+  $H_s$ and the biases. Per 1 % change, the altimeter bias moves by
+  +26.8 mm for the wind, +5.3 mm for `BETAMAX`, −2.5 mm for `SDSC2`,
+  +1.5 mm for `NLPROP` and 0 for `BJGAM`. M2b is complete.
 
 ### 9.4 Progress of M3 (from 23 November 2026)
 
