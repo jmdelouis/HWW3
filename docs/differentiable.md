@@ -843,6 +843,19 @@ Details and the list of what remains are in
   less well because of the jumps of the tail reset, while the $T_{m02}$
   tangent agrees with them node by node to 3–6e-3 where the model is
   smooth.
+- **Steps.** `BJGAM` frozen at 0.73 after the first step (few shallow
+  buoys constrain it, the altimeters are insensitive to it, it scaled the
+  step down to 0.40, its tangent is the least reliable); step 1 on the
+  three other parameters accepted (training $J$ −1.31 %; a WW3 run at that
+  point gives the GPU's cost to 0.1 on both windows); then options A and C
+  of Jean-Marc: one frozen Jacobian ($A_1$, from the f64 tangents at step
+  1) and one value run per step, stop when an accepted step gains less
+  than 0.2 % ([GPU model results](wave_results.md)).
+- **Buoy operator.** A depth-aware interpolation of the grid for the buoys
+  (Jean-Marc's request), linear in the fields ($T_{m02}$ through the
+  moments $m_0$, $m_2$), is built and evaluated, with the costs of the
+  points so far under both operators; the cost of the calibration keeps
+  the nearest node until he has seen the results.
 
 ### 9.6 Rest of the port to Rust (from 23 November 2026)
 

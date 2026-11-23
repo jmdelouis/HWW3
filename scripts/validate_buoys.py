@@ -2,7 +2,7 @@
 
 Usage:
     python scripts/validate_buoys.py OUT_PREFIX LABEL:RUN_NC:GRID_DIR [...]
-        [--buoys DIR]
+        [--buoys DIR] [--match nearest|depth --weights WEIGHTS.json]
 
 LABEL     short run name used in the outputs (for example v2, v3).
 RUN_NC    ww3_ounf output (hourly ``hs`` and ``t02`` on the nodes).
@@ -16,10 +16,17 @@ Method: every buoy file with ``VHM0`` inside the domain is read; samples
 with quality flag 1 (good) in the run period, after ``SPINUP_DAYS`` days of
 cold start, are averaged in hourly bins. Buoys at the same position (files
 of several networks for one platform) are kept once, the one with most
-hours. Each buoy is matched in every run to the nearest wet node (3-D chord
-distance); the buoy is kept only if this node is closer than ``MAXDIST_KM``
-in every run, so all runs are compared on the same buoys and hours. The
-model is interpolated linearly in time to the hourly bins. Statistics are
+hours. With ``--match nearest`` (the default, that of the earlier tables of
+the notes) each buoy is matched in every run to the nearest wet node (3-D
+chord distance); the buoy is kept only if this node is closer than
+``MAXDIST_KM`` in every run, so all runs are compared on the same buoys and
+hours. With ``--match depth`` the model at a buoy is the depth-aware
+interpolation of the calibration (``scripts/buoy_op.py build --json``
+writes WEIGHTS.json for one grid, which all runs must share): H_s is the
+weighted sum over the buoy's nodes, T_m02 is 2 pi sqrt(M0 / M2) from the
+weighted moments m0 and m2 of the nodes, and the buoys the weights leave
+out are skipped; the class of a buoy is that of its node of largest weight.
+The model is interpolated linearly in time to the hourly bins. Statistics are
 given for all pairs, per buoy, and per class of the buoy (the HEALPix depth
 of its node in the last run, the model depth, the region).
 
@@ -176,7 +183,15 @@ def main():
     ap.add_argument("out")
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--buoys", default=BUOY_DEFAULT)
+    ap.add_argument("--match", choices=["nearest", "depth"], default="nearest",
+                    help="nearest wet node (the earlier tables) or the depth-aware weights of --weights")
+    ap.add_argument("--weights", help="JSON of scripts/buoy_op.py build --json, for --match depth")
     a = ap.parse_args()
+    if a.match == "depth" and not a.weights:
+        ap.error("--match depth needs --weights")
+    W = {}
+    if a.match == "depth":
+        W = {r["name"]: r for r in json.load(open(a.weights))["buoys"]}
 
     runs = [load_run(*r.split(":")) for r in a.runs]
     th = runs[-1]["th"]
@@ -189,8 +204,38 @@ def main():
     trees = [cKDTree(xyz(r["lon"][r["wet"]], r["lat"][r["wet"]])) for r in runs]
     wet_idx = [np.flatnonzero(r["wet"]) for r in runs]
     rows = []
+    left_out = 0
     for b in buoys:
         p = xyz(np.array([b["lon"]]), np.array([b["lat"]]))[0]
+        if a.match == "depth":
+            wr = W.get(b["name"])
+            if wr is None or not wr["kept"]:
+                left_out += 1
+                continue
+            nodes, wts = np.array(wr["nodes"]), np.array(wr["weights"])
+            main_n = int(nodes[np.argmax(wts)])
+            row = {"name": b["name"], "lon": b["lon"], "lat": b["lat"],
+                   "region": region(b["lon"], b["lat"]), "obs_hs": b["hs"], "obs_tm02": b["tm02"]}
+            for r in runs:
+                if len(r["lon"]) <= nodes.max():
+                    raise SystemExit("--weights: node %d beyond the %d nodes of run %s" % (nodes.max(), len(r["lon"]), r["label"]))
+                hs_n = np.array([interp_time(r["hs"], r["th"], n, hours) for n in nodes])
+                t_n = np.array([interp_time(r["t02"], r["th"], n, hours) for n in nodes])
+                m0 = (hs_n / 4) ** 2
+                m2 = m0 * (2 * np.pi / t_n) ** 2
+                q = xyz(np.array([r["lon"][main_n]]), np.array([r["lat"][main_n]]))[0]
+                row[r["label"]] = {"dist_km": float(2 * np.arcsin(np.linalg.norm(p - q) / 2) * EARTH_KM), "node": main_n,
+                                   "level": int(r["level"][main_n]), "depth": float(r["depth"][main_n]),
+                                   "hs": (wts[:, None] * hs_n).sum(0),
+                                   "tm02": 2 * np.pi * np.sqrt((wts[:, None] * m0).sum(0) / (wts[:, None] * m2).sum(0))}
+            ok = np.isfinite(row["obs_hs"])
+            for r in runs:
+                ok &= np.isfinite(row[r["label"]]["hs"])
+            if ok.sum() < MIN_HOURS:
+                continue
+            row["ok"] = ok
+            rows.append(row)
+            continue
         match = []
         for tr, wi in zip(trees, wet_idx):
             dist, k = tr.query(p)
@@ -211,7 +256,10 @@ def main():
             continue
         row["ok"] = ok
         rows.append(row)
-    print(f"{len(rows)} buoys matched within {MAXDIST_KM} km in every run", flush=True)
+    if a.match == "depth":
+        print(f"{len(rows)} buoys through the depth-aware weights of {a.weights}, {left_out} left out by them", flush=True)
+    else:
+        print(f"{len(rows)} buoys matched within {MAXDIST_KM} km in every run", flush=True)
 
     labels = [r["label"] for r in runs]
     last = labels[-1]
@@ -244,7 +292,7 @@ def main():
         classes[reg] = [r for r in rows if r["region"] == reg]
     summary = {
         "runs": {lab: path for lab, path in (r.split(":")[:2] for r in a.runs)},
-        "buoy_dir": a.buoys, "spinup_days": SPINUP_DAYS, "maxdist_km": MAXDIST_KM,
+        "buoy_dir": a.buoys, "match": a.match, "weights": a.weights, "spinup_days": SPINUP_DAYS, "maxdist_km": MAXDIST_KM,
         "min_hours": MIN_HOURS, "n_buoys": len(rows),
         "hs": {k: pooled(v) for k, v in classes.items() if v},
         "tm02": {k: pooled([r for r in v if r["obs_tm02"] is not None], "tm02")

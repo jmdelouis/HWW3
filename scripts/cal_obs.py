@@ -229,9 +229,65 @@ def apply(o, d, prefix=""):
     v = model_points(d, tags, prefix + "hs", kk, nn)
     a, b = v[: k.size].reshape(k.shape), v[k.size:].reshape(k.shape)
     alt = ((1 - w) * a + w * b).mean(1)
-    bh = model_points(d, tags, prefix + "hs", o["bh_k"], o["bh_n"])
-    bt = model_points(d, tags, prefix + "t02", o["bt_k"], o["bt_n"])
+    if "bw_w" in o:
+        # depth-aware buoy operator (scripts/buoy_op.py): fixed weights over
+        # a few nodes per buoy
+        bh = buoy_points(o, d, tags, prefix + "hs", o["bh_k"], o["bh_b"])
+        if "bw_tm02" in o and str(o["bw_tm02"]) == "moments":
+            bt = buoy_t02_moments(o, d, tags, o["bt_k"], o["bt_b"], tangent=prefix == "d")
+        else:
+            bt = buoy_points(o, d, tags, prefix + "t02", o["bt_k"], o["bt_b"])
+    else:
+        bh = model_points(d, tags, prefix + "hs", o["bh_k"], o["bh_n"])
+        bt = model_points(d, tags, prefix + "t02", o["bt_k"], o["bt_n"])
     return alt, bh, bt
+
+
+def buoy_points(o, d, tags, name, k, b):
+    """Values of the hourly fields NAME of run D at (hour k, buoy b) through
+    the weights of the depth-aware buoy operator: sum over the buoy's nodes
+    of weight times field (padding entries have weight 0)."""
+    nodes, wts = o["bw_nodes"], o["bw_w"]
+    out = np.full(len(k), np.nan)
+    for i, tag in enumerate(tags):
+        s = k == i
+        if s.any():
+            f = field(d, name, tag)
+            nb, wb = nodes[b[s]], wts[b[s]]
+            out[s] = (np.where(wb > 0, f[nb], 0.0) * wb).sum(1)
+    return out
+
+
+def buoy_t02_moments(o, d, tags, k, b, tangent=False):
+    """T_m02 at (hour k, buoy b) from the moments m0 = (H_s / 4)^2 and
+    m2 = m0 (2 pi / T_m02)^2 of the nodes, summed with the weights of the
+    depth-aware operator: 2 pi sqrt(M0 / M2). The moments are linear in the
+    spectrum. With TANGENT, its tangent from the dhs_ and dt02_ fields of D
+    and the hs_ and t02_ fields of the same run; with one node of weight 1
+    it is T_m02 and its tangent exactly."""
+    nodes, wts = o["bw_nodes"], o["bw_w"]
+    out = np.full(len(k), np.nan)
+    for i, tag in enumerate(tags):
+        s = k == i
+        if not s.any():
+            continue
+        hs, t = field(d, "hs", tag), field(d, "t02", tag)
+        m0 = (hs / 4) ** 2
+        m2 = m0 * (2 * np.pi / t) ** 2
+        nb, wb = nodes[b[s]], wts[b[s]]
+
+        def wsum(f):
+            return (np.where(wb > 0, f[nb], 0.0) * wb).sum(1)
+        M0, M2 = wsum(m0), wsum(m2)
+        T = 2 * np.pi * np.sqrt(M0 / M2)
+        if not tangent:
+            out[s] = T
+            continue
+        dhs, dt = field(d, "dhs", tag), field(d, "dt02", tag)
+        dm0 = hs * dhs / 8
+        dm2 = (2 * np.pi) ** 2 * (dm0 / t ** 2 - 2 * m0 * dt / t ** 3)
+        out[s] = 0.5 * T * (wsum(dm0) / M0 - wsum(dm2) / M2)
+    return out
 
 
 def scores(r):

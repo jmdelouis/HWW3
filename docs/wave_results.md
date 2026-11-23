@@ -934,6 +934,52 @@ to 0.3–0.7 % (5 % at 9 January 00 h, where the mean is near zero). $T_{m02}$ w
 tail reset above the cut-off index `NKH` makes discrete jumps that the
 finite differences of the aggregates include and the tangent does not.
 
+### Steps of the calibration
+
+- **BJGAM frozen.** After the first step Jean-Marc froze `BJGAM` at 0.73:
+  only a few shallow buoys constrain it, the altimeters are insensitive to
+  it, its full step of 0.75 in $\ln$ scaled the whole step down to 0.40,
+  and its tangent is the least reliable. The trial with `BJGAM` x1.35
+  (training $J$ 46,872.0) is kept as information only. The control vector
+  is $\ln$ `BETAMAX`, `SDSC2` and `NLPROP`.
+- **Step 1.** From the four tangent runs of the start (Jacobian $A_0$
+  without its `BJGAM` column): `BETAMAX` x0.976 (1.7077), `SDSC2` x1.183,
+  `NLPROP` x1.255, predicted −1.11 %. Its value run (job 4189550) gives a
+  training $J$ of 46,628.5 + 1.3 (prior) against 47,249.7: −1.31 %,
+  accepted. A WW3 run with these parameters from the cold start (job
+  4269275, 64 cores, 1 h 48 min) gives 46,628.4 on training and 68,856.6
+  on validation, against the GPU's 46,628.5 and 68,856.7.
+- **Frozen Jacobian (options A and C).** Each further step uses one frozen
+  Jacobian and one value run, and the calibration stops when an accepted
+  step gains less than 0.2 % or no Levenberg–Marquardt damping gives a
+  decrease. From step 1, $A_0$ predicts −0.008 % only; the three f64
+  tangent runs at step 1 (jobs 4269271 to 4269273, Jacobian $A_1$) change
+  $A^TA$ by 4.5 % but the `BETAMAX` column by 26 % (67 % in its $T_{m02}$
+  block), which turns the gradient from −157 to +2,406, and the step of
+  $A_1$, along the `BETAMAX`–`SDSC2` valley (correlation 0.89), is
+  `BETAMAX` x0.867, `SDSC2` x0.876 (limited to 0.3), `NLPROP` x1.216 from
+  $p_0$, predicted −1.32 %. $A_1$ is the frozen Jacobian from then on; the
+  value run of step 2 is job 4295934.
+- **Depth-aware buoy operator, evaluated** (Jean-Marc's request, see
+  "Depth-aware buoy operator" below). The cost of the calibration stays the
+  nearest-node one until he has seen these results. The cost of every point
+  so far under both operators, on the training window (data part; the
+  prior adds 0 at $p_0$ and 1.29 at step 1):
+
+  | point | nearest node | depth-aware |
+  |---|---|---|
+  | $p_0$ | 47,249.7 | 45,265.2 |
+  | step 1 | 46,628.5 | 44,728.2 |
+  | change | −1.31 % | −1.18 % |
+
+  and on the validation window 69,351.1 → 68,856.7 (nearest node) and
+  66,610.9 → 66,224.7 (depth-aware). Step 1 would be accepted under both.
+  Under the new operator the step of $A_1$ (its buoy rows through the new
+  operator, from the stored `dhs_`, `dt02_` fields) would be `BETAMAX`
+  x0.868, `SDSC2` x0.876, `NLPROP` x1.211 from $p_0$, predicted −0.90 %:
+  the point of value run 4295934 to 0.005 in the factors, so a switch of
+  the cost would not waste that run.
+
 ## Preprocessing in Rust (in progress)
 
 The aim is a GPU run that needs no WW3 tool; WW3 then only makes the
@@ -1147,3 +1193,83 @@ these grid descriptors (plan, section 9.7 of the
 [differentiable WW3 note](differentiable.md)) are the way to treat them;
 leaving these buoys out of the cost, or weighting them down, would be a
 decision for the calibration, not taken here.
+
+### Depth-aware buoy operator
+
+Jean-Marc asked for a buoy operator that interpolates the grid taking the
+depth into account, instead of the nearest wet node (`scripts/buoy_op.py`,
+read by `cal_obs.py` when an operator file holds its weights, and by
+`validate_buoys.py --match depth`). It stays linear in the model fields,
+with weights fixed by the geometry and the depths, so the tangents go
+through it unchanged. It is built and evaluated below; the cost of the
+calibration keeps the nearest node until he has seen these results.
+
+- **Depth at the buoy.** The GEBCO cell that holds the buoy (the
+  bathymetry from which hww3-grid takes the node depths), else the median
+  of the sea cells of the 3 x 3 around it, else the `bottom_depth` of the
+  buoy file: GEBCO for 250 buoys, its 3 x 3 median for 3, none for 2 (they
+  keep the mesh weights). Where both exist (174 buoys) GEBCO and
+  `bottom_depth` agree to a median ratio of 1.00 (10–90 %: 0.77–1.26),
+  with 6 buoys beyond a factor 2. GEBCO is read on Datarmor by
+  `scripts/buoy_depth.py`, which writes nothing there; only the depths
+  come back.
+- **Weights.** Barycentric in the mesh triangle that holds the buoy, over
+  its wet nodes, or inverse squared distance over the 8 nearest wet nodes
+  within 10 km outside the wet mesh; each times
+  $\exp(-(\ln(d_{node}/d_{buoy}))^2/s^2)$ with $s = \ln 2$ and both depths
+  capped at 100 m (deeper water is deep for these waves), then
+  renormalised. If no node of the triangle is within a factor 3 of the
+  buoy's depth, the 8 nearest wet nodes within 10 km are tried; if none is,
+  the buoy is left out of the cost and the scores. 3 buoys are left out
+  (GL_TS_MO_41053 at 1 m, NO_TS_MO_6202603 at 4 m,
+  NO_TS_MO_BlankenbergeBuoy at 1 m, in 1–4 m of water where the mesh is
+  deeper), and 252 of the 255 buoys of the training window change node or
+  weights; a buoy uses up to 8 nodes.
+- **$T_{m02}$.** Interpolated through the moments: $2\pi\sqrt{M_0/M_2}$
+  with $M_0$, $M_2$ the weighted sums of $m_0 = (H_s/4)^2$ and
+  $m_2 = m_0 (2\pi/T_{m02})^2$ at the nodes, which are linear in the
+  spectrum. A linear average of $T_{m02}$ differs from it by 0.002 s at
+  the median buoy hour but by up to 4.5 s at 1 % of them, and has an RMSE
+  0.06 s larger.
+- **Check.** With the nearest node and a flat kernel the operator gives
+  the cost of the old one to all digits printed (47,249.686709 at $p_0$,
+  46,628.543598 at step 1), with $T_{m02}$ linear or through the moments,
+  and the same derivatives from the tangent runs of step 1 (to the 7
+  digits printed).
+
+| | $p_0$, nearest | $p_0$, depth-aware | step 1, nearest | step 1, depth-aware |
+|---|---|---|---|---|
+| training buoy $H_s$ bias / RMSE (cm) | −4.85 / 31.30 | −4.77 / 31.25 | −6.38 / 31.64 | −6.32 / 31.61 |
+| training $T_{m02}$ bias / RMSE (s) | −0.399 / 1.131 | −0.467 / 0.999 | −0.352 / 1.100 | −0.416 / 0.969 |
+| validation buoy $H_s$ bias / RMSE (cm) | −3.30 / 41.43 | −3.03 / 40.79 | −5.60 / 41.68 | −5.35 / 41.12 |
+| validation $T_{m02}$ bias / RMSE (s) | −0.393 / 1.148 | −0.411 / 1.024 | −0.344 / 1.123 | −0.357 / 0.999 |
+
+Against the two other ways of matching the buoys, buoy $H_s$ bias / RMSE
+in cm (the depth-aware matching is the diagnostic of the coastal section:
+the nearest wet node within 25 km whose depth is within 25 % of the
+buoy's):
+
+| | nearest node | depth-aware matching | depth-aware interpolation |
+|---|---|---|---|
+| training, $p_0$ | −4.85 / 31.30 | −5.97 / 33.00 | −4.77 / 31.25 |
+| training, step 1 | −6.38 / 31.64 | −7.49 / 33.29 | −6.32 / 31.61 |
+| validation, $p_0$ | −3.30 / 41.43 | −4.92 / 45.17 | −3.03 / 40.79 |
+| validation, step 1 | −5.60 / 41.68 | −7.20 / 45.35 | −5.35 / 41.12 |
+
+Moving a buoy to a single node of the right depth, farther away, makes the
+scores worse; interpolating over the nodes around it with depth weights
+makes them slightly better, and much better for $T_{m02}$.
+
+The new operator leaves the buoy $H_s$ bias nearly unchanged overall and
+lowers its RMSE a little, and the $T_{m02}$ RMSE by 0.12–0.13 s. Class by
+class (start run, training / validation, cm), it halves the bias of the
+buoys whose cell is at least 30 % land (−27.2 → −16.4 and −35.4 → −17.8)
+and of the finest cells (level 11: −5.8 → −4.5 and −7.5 → −5.5) and of
+the nodes shallower than 20 m on validation (−8.6 → −6.0), and changes the
+other classes by less than 2 cm; the buoys within 5 km of the coast stay
+at −8.4 and −9.7 cm. On the WW3 run at step 1 over 5–10 January,
+`validate_buoys.py --match depth` gives a buoy $H_s$ bias of −6.02 cm and
+RMSE of 36.5 cm (nearest node: −6.17 and 36.8 cm) and a $T_{m02}$ RMSE of
+1.00 s (1.12 s) with a correlation of 0.79 (0.72), over the 254 buoys
+that have weights (the weights are built for the buoys of the
+calibration's windows; the others are skipped).

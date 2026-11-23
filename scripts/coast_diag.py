@@ -64,19 +64,25 @@ def stats(m, o):
     return (float(np.mean(e)), float(np.sqrt(np.mean(e ** 2))), int(len(e))) if len(e) else (np.nan, np.nan, 0)
 
 
-def table(title, cls, labels, per, runs):
+def table(title, cls, labels, sets, runs):
+    """Bias and RMSE per class for each operator of SETS ((label, per) pairs) and run."""
     print("\n%s" % title)
-    print("  %-14s %6s %7s" % ("class", "buoys", "hours") + "".join("  %-9s bias/RMSE (cm)" % r for r in runs))
+    head = "  %-14s %6s" % ("class", "buoys")
+    for lab, _ in sets:
+        head += " %7s" % ("hours" if lab == "old" else "h " + lab) + "".join("  %-3s %-4s bias/RMSE (cm)" % (r, lab) for r in runs)
+    print(head)
     for c, lab in enumerate(labels):
         s = cls == c
         if not s.any():
             continue
-        line = "  %-14s %6d %7d" % (lab, int(s.sum()), int(sum(per["hours"][i] for i in np.flatnonzero(s))))
-        for r in runs:
-            m = np.concatenate([per[r]["m"][i] for i in np.flatnonzero(s)])
-            o = np.concatenate([per["o"][i] for i in np.flatnonzero(s)])
-            b, e, _ = stats(m, o)
-            line += "  %+7.2f / %6.2f          " % (100 * b, 100 * e)
+        line = "  %-14s %6d" % (lab, int(s.sum()))
+        for _, per in sets:
+            line += " %7d" % int(sum(per["hours"][i] for i in np.flatnonzero(s)))
+            for r in runs:
+                m = np.concatenate([per[r]["m"][i] for i in np.flatnonzero(s)])
+                o = np.concatenate([per["o"][i] for i in np.flatnonzero(s)])
+                b, e, _ = stats(m, o)
+                line += "  %+7.2f / %6.2f          " % (100 * b, 100 * e)
         print(line)
 
 
@@ -101,6 +107,7 @@ def main():
     ap.add_argument("--json")
     ap.add_argument("--fractions", default="0.25+0.5")
     ap.add_argument("--radius-km", type=float, default=25.0)
+    ap.add_argument("--op-new", help="a depth-aware operator of buoy_op.py, compared with OP class by class")
     a = ap.parse_args()
     op = np.load(a.op)
     tags = [str(t) for t in op["tags"]]
@@ -163,6 +170,24 @@ def main():
         per["hours"].append(int(ok.sum()))
         for r in runs:
             per[r]["m"].append(model[r][s][ok])
+    sets = [("old", per)]
+    if a.op_new:
+        on = np.load(a.op_new)
+        mn = {r: cal_obs.buoy_points(on, d, tags, "hs", on["bh_k"], on["bh_b"]) for r, d in runs.items()}
+        per2 = {"o": [], "hours": [], "A": {"m": []}, "B": {"m": []}}
+        for ib in range(len(names)):
+            s = on["bh_b"] == ib
+            ok = np.isfinite(mn["A"][s]) & np.isfinite(mn["B"][s])
+            per2["o"].append(on["bh_obs"][s][ok])
+            per2["hours"].append(int(ok.sum()))
+            for r in runs:
+                per2[r]["m"].append(mn[r][s][ok])
+        sets.append(("new", per2))
+        o2 = np.concatenate(per2["o"])
+        print("new operator %s: %d buoys with hours, %d buoy hours" % (a.op_new, sum(1 for h in per2["hours"] if h), len(o2)))
+        for r in runs:
+            b, e, n = stats(np.concatenate(per2[r]["m"]), o2)
+            print("  run %s: H_s bias %+.2f cm, RMSE %.2f cm" % (r, 100 * b, 100 * e))
     allm = {r: np.concatenate(per[r]["m"]) for r in runs}
     allo = np.concatenate(per["o"])
     print("%d buoys, %d buoy hours; run A %s, run B %s" % (len(names), len(allo), a.run_a, a.run_b))
@@ -177,23 +202,23 @@ def main():
              np.nanpercentile(nd / bd, 90), np.median([r["dist_km"] for r in rows]), max(r["dist_km"] for r in rows)))
     ratio = nd / bd
     c, lab = classes(ratio, [0, 0.5, 0.8, 1.25, 2.0, 1e9], "%.2f-%.2g")
-    table("H_s by node depth / buoy depth", c, lab, per, runs)
+    table("H_s by node depth / buoy depth", c, lab, sets, runs)
     c, lab = classes(nd, [0, 20, 50, 100, 200, 1e9], "%g-%g m")
-    table("H_s by node depth", c, lab, per, runs)
+    table("H_s by node depth", c, lab, sets, runs)
     c, lab = classes(np.array([r["coast_km"] for r in rows]), [0, 5, 10, 25, 50, 1e9], "%g-%g km")
-    table("H_s by distance of the node to the coast", c, lab, per, runs)
+    table("H_s by distance of the node to the coast", c, lab, sets, runs)
     lv = np.array([r["level"] for r in rows])
     levels = sorted(set(lv.tolist()))
     c = np.array([levels.index(v) for v in lv])
-    table("H_s by HEALPix level of the node", c, ["level %d" % v for v in levels], per, runs)
+    table("H_s by HEALPix level of the node", c, ["level %d" % v for v in levels], sets, runs)
     c, lab = classes(np.array([r["slope"] for r in rows]), [0, 0.1, 0.3, 1.0, 1e9], "%g-%g")
-    table("H_s by depth range of the node and its neighbours / node depth", c, lab, per, runs)
+    table("H_s by depth range of the node and its neighbours / node depth", c, lab, sets, runs)
     if sub:
         gs = np.array([r["gebco_std"] for r in rows]) / np.maximum(nd, 1.0)
         c, lab = classes(gs, [0, 0.1, 0.3, 1.0, 1e9], "%g-%g")
-        table("H_s by GEBCO depth spread inside the cell / node depth", c, lab, per, runs)
+        table("H_s by GEBCO depth spread inside the cell / node depth", c, lab, sets, runs)
         c, lab = classes(np.array([r["gebco_land"] for r in rows]), [0, 0.001, 0.1, 0.3, 1.01], "%g-%g")
-        table("H_s by GEBCO land fraction inside the cell", c, lab, per, runs)
+        table("H_s by GEBCO land fraction inside the cell", c, lab, sets, runs)
     # depth-aware matching (diagnostic only)
     wet = np.isfinite(cal_obs.field(a.run_a, "hs", tags[0]))
     wi = np.flatnonzero(wet)
