@@ -75,7 +75,9 @@ the altimeter and buoy scores of WW3 to \SI{1}{\micro\metre}. With the
 calibrated ST4 it reproduces the weeks of the explicit runs of grids v5
 $K=4$ and v4 to 2 and \SI{4}{\micro\metre} at the median node, with the
 same scores, in 124 and \SI{220}{s} per model day against 2601 and
-\SI{4318}{s} for WW3 on 112 cores.
+\SI{4318}{s} for WW3 on 112 cores. The hand-written tangent of its source
+terms agrees with double-precision finite differences to better than
+$10^{-4}$.
 \end{abstract}
 
 \section{Motivation}
@@ -1887,8 +1889,9 @@ bands are grown or reset. These differences come from the order of the
 operations, the fused multiply-adds and the elementary functions, which
 differ between WW3 and the GPU but are shared by the two GPU precisions.
 \end{itemize}
-The observation operators and the first finite-difference gradients with
-respect to the parameters are still to be written.
+The first finite-difference gradients with respect to the parameters, from
+15 runs of 48 hours in double precision with the full ST4, are running
+(jobs 4162941 to 4162955).
 
 \paragraph{Milestone M2b (targets met).} M2b runs the source terms of the
 calibrated configuration, with the stress tables of \texttt{INSIN4}
@@ -2014,6 +2017,75 @@ function, friction factor) set the larger values of \texttt{W3SDS4} and
 \label{tab:m2src}
 \end{table}
 
+\paragraph{Milestone M3 (started).} M3 differentiates the GPU model in
+forward mode, for a relative change of the wind speed or of a source
+parameter (\texttt{BETAMAX}, \texttt{SDSC2}, \texttt{NLPROP},
+\texttt{BJGAM}).
+\begin{itemize}
+\item \emph{Tangent kernels.} The kernel \texttt{srce\_tl} differentiates
+the whole \texttt{W3SRCE} integration with the full ST4. The module
+\texttt{prop\_tl} differentiates \texttt{W3KTP3}, the geographic node
+update, the level remap, the wind relative to the current and the outputs.
+Both are written by hand, each line of the value kernel with its
+derivative next to it.
+\item \emph{Discrete choices.} The number of dynamic steps,
+\texttt{NKH}, the limiter branches, the table cells and the clamps at zero
+are taken from the values and carry no derivative. The tangent is
+therefore exact where the model is smooth.
+\item \emph{Stress table.} For \texttt{BETAMAX}, the derivative of the
+tail-stress table \texttt{TAUHFT2} comes from \texttt{TABU\_TAUHF2},
+ported in double precision. The port reproduces the WW3 table to
+$1.1\times10^{-6}$. Its derivative reproduces the central difference of
+the tables WW3 writes for \texttt{BETAMAX} $\pm0.1\,\%$ to
+$9.9\times10^{-4}$, the single-precision limit of these tables.
+\item \emph{Check of the sources.} On the harness nodes of grids v5 $K=4$
+and v4, one \SI{600}{s} step of the tangent kernel is compared with
+double-precision central differences of the value kernel. At every node
+where the model is smooth, the difference stays below the $10^{-4}$ of the
+M3 target, $9.5\times10^{-5}$ at worst, with medians of $10^{-11}$ to
+$3\times10^{-8}$ (Table~\ref{tab:m3}). The tangent kernel takes 1.2 to
+1.7 times the time of the value kernel.
+\item \emph{Automatic differentiation.} \texttt{std::offload}, which would
+bring Enzyme to the GPU, still has no NVIDIA device side, and it could not
+see inside CubeCL kernels. A CubeCL dual-number type cannot carry the
+arithmetic of the kernels either, since CubeCL structures can neither be
+reassigned nor reused once moved. The tangents, and later the adjoints,
+therefore stay hand-written.
+\item \emph{Next.} The tangent through the time loop
+(\texttt{hww3-prop run --tangent}) is being checked against
+finite-difference runs over 3 and 48 hours.
+\end{itemize}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrrrr}
+\toprule
+ & \multicolumn{3}{c}{v5 $K=4$, 8 January 00\,h} & \multicolumn{3}{c}{v4, 1 January 00:10} \\
+direction & smooth & median & max & smooth & median & max \\
+\midrule
+spectrum & 1854/1869 & $1.6\times10^{-11}$ & $4.7\times10^{-7}$ & 1608/1652 & $6.4\times10^{-11}$ & $9.8\times10^{-7}$ \\
+wind & 1705/1869 & $2.8\times10^{-9}$ & $9.5\times10^{-5}$ & 1400/1658 & $2.3\times10^{-10}$ & $2.1\times10^{-6}$ \\
+\texttt{BETAMAX} & 1586/1861 & $2.2\times10^{-9}$ & $9.5\times10^{-7}$ & 1418/1647 & $7.8\times10^{-11}$ & $3.3\times10^{-6}$ \\
+\texttt{SDSC2} & 1587/1621 & $8.9\times10^{-10}$ & $9.9\times10^{-7}$ & 191/251 & $1.3\times10^{-10}$ & $5.6\times10^{-7}$ \\
+\texttt{NLPROP} & 1811/1864 & $1.9\times10^{-9}$ & $9.2\times10^{-7}$ & 561/1472 & $3.0\times10^{-8}$ & $1.5\times10^{-6}$ \\
+\texttt{BJGAM} & 2/3 & $7.8\times10^{-9}$ & $7.8\times10^{-9}$ & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\caption{Milestone M3: tangent of one \SI{600}{s} step of \texttt{W3SRCE}
+with the full ST4, on the GPU in double precision, against central
+differences of the value kernel on the harness nodes (1\,869 on grid v5
+$K=4$, 1\,695 on grid v4). \emph{Smooth}: nodes where the differences
+with relative steps $10^{-4}$ and $10^{-5}$ agree to $10^{-6}$ of the
+largest derivative, over the nodes where the direction acts (derivative
+above $10^{-9}$ of the largest spectral density). \emph{Median} and
+\emph{max} over the smooth nodes of the largest difference over the
+spectrum, relative to the largest derivative of the node. \emph{Spectrum}:
+a random relative change of every bin. Depth-induced breaking
+(\texttt{BJGAM}) acts at three harness nodes of grid v5 $K=4$ and none of
+grid v4. Slurm jobs 4163750 and 4163751.}
+\label{tab:m3}
+\end{table}
+
 
 \appendix
 \section{Reproducing}
@@ -2093,6 +2165,9 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{scripts/m2\_prop\_hpc.slurm} with \texttt{HOURS=48} or
   \texttt{168}, then \texttt{scripts/m1\_compare\_nc.py} and
   \texttt{scripts/m2\_scores\_hpc.slurm} (\texttt{docs/reproducing.md}).
+\item Table~\ref{tab:m3}: \texttt{scripts/m3\_tl\_src\_hpc.slurm}, which
+  runs \texttt{hww3-src check-tl} on each harness
+  (\texttt{docs/reproducing.md}).
 \end{itemize}
 
 \end{document}
