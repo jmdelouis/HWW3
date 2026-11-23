@@ -646,6 +646,20 @@ tangent runs show how fast this happens: a change of $10^{-4}$ of the wind
 flips some discrete choice of `W3SRCE` at most nodes within hours (section
 "The tangent through the time loop").
 
+Round-off alone is enough. The same GPU run in double precision from
+1 January (job 4165288) agrees with the single-precision run to 1 mm at
+these nodes until 4 January 18 h, then differs from it as much as WW3
+does, at the same nodes and hours:
+
+| 5 January | $H_s$ at node 238271: single / double precision / WW3 | nodes above 1 cm: single − double | single − WW3 |
+|---|---|---|---|
+| 00 h | 5.061 / 5.225 / 5.194 m | 18 | 16 |
+| 01 h | 5.108 / 5.342 / 5.337 m | 22 | 28 |
+| 02 h | 5.052 / 5.060 / 5.148 m | 38 | 37 |
+
+The Ungava cluster is therefore the sensitivity of the model to round-off
+there, not an error of the GPU model.
+
 ### Finite-difference gradients
 
 Gradients of the GPU model with the calibrated full ST4 with respect to

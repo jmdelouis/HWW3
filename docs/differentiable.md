@@ -759,7 +759,10 @@ Details and the list of what remains are in
   5 January 00:00 in such an episode on grid v5 $K=4$, the GPU stays within
   5 mm of WW3 over 2 h, and the harness finds `W3SRCE` within 2.1e-7 of WW3
   there (jobs 4163959 and 4163960): each step is WW3's, and the difference
-  is built up over days, as for the fjord spikes.
+  is built up over days, as for the fjord spikes. The GPU run in double
+  precision differs from the single-precision one there as much as WW3
+  does, at the same nodes (16 cm at 5 January 00 h, job 4165288): round-off
+  alone makes the cluster, and the point is closed.
 - **Finite-difference gradients.** 15 runs of 48 h in double precision from
   8 January on grid v5 $K=4$ (5 GPU-hours, jobs 4162941 to 4162955 and
   4163276) give the derivatives of the energy, the mean $H_s$ and the
