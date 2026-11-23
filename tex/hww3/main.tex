@@ -1968,12 +1968,21 @@ longer among the largest differences (job 4163960).
 \item On the same state, the harness finds the CPU \texttt{W3SRCE} within
 $2.1\times10^{-7}$ of WW3 at six nodes of the bay, with the same limiter
 and breaking decisions and 3 to 40 dynamic steps (job 4163959).
+\item The same GPU run in double precision from 1 January (job 4165288)
+agrees with the single-precision run to \SI{1}{mm} at these nodes until
+4 January 18\,h. It then differs from it as much as WW3 does, at the same
+nodes and hours. At the node of the \SI{13}{cm} difference, on 5 January,
+$H_s$ is \SI{5.061}{m}
+in single precision, \SI{5.225}{m} in double precision and \SI{5.194}{m}
+for WW3 at 00\,h, and 5.108, 5.342 and \SI{5.337}{m} at 01\,h. At 00, 01
+and 02\,h, 18, 22 and 38 nodes differ by more than \SI{1}{cm} between the
+two precisions, against 16, 28 and 37 between single precision and WW3.
 \end{itemize}
-Each step of the model is therefore WW3's there. The difference builds up
-over days in a fast-growing sea in partial ice, where small differences of
-state are amplified, as with the fjord spikes. A double-precision GPU run
-from 1 to 5 January (job 4165288) will show whether single-precision
-round-off alone gives centimetres there.
+Each step of the model is therefore WW3's there. Round-off alone,
+amplified over days in a fast-growing sea in partial ice, makes the
+cluster, as it makes the fjord spikes. It measures the sensitivity of the
+model to round-off there, not an error of the GPU model, and the point is
+closed.
 
 \emph{Gradients.} M2b also gives the first gradients of the model with the
 calibrated ST4, by finite differences. Fifteen runs of 48 hours in double
