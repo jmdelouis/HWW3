@@ -2380,6 +2380,28 @@ have \SI{-27}{cm} and \SI{-35}{cm}, with RMSEs of 58 to \SI{70}{cm}.
 These 14 buoys alone give $-1.4$ of the \SI{-4.85}{cm} and $-2.0$ of the
 \SI{-3.30}{cm}. The bias also grows with the spread of the GEBCO depth
 inside the cell, and is larger at HEALPix level 11 than at level 10.
+\item \emph{Depth-aware interpolation at the buoys.} A second buoy
+operator interpolates the model fields at each buoy. The weights are
+barycentric over the wet nodes of the mesh triangle that holds the buoy,
+or inverse squared distance over the 8 nearest wet nodes within
+\SI{10}{km} outside the wet mesh. Each weight is multiplied by
+$\exp(-(\ln(d_{\mathrm{node}}/d_{\mathrm{buoy}}))^2/\ln^2 2)$, with both
+depths capped at \SI{100}{m}, and renormalised. $d_{\mathrm{buoy}}$ is
+the GEBCO depth, which matches the depth given in the buoy files at a
+median ratio of 1.00. $T_{m02}$ comes from the interpolated moments $m_0$
+and $m_2$, so the operator stays linear in the spectra and the tangents
+go through it. Three buoys in 1 to \SI{4}{m} of water, with no node within
+a factor 3 of their depth, are left out. With nearest-node weights and a
+flat kernel the operator reproduces the cost of the calibration to all
+digits. With the interpolation, the buoy $H_s$ bias and RMSE on the
+validation window go from \SI{-3.30}{cm} and \SI{41.43}{cm} to
+\SI{-3.03}{cm} and \SI{40.79}{cm} at the start and from \SI{-5.60}{cm}
+and \SI{41.68}{cm} to \SI{-5.35}{cm} and \SI{41.12}{cm} after the first
+step. The $T_{m02}$ RMSE falls from 1.148 to \SI{1.024}{s}, and the bias
+of the buoys in cells at least 30\,\% land from \SI{-35.4}{cm} to
+\SI{-17.8}{cm}. The buoys within \SI{5}{km} of the coast barely move
+(about \SI{-9}{cm}). The first step lowers the cost under both
+operators, by 1.31\,\% and 1.18\,\%.
 \end{itemize}
 
 \begin{table}[H]
