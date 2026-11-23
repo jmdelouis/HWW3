@@ -456,11 +456,14 @@ impl<F: Real> Model<F> {
         // boundary, 1 elsewhere
         let grid_mapsta: Vec<i32> = (0..np).map(|i| if geo.iobp[i] == 2 { 2 } else { 1 }).collect();
         if rs.cold {
-            // ww3_strt: spectra only, no time, levels, ice or masks
+            // ww3_strt, or calm conditions: spectra only, no time, levels,
+            // ice or masks. W3IORS leaves TLEV(1) = TICE(1) = -1 (not read),
+            // so that the first step of W3WAVE applies the first level and
+            // ice fields whatever their time (action 'I')
             let t = inp.start.ok_or_else(|| anyhow!("{}: COLD restart without time, give --start", inp.restart.display()))?;
             rs.time = t;
-            rs.tlev = t;
-            rs.tice = t;
+            rs.tlev = Time(-1, 0);
+            rs.tice = Time(-1, 0);
             rs.mapsta = grid_mapsta.clone();
         } else if let Some(t) = inp.start {
             if t != rs.time {
@@ -1318,16 +1321,20 @@ impl<F: Real> Model<F> {
         }
     }
 
-    /// `W3UICE` when the next ice field is within half an interval.
+    /// `W3UICE` when the next ice field is within half an interval, or at
+    /// once when no ice field was read yet (`TICE(1) < 0`, after a cold or
+    /// calm start).
     fn update_ice(&mut self) -> Result<()> {
         let Some(f) = self.ice.as_ref() else { return Ok(()) };
         let Some((tin, flds)) = f.next.as_ref() else { return Ok(()) };
-        let dti0 = (tin.secs() - self.tice.secs()) as f64;
-        if dti0 == 0.0 {
-            return Ok(());
-        }
-        if ((tin.secs() - self.time.secs()) as f64) > 0.5 * dti0 {
-            return Ok(());
+        if self.tice.0 >= 0 {
+            let dti0 = (tin.secs() - self.tice.secs()) as f64;
+            if dti0 == 0.0 {
+                return Ok(());
+            }
+            if ((tin.secs() - self.time.secs()) as f64) > 0.5 * dti0 {
+                return Ok(());
+            }
         }
         let (tin, ice) = (*tin, flds[0].clone());
         self.tice = tin;
@@ -1378,14 +1385,17 @@ impl<F: Real> Model<F> {
         }
     }
 
-    /// `W3ULEV` when the next level field is within half an interval. Returns
-    /// whether the depth changed.
+    /// `W3ULEV` when the next level field is within half an interval, or at
+    /// once when no level field was read yet (`TLEV(1) < 0`, after a cold or
+    /// calm start). Returns whether the depth changed.
     fn update_level(&mut self) -> Result<bool> {
         let Some(f) = self.lev.as_ref() else { return Ok(false) };
         let Some((tln, flds)) = f.next.as_ref() else { return Ok(false) };
-        let dtl0 = (tln.secs() - self.tlev.secs()) as f64;
-        if dtl0 == 0.0 || ((tln.secs() - self.time.secs()) as f64) > 0.5 * dtl0 {
-            return Ok(false);
+        if self.tlev.0 >= 0 {
+            let dtl0 = (tln.secs() - self.tlev.secs()) as f64;
+            if dtl0 == 0.0 || ((tln.secs() - self.time.secs()) as f64) > 0.5 * dtl0 {
+                return Ok(false);
+            }
         }
         let (tln, wlev) = (*tln, flds[0].clone());
         self.tlev = tln;
