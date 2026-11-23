@@ -13,13 +13,14 @@
 # m2_fd_gradients.py: total energy, mean H_s and the altimeter and buoy
 # scores of each run over 8-10 January, with the Python environment and the
 # January 2026 observations copied to scratch, docs/reproducing.md).
-#   sbatch --dependency=afterany:J1:J2:... scripts/m2_fd_hpc.slurm
+#   sbatch --dependency=afterany:J1:J2:... [--export=ALL,CASES=FILE,OUT=FILE.json] scripts/m2_fd_hpc.slurm
 S=/scratch/jmdeloui/HWW3
+C=${CASES:-$S/m2/fd/cases.txt}
+O=${OUT:-$S/m2/fd/gradients.json}
 P=$S/pyenv/bin/python
 export VAL_SPINUP_DAYS=${VAL_SPINUP_DAYS:-0}
 export VAL_END=${VAL_END:-2026-01-10T00:00}
 export VAL_MIN_HOURS=${VAL_MIN_HOURS:-24}
 set -e
 cd $S
-time $P scripts/m2_fd_gradients.py $S/m2/fd/cases.txt $S/runs/m2_dev_full/ww3.202601.nc $S/grids/natl_v5k4/plot/nodes.npz \
-  $S/grids/natl_v5k4 $S/m2/fd/gradients.json
+time $P scripts/m2_fd_gradients.py $C $S/runs/m2_dev_full/ww3.202601.nc $S/grids/natl_v5k4/plot/nodes.npz $S/grids/natl_v5k4 $O

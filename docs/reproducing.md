@@ -530,7 +530,10 @@ above:
 ```bash
 sbatch --export=ALL,HARNESS=src_8jan_full.bin scripts/m3_tl_src_hpc.slurm
 sbatch --export=ALL,HARNESS=src_v4_full.bin scripts/m3_tl_src_hpc.slurm
-sbatch -t 00:40:00 --export=ALL,NAME=WIND,HOURS=3,H=1e-3 scripts/m3_tl_run_hpc.slurm
+sbatch -t 00:40:00 --export=ALL,NAME=INIT,NOSRC=1,HOURS=3,H=1e-4:1e-5 scripts/m3_tl_run_hpc.slurm
+sbatch -t 00:40:00 --export=ALL,NAME=INIT,HOURS=3,H=1e-4:1e-5 scripts/m3_tl_run_hpc.slurm
+sbatch -t 00:40:00 --export=ALL,NAME=WIND,HOURS=3,H=1e-4:1e-5 scripts/m3_tl_run_hpc.slurm
+O=$R/m3/tl_JOBID; python3 scripts/m3_tl_compare.py $O/tangent 1e-4:$O/plus_1e-4:$O/minus_1e-4 1e-5:$O/plus_1e-5:$O/minus_1e-5 --tol 1e-6 --target 1e-4
 sbatch --export=ALL,NAME=BETAMAX,HOURS=48 scripts/m3_tl_run_hpc.slurm            # one per direction; lines NAME JOBID in $R/m3/tl48.txt
 sbatch --dependency=afterok:JOBIDS scripts/m3_tl_cmp_hpc.slurm
 ```

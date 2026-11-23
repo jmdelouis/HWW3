@@ -682,3 +682,48 @@ The first version of the comparison, with steps $10^{-3}$ and $10^{-4}$ and
 agreement to $10^{-4}$ (job 4163415), counted more nodes as smooth and
 found up to 1.1e-3 for the wind: there the larger step crosses cell edges
 of the bilinear tables `TAUT` and `TAUHFT2` where the derivative jumps.
+
+### The tangent through the time loop
+
+`hww3-prop run --tangent NAME --f64 --out64` carries the tangent through
+the whole step: forcing, boundary (zero tangent), ice and level updates,
+`W3KTP3`, the geographic propagation and `W3SRCE`. Over 3 h from the
+restart of 8 January 00 h on grid v5 $K=4$ it is compared with central
+differences of runs with relative steps $10^{-4}$ and $10^{-5}$, written in
+double precision. Per node, the hourly $H_s$ derivative is compared on the
+nodes where the two differences agree to $10^{-6}$ of the node's scale
+$s = \max(|d|, 10^{-3}\,\mathrm{rms}(d))$; the `INIT` direction is a
+relative change of the restart spectra.
+
+| direction | after | smooth nodes | median | p99 | above $10^{-4}$ | max |
+|---|---|---|---|---|---|---|
+| `INIT`, propagation only | 1 h | 100 % | 1.5e-11 | 4.9e-11 | 0 | 3.1e-7 |
+| | 3 h | 100 % | 1.5e-11 | 5.5e-11 | 1 | 1.1e-4 |
+| `INIT`, with the source terms | 1 h | 64 % | 7.6e-11 | 8.7e-7 | 7 | 1.0e-3 |
+| | 3 h | 24 % | 4.0e-9 | 3.6e-6 | 14 | 4.8e-4 |
+| `WIND` | 1 h | 19 % | 6.9e-9 | 6.6e-6 | 18 | 7.5e-4 |
+| | 3 h | 3.4 % | 6.6e-8 | 3.5e-5 | 28 | 2.5e-2 |
+
+(Jobs 4163934 to 4163936; percentages of the 371,278 nodes with $H_s$.)
+Without the source terms the model is piecewise linear in the spectrum and
+the tangent agrees with the differences to round-off on every node, and the
+total energy to 2e-9; a change of all spectra by the same factor keeps the
+limiter ratios of `W3KTP3`, so this checks the linear part of the
+propagation tangent, not the limiter branches. With the source terms, where the model is smooth the
+tangent agrees to $10^{-4}$ on all but 7 to 30 nodes.
+
+But the model with the source terms is smooth at these scales at fewer and
+fewer nodes: a change of $10^{-4}$ in the wind flips, within three hours, at
+least one discrete choice of the model (the number of dynamic steps, the
+cut-off index `NKH` and the limiter of `W3SRCE`, the limiter branches of
+`W3KTP3`) at 97 % of the nodes, and each flip makes a small jump that the
+tangent, a derivative along the path of the values, does not see.
+On aggregates the jumps add up instead of vanishing with the step: the
+derivative of the total energy after 3 h is 8.416e4 for the tangent
+against 8.291e4 and 8.280e4 for the differences with steps $10^{-4}$ and
+$10^{-5}$ (1.5 %), 4.384e4 against 4.373e4 and 4.378e4 for `INIT` (0.2 %).
+The finite differences of aggregates do not converge either (0.13 % and
+0.10 % between the two steps). The tangent is therefore the exact
+derivative of the model where it is smooth, and the finite differences
+with a step of 1 % include the mean effect of the jumps, which a
+calibration sees.

@@ -18,12 +18,15 @@
 //!     --wind, the source terms of the simplified ST4 run after the
 //!     propagation (milestone M2a); --wind-out also writes the hourly wind
 //!     (uwnd_, vwnd_YYYYMMDDHH.f32, as WW3 outputs it). --scale-par
-//!     NAME:F+NAME:F multiplies source parameters (SDSC2, NLPROP, BJGAM) and
-//!     --wind-factor F the wind, for finite differences. --tangent NAME
-//!     (milestone M3) also runs the tangent of the model for a relative
-//!     change of the wind (WIND) or of a source parameter (BETAMAX, SDSC2,
-//!     NLPROP, BJGAM): hourly tangent of H_s in DIR/dhs_YYYYMMDDHH.f32 and
-//!     tangent of the total energy ("denergy") in DIR/summary.json.
+//!     NAME:F+NAME:F multiplies source parameters (SDSC2, NLPROP, BJGAM),
+//!     --wind-factor F the wind and --init-factor F the spectra of the
+//!     restart, for finite differences. --tangent NAME (milestone M3) also
+//!     runs the tangent of the model for a relative change of the wind
+//!     (WIND), of a source parameter (BETAMAX, SDSC2, NLPROP, BJGAM) or of
+//!     the spectra of the restart (INIT): hourly tangent of H_s in
+//!     DIR/dhs_YYYYMMDDHH.f32 and tangent of the total energy ("denergy") in
+//!     DIR/summary.json. --out64 also writes H_s and its tangent in double
+//!     precision (hs_, dhs_YYYYMMDDHH.f64).
 //! hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
 //!     One step's forcing, then one W3KTP3 call on the GPU compared with
 //!     the CPU transcription of W3KTP3 (hww3_wave::cpu) on a sample of nodes.
@@ -67,7 +70,7 @@ fn parse() -> Result<Args> {
     let mut flags = std::collections::HashSet::new();
     let valued = [
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
-        "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent",
+        "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent", "--init-factor",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -138,6 +141,35 @@ fn restart_hs(grid: &Grid, a: &Args) -> Result<()> {
     Ok(())
 }
 
+fn write_f64(p: &Path, v: &[f64]) -> Result<()> {
+    let b: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
+    std::fs::write(p, b)?;
+    Ok(())
+}
+
+/// The hourly outputs at `tag`: H_s and T_m02 (f32), with `out64` H_s in
+/// double precision too, and in a tangent run the tangent of H_s. Returns
+/// H_s and the tangent outputs.
+fn write_hourly<F: Real>(m: &mut Model<F>, out: &Path, tag: &str, out64: bool) -> Result<(Vec<f32>, Option<(Vec<f64>, f64)>)> {
+    let (hs, t02) = m.outputs_f64();
+    let hs32: Vec<f32> = hs.iter().map(|&x| x as f32).collect();
+    let t32: Vec<f32> = t02.iter().map(|&x| x as f32).collect();
+    write_f32(&out.join(format!("hs_{tag}.f32")), &hs32)?;
+    write_f32(&out.join(format!("t02_{tag}.f32")), &t32)?;
+    if out64 {
+        write_f64(&out.join(format!("hs_{tag}.f64")), &hs)?;
+    }
+    let tan = m.tangent_outputs_f64();
+    if let Some((dhs, _)) = &tan {
+        let d32: Vec<f32> = dhs.iter().map(|&x| x as f32).collect();
+        write_f32(&out.join(format!("dhs_{tag}.f32")), &d32)?;
+        if out64 {
+            write_f64(&out.join(format!("dhs_{tag}.f64")), dhs)?;
+        }
+    }
+    Ok((hs32, tan))
+}
+
 fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     let device = Device::cuda(0);
     let client = hww3_wave::burn_ext::client(&device)?;
@@ -169,6 +201,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         cfg.units = u.parse()?;
     }
     let hours: i64 = a.opts.get("--hours").map(|h| h.parse()).transpose()?.unwrap_or(48);
+    let out64 = a.flags.contains("--out64");
     let out = PathBuf::from(a.opts.get("--out").cloned().unwrap_or_else(|| "prop_out".into()));
     std::fs::create_dir_all(&out)?;
     let t0 = Instant::now();
@@ -184,12 +217,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     if start.secs() % 3600 == 0 {
         // the outputs are hourly: a start between two hours (a restart
         // written after the first step) has none
-        let (hs, t02) = m.outputs();
-        write_f32(&out.join(format!("hs_{}.f32", tag(start))), &hs)?;
-        write_f32(&out.join(format!("t02_{}.f32", tag(start))), &t02)?;
-        if let Some((dhs, _)) = m.tangent_outputs() {
-            write_f32(&out.join(format!("dhs_{}.f32", tag(start))), &dhs)?;
-        }
+        write_hourly(&mut m, &out, &tag(start), out64)?;
     }
     let mut e0 = json!({"time": start.to_string(), "energy": m.total_energy()});
     if let Some((_, de)) = m.tangent_outputs() {
@@ -207,13 +235,8 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
             iters.push(json!({"time": m.time.to_string(), "sweeps_per_step": s}));
         }
         if m.time.secs() % 3600 == 0 {
-            let (hs, t02) = m.outputs();
-            write_f32(&out.join(format!("hs_{}.f32", tag(m.time))), &hs)?;
-            write_f32(&out.join(format!("t02_{}.f32", tag(m.time))), &t02)?;
-            let tan = m.tangent_outputs();
-            if let Some((dhs, _)) = &tan {
-                write_f32(&out.join(format!("dhs_{}.f32", tag(m.time))), dhs)?;
-            }
+            let tg = tag(m.time);
+            let (hs, tan) = write_hourly(&mut m, &out, &tg, out64)?;
             if a.flags.contains("--wind-out") {
                 // the wind WW3 writes (UA cos UD, UA sin UD): the wind of the
                 // step before the current is removed
@@ -286,7 +309,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         "config": {"dtg": cfg.dtg, "dtkth": cfg.dtkth, "ctmax": cfg.ctmax, "flcx": cfg.flcx, "flcth": cfg.flcth,
                    "flck": cfg.flck, "itstep0": cfg.itstep0, "block": cfg.block,
                    "host_level": cfg.host_level, "sources": m.has_sources(), "units": cfg.units,
-                   "tangent": cfg.tangent, "wind_factor": cfg.wind_factor,
+                   "tangent": cfg.tangent, "wind_factor": cfg.wind_factor, "init_factor": cfg.init_factor, "out64": out64,
                    "scale_par": cfg.scale_par.iter().map(|(n, f)| json!([n, f])).collect::<Vec<_>>()},
     });
     std::fs::write(out.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
@@ -388,6 +411,9 @@ fn perturbations(a: &Args, cfg: &mut Config) -> Result<()> {
     }
     if let Some(n) = a.opts.get("--tangent") {
         cfg.tangent = Some(n.to_string());
+    }
+    if let Some(f) = a.opts.get("--init-factor") {
+        cfg.init_factor = f.parse()?;
     }
     if let Some(f) = a.opts.get("--wind-factor") {
         cfg.wind_factor = f.parse()?;

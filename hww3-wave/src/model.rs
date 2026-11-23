@@ -111,11 +111,15 @@ pub struct Config {
     /// `NLPROP`, `BJGAM`; `BETAMAX` with `SINTABLE = 0` only, since the
     /// stress tables depend on it): finite differences of the parameters.
     pub scale_par: Vec<(String, f64)>,
-    /// Factor applied to the wind speed of the forcing.
-    pub wind_factor: f32,
+    /// Factor applied to the wind speed of the forcing (applied in double
+    /// precision, so that finite differences get the step they ask for).
+    pub wind_factor: f64,
+    /// Factor applied to the spectra of the restart.
+    pub init_factor: f64,
     /// Tangent run: the direction of the tangent, a relative change of the
-    /// wind speed (`WIND`) or of a source parameter (`BETAMAX`, `SDSC2`,
-    /// `NLPROP`, `BJGAM`).
+    /// wind speed (`WIND`), of a source parameter (`BETAMAX`, `SDSC2`,
+    /// `NLPROP`, `BJGAM`) or of the spectra of the restart (`INIT`, also
+    /// without the source terms).
     pub tangent: Option<String>,
 }
 
@@ -137,6 +141,7 @@ impl Default for Config {
             rwindc: 1.0,
             scale_par: vec![],
             wind_factor: 1.0,
+            init_factor: 1.0,
             tangent: None,
         }
     }
@@ -223,6 +228,10 @@ fn tangent_seeds(name: &str, q: &SrcePar, t: &SrceTables) -> Result<(Vec<f64>, V
     if name == "WIND" {
         eprintln!("tangent: relative change of the wind speed");
         return Ok((dpar, dtab, true));
+    }
+    if name == "INIT" {
+        eprintln!("tangent: relative change of the spectra of the restart");
+        return Ok((dpar, dtab, false));
     }
     let i = par_index(name)?;
     dpar[i] = t.par[i];
@@ -494,6 +503,11 @@ impl<F: Real> Model<F> {
             client.create_from_slice(F::as_bytes(&w))
         };
         let upu = |v: &[u32]| client.create_from_slice(u32::as_bytes(v));
+        // the spectra of the restart, times `init_factor` in double precision
+        let upva = |v: &[f32]| {
+            let w: Vec<F> = v.iter().map(|&x| <F as crate::backend::Scalar>::of_f64(x as f64 * cfg.init_factor)).collect();
+            client.create_from_slice(F::as_bytes(&w))
+        };
         let clats: Vec<f32> = lat.iter().map(|&y| (DERA * y).cos()).collect();
         let clatis: Vec<f32> = clats.iter().map(|c| 1.0 / c).collect();
         let cthg0: Vec<f32> = lat.iter().map(|&y| -(DERA * y).tan() / RADIUS).collect();
@@ -561,12 +575,16 @@ impl<F: Real> Model<F> {
             Some((k, d, s, sd)) => (Some(k), upf(&d), upf(&s), sd),
             None => (None, upf(&[0.0]), upf(&[0.0]), None),
         };
-        if cfg.tangent.is_some() && seeds.is_none() {
-            bail!("a tangent run needs the source terms (--sources)");
-        }
+        let seeds = match (seeds, cfg.tangent.as_deref()) {
+            (None, Some("INIT")) => Some((vec![0.0; crate::sources::NPAR], vec![0.0], false)),
+            (None, Some(_)) => bail!("a tangent run with respect to the wind or a source parameter needs the source terms (--sources)"),
+            (s, _) => s,
+        };
+        let init = cfg.tangent.as_deref() == Some("INIT");
         let tl = seeds.map(|(dpar, dtab, wind)| Tangent {
             wind,
-            d_vad: upf(&vec![0.0; nspec * np]),
+            // INIT: the tangent starts as the spectra themselves
+            d_vad: if init { upva(&va) } else { upf(&vec![0.0; nspec * np]) },
             d_dac: upf(&vec![0.0; np * nth]),
             d_dac2: upf(&vec![0.0; np * nth]),
             d_dut: upf(&vec![0.0; ne * nth]),
@@ -676,7 +694,7 @@ impl<F: Real> Model<F> {
             d_partial: client.empty(nspec * cfg.lanes * fb),
             d_iter: upu(&vec![1u32; nspec]),
             d_dtk: upf(&vec![cfg.dtg; nspec]),
-            d_va: upf(&va),
+            d_va: upva(&va),
             d_ac: client.empty(np * nth * fb),
             d_ac2: client.empty(np * nth * fb),
             d_ut: client.empty(ne * nth * fb),
@@ -738,6 +756,17 @@ impl<F: Real> Model<F> {
     /// Wait for the launched kernels to finish.
     pub fn sync(&self) {
         futures_lite::future::block_on(self.client.sync()).expect("device sync");
+    }
+
+    fn upd(&self, v: &[f64]) -> Handle {
+        let w: Vec<F> = v.iter().map(|&x| <F as crate::backend::Scalar>::of_f64(x)).collect();
+        self.client.create_from_slice(F::as_bytes(&w))
+    }
+
+    /// Copy a device array of `F` to the host in double precision.
+    pub fn download_f64(&self, h: &Handle) -> Vec<f64> {
+        let b = self.client.read_one(h.clone()).expect("device read");
+        F::from_bytes(&b).iter().map(|&x| x.as_f64()).collect()
     }
 
     fn upf(&self, v: &[f32]) -> Handle {
@@ -1038,7 +1067,7 @@ impl<F: Real> Model<F> {
         let np = self.np;
         let tpi = 2.0 * std::f32::consts::PI;
         let pi = std::f32::consts::PI;
-        let (mut ua0, mut uai, mut ud0, mut udi) = (vec![0f32; np], vec![0f32; np], vec![0f32; np], vec![0f32; np]);
+        let (mut ua0, mut uai, mut ud0, mut udi) = (vec![0f64; np], vec![0f64; np], vec![0f32; np], vec![0f32; np]);
         for i in 0..np {
             let (x0, y0) = (self.w0.0[i], self.w0.1[i]);
             let (xn, yn) = (self.wnx.0[i], self.wnx.1[i]);
@@ -1051,13 +1080,13 @@ impl<F: Real> Model<F> {
             if dd.abs() > pi {
                 dd -= tpi * dd.signum();
             }
-            ua0[i] = a0 * self.cfg.wind_factor;
-            uai[i] = (an - a0) * self.cfg.wind_factor;
+            ua0[i] = a0 as f64 * self.cfg.wind_factor;
+            uai[i] = (an - a0) as f64 * self.cfg.wind_factor;
             ud0[i] = c0;
             udi[i] = dd;
         }
-        self.d_ua0 = self.upf(&ua0);
-        self.d_uai = self.upf(&uai);
+        self.d_ua0 = self.upd(&ua0);
+        self.d_uai = self.upd(&uai);
         self.d_ud0 = self.upf(&ud0);
         self.d_udi = self.upf(&udi);
     }
@@ -2129,10 +2158,17 @@ impl<F: Real> Model<F> {
 
     /// H_s and T_m02 of every node (`UNDEF` where `MAPSTA <= 0`).
     pub fn outputs(&mut self) -> (Vec<f32>, Vec<f32>) {
+        let (hs, t02) = self.outputs_f64();
+        (hs.iter().map(|&x| x as f32).collect(), t02.iter().map(|&x| x as f32).collect())
+    }
+
+    /// [`Model::outputs`] in double precision (with `F = f64`, for finite
+    /// differences).
+    pub fn outputs_f64(&mut self) -> (Vec<f64>, Vec<f64>) {
         let mut t = std::time::Instant::now();
         self.launch_outputs();
-        let hs = self.download(&self.d_hs);
-        let t02 = self.download(&self.d_t02);
+        let hs = self.download_f64(&self.d_hs);
+        let t02 = self.download_f64(&self.d_t02);
         self.tick(4, &mut t);
         (hs, t02)
     }
@@ -2141,12 +2177,18 @@ impl<F: Real> Model<F> {
     /// the nodes with `MAPSTA > 0` (per-node sums on the device, total in double).
     pub fn total_energy(&self) -> f64 {
         self.launch_outputs();
-        self.download(&self.d_en).iter().map(|&x| x as f64).sum()
+        self.download_f64(&self.d_en).iter().sum()
     }
 
     /// In a tangent run, the tangent of H_s per node (`UNDEF` where
     /// `MAPSTA <= 0`) and of the total energy of [`Model::total_energy`].
     pub fn tangent_outputs(&self) -> Option<(Vec<f32>, f64)> {
+        let (dhs, de) = self.tangent_outputs_f64()?;
+        Some((dhs.iter().map(|&x| x as f32).collect(), de))
+    }
+
+    /// [`Model::tangent_outputs`] in double precision.
+    pub fn tangent_outputs_f64(&self) -> Option<(Vec<f64>, f64)> {
         let tl = self.tl.as_ref()?;
         let (np, nk, nth) = (self.np, self.nk, self.nth);
         let (c, d) = self.dims(np);
@@ -2169,8 +2211,8 @@ impl<F: Real> Model<F> {
                 nth,
             );
         }
-        let dhs = self.download(&tl.d_dhs);
-        let de = self.download(&tl.d_den).iter().map(|&x| x as f64).sum();
+        let dhs = self.download_f64(&tl.d_dhs);
+        let de = self.download_f64(&tl.d_den).iter().sum();
         Some((dhs, de))
     }
 }

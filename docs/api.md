@@ -89,4 +89,5 @@ the WW3 harness; `check-tl` for the M3 tangent kernel). The Fortran harness
 | `m2_moddef_hpc.slurm` | the calibrated `mod_def.ww3` with another `BETAMAX` (its stress tables), for the finite differences |
 | `m2_fd_gradients.py`, `m2_fd_hpc.slurm` | finite-difference gradients of the energy, mean $H_s$ and scores of 48 h GPU runs with respect to `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM` and the wind |
 | `m3_tl_src_hpc.slurm` | the tangent kernel of the source terms against finite differences on the harness nodes (`hww3-src check-tl`) |
-| `m3_tl_run_hpc.slurm`, `m3_tl_compare.py` | a tangent run of `hww3-prop` and, with a step, the two perturbed runs and the comparison of the tangent with their central difference |
+| `m3_tl_run_hpc.slurm`, `m3_tl_compare.py` | a tangent run of `hww3-prop` and, with one or two steps, the perturbed runs and the comparison of the tangent with their central differences (with two steps, on the nodes where they agree) |
+| `m3_tl_cmp_hpc.slurm` | the 48 h tangent runs against the finite-difference runs of M2b |

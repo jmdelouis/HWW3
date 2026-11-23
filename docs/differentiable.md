@@ -773,6 +773,19 @@ Details and the list of what remains are in
   with medians from 1.6e-11 to 3.0e-8, for the spectrum, the wind and the
   four parameters (jobs 4163750 and 4163751, [GPU model
   results](wave_results.md)). It costs 1.2 to 1.7 times the value kernel.
+- **Through the time loop.** Without the source terms the tangent of the
+  model with respect to the initial spectra agrees with double-precision
+  differences to round-off (1.5e-11 at the median node over 3 h, job
+  4163934). With them, it agrees to $10^{-4}$ on all but 7 to 30 nodes
+  wherever the model is smooth (jobs 4163935 and 4163936), but within three
+  hours a wind change of $10^{-4}$ flips some discrete choice of the model
+  (dynamic steps, `NKH` and limiter of `W3SRCE`, limiter branches of
+  `W3KTP3`) at 97 % of the nodes. On the total energy the tangent then differs from the finite
+  differences by 1.5 % for the wind and 0.2 % for the initial spectra, and
+  the differences themselves do not converge with the step. The tangent is
+  the derivative along the path of the values; finite differences with a
+  1 % step include the mean effect of the jumps. 48 h tangent runs are
+  compared with the M2b finite differences (jobs 4163952 to 4163958).
 
 ## 10. Other routes, briefly
 
