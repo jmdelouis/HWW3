@@ -811,6 +811,26 @@ Details and the list of what remains are in
   finite differences, which include the mean effect of the jumps; the
   reverse mode of M4 will see the same jumps.
 
+### 9.5 Calibration of the ST4 parameters (from 23 November 2026)
+
+- **Tables in Rust.** A new value of `BETAMAX` changes the stress tables
+  that `ww3_grid` writes in `mod_def.ww3` (`INSIN4`). They are now
+  computed by the Rust port: `TABU_STRESS` (`TAUT`, iterated in single
+  precision as WW3 does, since `1 - TAUW / TAU` cancels near `TAUWMAX`),
+  `TABU_TAUHF` and `TABU_TAUHF2` (`TAUHFT`, `TAUHFT2`, in double precision,
+  with their derivative with respect to `BETAMAX` for the tangent). They
+  reproduce the tables of WW3 to 7.9e-8 (`TAUT`) and 0.87–1.13e-6
+  (`TAUHFT`, `TAUHFT2`) of their largest value at `BETAMAX` 1.75 and at the
+  four values of the M2b finite differences, the single-precision
+  round-off of WW3, and take 1.8 s. No other precomputed entry depends on
+  `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM` or the wind factor (the saturation
+  weights and `CUMULW` of `INSIN4`, the DIA coefficients of `INSNL1`):
+  `hww3-src params` writes the parameter file of any values, and
+  `hww3-prop --betamax` builds the tables in memory, so the calibration
+  needs neither `ww3_grid` nor the harness. A GPU run with the Rust tables
+  gives the $H_s$ of a run with WW3's tables to 6.5e-8 m over 2 h (jobs
+  4182413 and 4182414, [GPU model results](wave_results.md)).
+
 ## 10. Other routes, briefly
 
 | route | effort | why not the main route |

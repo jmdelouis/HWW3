@@ -707,31 +707,38 @@ pub fn wind_interp_tl<F: Float>(
     }
 }
 
-/// Tangent of [`crate::prop::outputs()`]: `dhs` the tangent of H_s (`UNDEF`
-/// where `MAPSTA <= 0`) and `den` that of the energy without the tail.
+/// Tangent of [`crate::prop::outputs()`]: `dhs` and `dt02` the tangents of
+/// H_s and T_m02 (`UNDEF` where `MAPSTA <= 0`) and `den` that of the energy
+/// without the tail.
 #[cube(launch_unchecked)]
 #[allow(clippy::too_many_arguments)]
 pub fn outputs_tl<F: Float>(
     va: &[F],
     vad: &[F],
     cg: &[F],
+    sig: &[F],
     dden: &[F],
     nflag: &[u32],
     dhs: &mut [F],
+    dt02: &mut [F],
     den: &mut [F],
     fte_: f32,
+    dth_: f32,
     undef_: f32,
     np: usize,
     #[comptime] nk: usize,
     #[comptime] nth: usize,
 ) {
     let fte = F::cast_from(fte_);
+    let dth = F::cast_from(dth_);
     let undef = F::cast_from(undef_);
     let i = ABSOLUTE_POS;
     if i < np {
         let zero = F::new(0.0f32);
         let mut et = zero;
         let mut det = zero;
+        let mut et02 = zero;
+        let mut det02 = zero;
         let mut ab = zero;
         let mut dab = zero;
         let mut c = F::new(1.0f32);
@@ -743,15 +750,27 @@ pub fn outputs_tl<F: Float>(
                 dab += vad[(k * np + i) * nth + th];
             }
             c = cg[(k + 1) * np + i];
+            let s = sig[k + 1];
             et += ab * dden[k] / c;
             det += dab * dden[k] / c;
+            et02 += ab * dden[k] / c * s * s;
+            det02 += dab * dden[k] / c * s * s;
         }
         let draw = det;
         et += fte * ab / c;
         det += fte * dab / c;
+        let sn = sig[nk];
+        let tail = F::new(0.5f32) * sn * sn * sn * sn * dth;
+        et02 += ab / c * tail;
+        det02 += dab / c * tail;
         let out = (nflag[i] & 16u32) != 0u32;
         let d = select(et > zero, F::new(2.0f32) * det / et.sqrt(), zero);
+        // T_m02 = 2 pi sqrt(et / et02) where et02 > 1e-7 and et > 0, else 2 pi / sig(nk)
+        let ok = et02 > F::new(1.0e-7f32) && et > zero;
+        let tm = F::new(6.2831855f32) * (et / max(et02, F::new(1.0e-30f32))).sqrt();
+        let dt = select(ok, F::new(0.5f32) * tm * (det / et - det02 / et02), zero);
         dhs[i] = select(out, d, undef);
+        dt02[i] = select(out, dt, undef);
         den[i] = select(out, draw, zero);
     }
 }

@@ -25,8 +25,10 @@
 //!     (WIND), of a source parameter (BETAMAX, SDSC2, NLPROP, BJGAM) or of
 //!     the spectra of the restart (INIT): hourly tangent of H_s in
 //!     DIR/dhs_YYYYMMDDHH.f32 and tangent of the total energy ("denergy") in
-//!     DIR/summary.json. --out64 also writes H_s and its tangent in double
-//!     precision (hs_, dhs_YYYYMMDDHH.f64).
+//!     DIR/summary.json, and of T_m02 in DIR/dt02_YYYYMMDDHH.f32. --out64
+//!     also writes H_s, T_m02 and their tangents in double precision (hs_,
+//!     t02_, dhs_, dt02_YYYYMMDDHH.f64). --betamax B sets BETAMAX with the
+//!     tail-stress tables computed for it in double precision.
 //! hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
 //!     One step's forcing, then one W3KTP3 call on the GPU compared with
 //!     the CPU transcription of W3KTP3 (hww3_wave::cpu) on a sample of nodes.
@@ -70,7 +72,7 @@ fn parse() -> Result<Args> {
     let mut flags = std::collections::HashSet::new();
     let valued = [
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
-        "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent", "--init-factor",
+        "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent", "--init-factor", "--betamax",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -147,10 +149,11 @@ fn write_f64(p: &Path, v: &[f64]) -> Result<()> {
     Ok(())
 }
 
-/// The hourly outputs at `tag`: H_s and T_m02 (f32), with `out64` H_s in
-/// double precision too, and in a tangent run the tangent of H_s. Returns
-/// H_s and the tangent outputs.
-fn write_hourly<F: Real>(m: &mut Model<F>, out: &Path, tag: &str, out64: bool) -> Result<(Vec<f32>, Option<(Vec<f64>, f64)>)> {
+/// The hourly outputs at `tag`: H_s and T_m02 (f32), with `out64` in
+/// double precision too, and in a tangent run their tangents. Returns H_s
+/// and the tangent outputs.
+#[allow(clippy::type_complexity)]
+fn write_hourly<F: Real>(m: &mut Model<F>, out: &Path, tag: &str, out64: bool) -> Result<(Vec<f32>, Option<(Vec<f64>, Vec<f64>, f64)>)> {
     let (hs, t02) = m.outputs_f64();
     let hs32: Vec<f32> = hs.iter().map(|&x| x as f32).collect();
     let t32: Vec<f32> = t02.iter().map(|&x| x as f32).collect();
@@ -158,13 +161,16 @@ fn write_hourly<F: Real>(m: &mut Model<F>, out: &Path, tag: &str, out64: bool) -
     write_f32(&out.join(format!("t02_{tag}.f32")), &t32)?;
     if out64 {
         write_f64(&out.join(format!("hs_{tag}.f64")), &hs)?;
+        write_f64(&out.join(format!("t02_{tag}.f64")), &t02)?;
     }
     let tan = m.tangent_outputs_f64();
-    if let Some((dhs, _)) = &tan {
-        let d32: Vec<f32> = dhs.iter().map(|&x| x as f32).collect();
-        write_f32(&out.join(format!("dhs_{tag}.f32")), &d32)?;
-        if out64 {
-            write_f64(&out.join(format!("dhs_{tag}.f64")), dhs)?;
+    if let Some((dhs, dt02, _)) = &tan {
+        for (name, v) in [("dhs", dhs), ("dt02", dt02)] {
+            let d32: Vec<f32> = v.iter().map(|&x| x as f32).collect();
+            write_f32(&out.join(format!("{name}_{tag}.f32")), &d32)?;
+            if out64 {
+                write_f64(&out.join(format!("{name}_{tag}.f64")), v)?;
+            }
         }
     }
     Ok((hs32, tan))
@@ -251,7 +257,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
             if m.time.secs() % 21600 == 0 {
                 let e = m.total_energy();
                 let mut ej = json!({"time": m.time.to_string(), "energy": e});
-                if let Some((_, de)) = &tan {
+                if let Some((_, _, de)) = &tan {
                     ej["denergy"] = json!(de);
                 }
                 energy.push(ej);
@@ -310,6 +316,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
                    "flck": cfg.flck, "itstep0": cfg.itstep0, "block": cfg.block,
                    "host_level": cfg.host_level, "sources": m.has_sources(), "units": cfg.units,
                    "tangent": cfg.tangent, "wind_factor": cfg.wind_factor, "init_factor": cfg.init_factor, "out64": out64,
+                   "betamax": cfg.betamax,
                    "scale_par": cfg.scale_par.iter().map(|(n, f)| json!([n, f])).collect::<Vec<_>>()},
     });
     std::fs::write(out.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
@@ -411,6 +418,9 @@ fn perturbations(a: &Args, cfg: &mut Config) -> Result<()> {
     }
     if let Some(n) = a.opts.get("--tangent") {
         cfg.tangent = Some(n.to_string());
+    }
+    if let Some(b) = a.opts.get("--betamax") {
+        cfg.betamax = Some(b.parse()?);
     }
     if let Some(f) = a.opts.get("--init-factor") {
         cfg.init_factor = f.parse()?;

@@ -58,6 +58,8 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | Stress tables (`SINTABLE = 1`): u* from `TAUT`, tail stress from `TAUHFT2` | `INSIN4`, `CALC_USTAR`, `W3SIN4` | `sources` (CPU, checked), `srce` | M2b |
 | Directional cumulative breaking term (`SDSCUM < 0`, `CUMULW`), turbulent and viscous terms | `W3SDS4`, `INSIN4` | `sources` (CPU, checked), `srce` | M2b |
 | Unit harness of the source terms | (Fortran program on `libww3.a`) | `harness/src_harness.F90`, `harness` | M2a |
+| Stress tables for any `BETAMAX`, without `ww3_grid`: `TAUT`, `TAUHFT`, `TAUHFT2` and the derivative of the last two | `TABU_STRESS`, `TABU_TAUHF`, `TABU_TAUHF2` (`INSIN4`) | `sources` (`tabu_stress`, `tabu_tauhf2`, `rebuild_stress_tables`), `hww3-src params`, `hww3-prop --betamax` | calibration |
+| Tangent of the model (forward mode) for the wind, a source parameter or the initial spectra | (none in WW3) | `srce_tl`, `prop_tl`, `model` | M3 |
 
 ## Crate layout
 
@@ -77,6 +79,8 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | `burn_ext` | CubeCL | a sub-step as an operation of Burn's autodiff tape |
 | `prop` | CubeCL | the kernels of the propagation-only model |
 | `srce` | CubeCL | the source kernel: the whole `W3SRCE` integration of a global step, one cube per node with the spectrum in shared memory; the wind interpolation of `W3UWND` |
+| `srce_tl` | CubeCL | the source kernel with its tangent (forward mode) |
+| `prop_tl` | CubeCL | the tangents of `W3KTP3`, of the geographic node update, of the level remap, of the wind and of the outputs |
 | `model` | CubeCL | the time loop of `W3WAVE`, propagation only or with the source terms |
 | `cuda_c` | CUDA C | the M0 kernels in CUDA C, through `cudarc` and NVRTC |
 
@@ -168,6 +172,10 @@ hww3-prop check-steps <grid dir> --restart FILE [forcing as for run]
 | `--host-level` | water-level update on the host instead of the device |
 | `--no-bccfl` | count the interior nodes only in `ITER` (`FSBCCFL = F`); by default every wet node counts, as WW3 does with `UGBCCFL = T` |
 | `--profile` | synchronise after each part of a step and report the time of each part |
+| `--scale-par NAME:F+...`, `--wind-factor F`, `--init-factor F` | multiply `SDSC2`, `NLPROP` or `BJGAM`, the wind speed of the forcing or the restart spectra by a factor (in double precision) |
+| `--betamax B` | `BETAMAX` with the stress tables `TAUT`, `TAUHFT`, `TAUHFT2` computed for it by the Rust port instead of those of the parameter file |
+| `--tangent NAME` | the tangent of the model for a relative change of `WIND`, `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM` or `INIT` (the restart spectra): `dhs_` and `dt02_` files and the tangent of the total energy (milestone M3) |
+| `--out64` | also write $H_s$, $T_{m02}$ and their tangents in double precision (`.f64`) |
 
 `run` writes hourly $H_s$ and $T_{m02}$ to `DIR/hs_YYYYMMDDHH.f32` and
 `DIR/t02_YYYYMMDDHH.f32` (little-endian `f32`, one value per node, −999.9
@@ -188,6 +196,9 @@ writes the depth and currents of those steps. The job scripts are
 ```text
 hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
 hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R]
+hww3-src check-tl HARNESS [--units N] [--h H]
+hww3-src tables BASE.params [OTHER.params ...]
+hww3-src params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...]
 ```
 
 Runs the CPU transcriptions of the source terms (`sources`) on the inputs of
@@ -200,4 +211,17 @@ depth-breaking flag or the limiter decision differ from WW3. It needs no
 GPU. `check-gpu` runs the GPU source kernel (`srce`) on the same nodes
 and compares the spectra after the step with WW3 and with the CPU
 transcription; `--replicate R` repeats every node `R` times for the
-timing (`scripts/m2_src_gpu_hpc.slurm`).
+timing (`scripts/m2_src_gpu_hpc.slurm`). `check-tl` compares the tangent
+kernel `srce_tl` with central differences of `srce` (milestone M3).
+
+`tables` computes the stress tables of `INSIN4` for the `BETAMAX` of each
+parameter file and compares them with those WW3 wrote there: `TAUT`
+(`TABU_STRESS`, iterated in single precision as WW3 does) and `TAUHFT`,
+`TAUHFT2` (`TABU_TAUHF`, `TABU_TAUHF2`, in double precision, with their
+derivative with respect to `BETAMAX`). `params` writes the parameter file
+of other values of `BETAMAX` (its tables computed here), `SDSC2`, `NLPROP`
+and `BJGAM`, copying everything else from `BASE`: no other entry of the
+file depends on these four parameters (the saturation weights,
+`CUMULW` and the DIA coefficients do not), so a new value needs neither
+`ww3_grid` nor the harness. `hww3-prop --betamax` builds the same tables in
+memory.

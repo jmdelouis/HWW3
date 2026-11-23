@@ -538,6 +538,19 @@ sbatch --export=ALL,NAME=BETAMAX,HOURS=48 scripts/m3_tl_run_hpc.slurm           
 sbatch --dependency=afterok:JOBIDS scripts/m3_tl_cmp_hpc.slurm
 ```
 
+Calibration of the ST4 parameters: the stress tables of `INSIN4` computed
+in Rust against those of WW3 in the base and perturbed parameter files, a
+parameter file for other values, and two short GPU runs with WW3's tables
+and with the Rust tables:
+
+```bash
+H=$R/m2/harness
+target/release/hww3-src tables $H/src_8jan_full.bin.params $H/par_bp01.bin.params $H/par_bm01.bin.params $H/par_bp1.bin.params $H/par_bm1.bin.params
+target/release/hww3-src params $H/src_8jan_full.bin.params $R/cal/rust_bp1.params --betamax 1.7675 --scale-par SDSC2:1.01+NLPROP:0.99+BJGAM:1.02
+sbatch -t 00:20:00 --export=ALL,TAG=tabchk_ww3,F64=1,HOURS=3,RESTART=$R/m1/v5k4/restart001.ww3 scripts/cal_run_hpc.slurm
+sbatch -t 00:20:00 --export=ALL,TAG=tabchk_rust,BETAMAX=1.75,F64=1,HOURS=3,RESTART=$R/m1/v5k4/restart001.ww3 scripts/cal_run_hpc.slurm
+```
+
 ## 9. Note
 
 ```bash

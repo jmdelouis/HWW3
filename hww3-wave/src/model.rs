@@ -116,6 +116,10 @@ pub struct Config {
     pub wind_factor: f64,
     /// Factor applied to the spectra of the restart.
     pub init_factor: f64,
+    /// `BETAMAX` of the run, with the stress tables computed for it in
+    /// double precision (`TABU_STRESS`, `TABU_TAUHF2`) instead of those of
+    /// the parameter file.
+    pub betamax: Option<f64>,
     /// Tangent run: the direction of the tangent, a relative change of the
     /// wind speed (`WIND`), of a source parameter (`BETAMAX`, `SDSC2`,
     /// `NLPROP`, `BJGAM`) or of the spectra of the restart (`INIT`, also
@@ -142,6 +146,7 @@ impl Default for Config {
             scale_par: vec![],
             wind_factor: 1.0,
             init_factor: 1.0,
+            betamax: None,
             tangent: None,
         }
     }
@@ -213,6 +218,7 @@ struct Tangent {
     d_dpar: Handle,
     d_dtauhf: Handle,
     d_dhs: Handle,
+    d_dt02: Handle,
     d_den: Handle,
 }
 
@@ -545,7 +551,15 @@ impl<F: Real> Model<F> {
         let src = match &inp.sources {
             Some(p) => {
                 let par = Params::read(p)?;
-                let q = SrcePar::new(&par)?;
+                let mut q = SrcePar::new(&par)?;
+                if let Some(b) = cfg.betamax {
+                    // the stress tables of INSIN4 for this BETAMAX, computed here in double precision
+                    let t0 = std::time::Instant::now();
+                    let b0 = q.st.bbeta;
+                    q.st.bbeta = b;
+                    crate::sources::rebuild_stress_tables(&mut q.st)?;
+                    eprintln!("sources: BETAMAX {b0} -> {b}, stress tables in {:.1} s", t0.elapsed().as_secs_f64());
+                }
                 if q.st.nk != nk || q.st.nth != nth {
                     bail!("source parameters for {}x{} spectra against {nk}x{nth}", q.st.nk, q.st.nth);
                 }
@@ -593,6 +607,7 @@ impl<F: Real> Model<F> {
             d_dpar: upd(&dpar),
             d_dtauhf: upd(&dtab),
             d_dhs: upf(&vec![0.0; np]),
+            d_dt02: upf(&vec![0.0; np]),
             d_den: upf(&vec![0.0; np]),
         });
         let mut m = Model {
@@ -2183,12 +2198,13 @@ impl<F: Real> Model<F> {
     /// In a tangent run, the tangent of H_s per node (`UNDEF` where
     /// `MAPSTA <= 0`) and of the total energy of [`Model::total_energy`].
     pub fn tangent_outputs(&self) -> Option<(Vec<f32>, f64)> {
-        let (dhs, de) = self.tangent_outputs_f64()?;
+        let (dhs, _, de) = self.tangent_outputs_f64()?;
         Some((dhs.iter().map(|&x| x as f32).collect(), de))
     }
 
-    /// [`Model::tangent_outputs`] in double precision.
-    pub fn tangent_outputs_f64(&self) -> Option<(Vec<f64>, f64)> {
+    /// [`Model::tangent_outputs`] in double precision, with the tangent of
+    /// T_m02: `(dhs, dt02, denergy)`.
+    pub fn tangent_outputs_f64(&self) -> Option<(Vec<f64>, Vec<f64>, f64)> {
         let tl = self.tl.as_ref()?;
         let (np, nk, nth) = (self.np, self.nk, self.nth);
         let (c, d) = self.dims(np);
@@ -2200,11 +2216,14 @@ impl<F: Real> Model<F> {
                 bf(&self.d_va, nk * np * nth),
                 bf(&tl.d_vad, nk * np * nth),
                 bf(&self.d_cg, (nk + 2) * np),
+                bf(&self.d_sig, nk + 2),
                 bf(&self.d_dden, nk),
                 bf(&self.d_nflag, np),
                 bf(&tl.d_dhs, np),
+                bf(&tl.d_dt02, np),
                 bf(&tl.d_den, np),
                 self.sp.fte,
+                self.sp.dth,
                 UNDEF,
                 np,
                 nk,
@@ -2212,8 +2231,9 @@ impl<F: Real> Model<F> {
             );
         }
         let dhs = self.download_f64(&tl.d_dhs);
+        let dt02 = self.download_f64(&tl.d_dt02);
         let de = self.download_f64(&tl.d_den).iter().sum();
-        Some((dhs, de))
+        Some((dhs, dt02, de))
     }
 }
 

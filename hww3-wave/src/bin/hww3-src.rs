@@ -6,7 +6,8 @@
 //! hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
 //! hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R]
 //! hww3-src check-tl HARNESS [--units N] [--h H]
-//! hww3-src tables BASE.params [PLUS.params MINUS.params]
+//! hww3-src tables BASE.params [OTHER.params ...]
+//! hww3-src params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+NAME:F]
 //! ```
 //!
 //! `check-gpu` (CubeCL build) runs the GPU kernel of the whole `W3SRCE`
@@ -15,8 +16,10 @@
 //! `--replicate R` each node is repeated `R` times for the timing.
 //! `check-tl` (CubeCL build, milestone M3) checks the tangent kernel
 //! `hww3_wave::srce_tl` against finite differences of that kernel in double
-//! precision, and `tables` the tail-stress tables computed here against
-//! those of WW3.
+//! precision, `tables` the stress tables computed here against those of
+//! WW3, and `params` writes the parameter file of other values of
+//! `BETAMAX`, `SDSC2`, `NLPROP` and `BJGAM` (stress tables computed here),
+//! so that no `ww3_grid` and harness run is needed for them.
 //!
 //! Each call of the transcription gets the inputs WW3 got in the harness,
 //! so that each routine is checked on its own: `W3SPR4` (twice), `W3SIN4`
@@ -596,37 +599,145 @@ fn check_tl(path: PathBuf, nu: usize, h1: f64) -> Result<()> {
     Ok(())
 }
 
-/// The tail-stress tables of `TABU_TAUHF2` computed here in double precision
-/// against those of WW3 (`BASE.params`), and their derivative with respect to
-/// `BETAMAX` against the central difference of the WW3 tables of two
-/// perturbed configurations (`PLUS.params`, `MINUS.params`).
-fn tables(base: PathBuf, plus: Option<PathBuf>, minus: Option<PathBuf>) -> Result<()> {
-    use hww3_wave::sources::tabu_tauhf2;
-    let q = SrcePar::new(&Params::read(&base)?)?;
-    let t = q.st.tables.as_ref().ok_or_else(|| anyhow::anyhow!("no stress tables (SINTABLE = 0)"))?;
+/// The stress tables of `INSIN4` computed here in double precision
+/// (`TABU_STRESS`, `TABU_TAUHF`, `TABU_TAUHF2`) against those that WW3 wrote
+/// in each parameter file, at the `BETAMAX` of that file, with the time to
+/// build them; with four or more files, the derivative of `TAUHFT` and
+/// `TAUHFT2` with respect to `BETAMAX` against the central differences of
+/// the WW3 tables of the 2nd and 3rd files, then of the 4th and 5th.
+fn tables(files: &[PathBuf]) -> Result<()> {
+    use hww3_wave::sources::{tabu_stress, tabu_tauhf2};
     let rel = |x: &[f64], y: &[f64]| -> f64 {
         let m = y.iter().fold(0f64, |m, v| m.max(v.abs())).max(1e-300);
         x.iter().zip(y).fold(0f64, |e, (a, b)| e.max((a - b).abs())) / m
     };
-    let t0 = std::time::Instant::now();
-    let (h1, dh1, h2, dh2) = tabu_tauhf2(&q.st, t, q.st.sig[q.st.nk], q.st.bbeta);
-    println!("TABU_TAUHF2 in f64 for BETAMAX {}: {:.1} s", q.st.bbeta, t0.elapsed().as_secs_f64());
-    println!("  TAUHFT against WW3: max |diff| / max {:.3e}; TAUHFT2: {:.3e}", rel(&h1, &t.tauhft), rel(&h2, &t.tauhft2));
-    if let (Some(pp), Some(pm)) = (plus, minus) {
-        let qp = SrcePar::new(&Params::read(&pp)?)?;
-        let qm = SrcePar::new(&Params::read(&pm)?)?;
-        let (tp, tm) = (qp.st.tables.unwrap(), qm.st.tables.unwrap());
+    let mut qs = vec![];
+    for f in files {
+        let q = SrcePar::new(&Params::read(f)?)?;
+        let t = q.st.tables.as_ref().ok_or_else(|| anyhow::anyhow!("{}: no stress tables (SINTABLE = 0)", f.display()))?;
+        let t0 = std::time::Instant::now();
+        let taut = tabu_stress(&q.st, t);
+        let t1 = t0.elapsed().as_secs_f64();
+        let (h1, dh1, h2, dh2) = tabu_tauhf2(&q.st, t, q.st.sig[q.st.nk], q.st.bbeta);
+        let t2 = t0.elapsed().as_secs_f64() - t1;
+        println!(
+            "{} (BETAMAX {}): TAUT {:.3e}, TAUHFT {:.3e}, TAUHFT2 {:.3e} (max |diff| / max against WW3); TABU_STRESS {:.3} s, TABU_TAUHF and TABU_TAUHF2 with their derivative {:.2} s",
+            f.display(),
+            q.st.bbeta,
+            rel(&taut, &t.taut),
+            rel(&h1, &t.tauhft),
+            rel(&h2, &t.tauhft2),
+            t1,
+            t2
+        );
+        if std::env::var("TAUT_WORST").is_ok() {
+            // the same iterations in double precision: the cells with the largest
+            // differences from WW3, relative to the largest value
+            let taut = tabu_stress_f64(&q.st, t);
+            let n1 = t.itaumax + 1;
+            let m = t.taut.iter().fold(0f64, |m, v| m.max(v.abs()));
+            let mut d: Vec<(f64, usize)> = taut.iter().zip(&t.taut).enumerate().map(|(k, (a, b))| ((a - b).abs() / m, k)).collect();
+            d.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap());
+            for &(e, k) in d.iter().take(8) {
+                println!("    TAUT({}, {}): ours {:.7e}, WW3 {:.7e}, {:.2e}", k % n1, k / n1, taut[k], t.taut[k], e);
+            }
+            let big = d.iter().filter(|x| x.0 > 1e-5).count();
+            println!("    {big} of {} cells above 1e-5", d.len());
+
+        }
+        qs.push((q, dh1, dh2));
+    }
+    for k in [1usize, 3] {
+        if qs.len() < k + 2 {
+            break;
+        }
+        let (qp, qm) = (&qs[k].0, &qs[k + 1].0);
+        let (tp, tm) = (qp.st.tables.as_ref().unwrap(), qm.st.tables.as_ref().unwrap());
         let db = qp.st.bbeta - qm.st.bbeta;
         let fd1: Vec<f64> = tp.tauhft.iter().zip(&tm.tauhft).map(|(a, b)| (a - b) / db).collect();
         let fd2: Vec<f64> = tp.tauhft2.iter().zip(&tm.tauhft2).map(|(a, b)| (a - b) / db).collect();
         println!(
-            "  d/dBETAMAX against the central difference of the WW3 tables (BETAMAX {} and {}): TAUHFT {:.3e}, TAUHFT2 {:.3e}",
+            "  d/dBETAMAX at {} against the central difference of the WW3 tables (BETAMAX {} and {}): TAUHFT {:.3e}, TAUHFT2 {:.3e}",
+            qs[0].0.st.bbeta,
             qp.st.bbeta,
             qm.st.bbeta,
-            rel(&dh1, &fd1),
-            rel(&dh2, &fd2)
+            rel(&qs[0].1, &fd1),
+            rel(&qs[0].2, &fd2)
         );
     }
+    Ok(())
+}
+
+/// `TABU_STRESS` in double precision (diagnostic of [`tables`]: WW3 iterates
+/// in single precision, see `hww3_wave::sources::tabu_stress`).
+fn tabu_stress_f64(p: &hww3_wave::sources::St4, t: &hww3_wave::sources::StressTables) -> Vec<f64> {
+    let (ni, nj) = (t.itaumax, t.jumax);
+    let (xm, eps1) = (0.5, 0.00001);
+    let wcd = 0.0012875f64.sqrt();
+    let mut out = vec![0f64; (ni + 1) * (nj + 1)];
+    for j in 1..=nj {
+        let utop = j as f64 * t.delu;
+        for i in 0..=ni {
+            let ztauw = (i as f64 * t.deltauw).powi(2);
+            let mut tauold = (utop * wcd).powi(2).max(ztauw + eps1);
+            for _ in 0..10 {
+                let x = ztauw / tauold;
+                let mut ust = tauold.sqrt();
+                let mut zz00 = p.aalpha * tauold / p.grav;
+                if p.zz0max != 0.0 {
+                    zz00 = zz00.min(p.zz0max);
+                }
+                let zz0 = zz00 / (1.0 - x).powf(xm);
+                let l = (p.zzwnd / zz0).ln();
+                let f = ust - p.kappa * utop / l;
+                let delf = 1.0 - p.kappa * utop / (l * l) * 2.0 / ust * (1.0 - (xm + 1.0) * x) / (1.0 - x);
+                ust -= f / delf;
+                tauold = (ust * ust).max(ztauw + eps1);
+            }
+            out[i + j * (ni + 1)] = tauold.sqrt();
+        }
+    }
+    out
+}
+
+/// A parameter file for other values of the calibrated parameters: `BASE`
+/// with `BETAMAX` set to `betamax` and its stress tables (`TAUT`, `TAUHFT`,
+/// `TAUHFT2`) computed here, and `SDSC2`, `NLPROP`, `BJGAM` multiplied by the
+/// factors of `scale`; everything else is copied. No other entry of the
+/// file depends on these parameters (`INSIN4`, `INSDS4`, `INSNL1`).
+fn params(base: PathBuf, out: PathBuf, betamax: Option<f64>, scale: &[(String, f64)]) -> Result<()> {
+    use hww3_wave::sources::rebuild_stress_tables;
+    let mut p = Params::read(&base)?;
+    let mut q = SrcePar::new(&p)?;
+    if let Some(b) = betamax {
+        let t0 = std::time::Instant::now();
+        q.st.bbeta = b;
+        rebuild_stress_tables(&mut q.st)?;
+        let t = q.st.tables.as_ref().unwrap();
+        p.set_real("BBETA", &[b])?;
+        p.set_real("TAUT", &t.taut)?;
+        p.set_real("TAUHFT", &t.tauhft)?;
+        if p.has("TAUHFT2") {
+            p.set_real("TAUHFT2", &t.tauhft2)?;
+        }
+        println!("BETAMAX {b}: stress tables in {:.2} s", t0.elapsed().as_secs_f64());
+    }
+    for (name, f) in scale {
+        let (rec, idx) = match name.as_str() {
+            "SDSC2" => ("SSDSC", 1usize),
+            "NLPROP" => ("SNLC1", 0),
+            "BJGAM" => ("SDBC2", 0),
+            _ => bail!("{name}: the factors are for SDSC2, NLPROP and BJGAM (BETAMAX takes --betamax)"),
+        };
+        let mut v: Vec<f64> = p.r(rec)?.iter().map(|&x| x as f64).collect();
+        println!("{name} ({rec}[{idx}]): {} -> {}", v[idx], v[idx] * f);
+        v[idx] *= f;
+        p.set_real(rec, &v)?;
+    }
+    p.write(&out)?;
+    // the file reads back with the new values
+    let q2 = SrcePar::new(&Params::read(&out)?)?;
+    println!("{}: BETAMAX {}, SDSC2 {}, NLPROP {}, BJGAM {}", out.display(), q2.st.bbeta, q2.st.ssdsc[1], q2.dia.snlc1, q2.st.sdbc2);
     Ok(())
 }
 
@@ -636,7 +747,19 @@ fn main() -> Result<()> {
     let _ = &opt;
     match (a.get(1).map(|s| s.as_str()), a.get(2)) {
         (Some("check"), Some(f)) => check(PathBuf::from(f)),
-        (Some("tables"), Some(f)) => tables(PathBuf::from(f), a.get(3).map(PathBuf::from), a.get(4).map(PathBuf::from)),
+        (Some("tables"), Some(_)) => tables(&a[2..].iter().map(PathBuf::from).collect::<Vec<_>>()),
+        (Some("params"), Some(f)) => {
+            let out = a.get(3).ok_or_else(|| anyhow::anyhow!("params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+NAME:F]"))?;
+            let b: Option<f64> = opt("--betamax").map(|s| s.parse()).transpose()?;
+            let mut sc = vec![];
+            if let Some(v) = opt("--scale-par") {
+                for item in v.split('+') {
+                    let (n, x) = item.split_once(':').ok_or_else(|| anyhow::anyhow!("--scale-par wants NAME:FACTOR, got {item}"))?;
+                    sc.push((n.to_string(), x.parse::<f64>()?));
+                }
+            }
+            params(PathBuf::from(f), PathBuf::from(out), b, &sc)
+        }
         #[cfg(feature = "cubecl")]
         (Some("check-gpu"), Some(f)) => {
             let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
@@ -654,7 +777,7 @@ fn main() -> Result<()> {
             check_tl(PathBuf::from(f), nu, h)
         }
         _ => bail!(
-            "usage: hww3-src check HARNESS | tables BASE.params [PLUS.params MINUS.params] | check-gpu HARNESS [--f64] [--units N] [--replicate R] | check-tl HARNESS [--units N] [--h H]"
+            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | check-gpu HARNESS [--f64] [--units N] [--replicate R] | check-tl HARNESS [--units N] [--h H]"
         ),
     }
 }

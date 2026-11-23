@@ -826,3 +826,54 @@ model, whose share of a difference does not shrink with the step, and not
 an error of the tangent. Node by node over 48 h, the two finite differences
 agree to $10^{-3}$ at only 19–31 % of the nodes, where the tangent differs
 by 0.2 % at the median node after 48 h.
+
+## Calibration of the ST4 parameters
+
+### Stress tables in Rust
+
+The calibration changes `BETAMAX`, which enters the stress tables that
+`ww3_grid` computes once and writes in `mod_def.ww3` (`INSIN4`): `TAUT`
+(`TABU_STRESS`, the friction velocity as a function of the wave-supported
+stress and the wind, which does not use `BETAMAX`), `TAUHFT` and `TAUHFT2`
+(`TABU_TAUHF`, `TABU_TAUHF2`, the stress of the high-frequency tail). They
+are now computed by the Rust port (`hww3_wave::sources::tabu_stress`,
+`tabu_tauhf2`). `hww3-src tables` compares them with the tables WW3 wrote
+in the parameter files of the base configuration and of the four
+perturbed `mod_def.ww3` files of the M2b finite differences:
+
+| `BETAMAX` | `TAUT` | `TAUHFT` | `TAUHFT2` |
+|---|---|---|---|
+| 1.75 | 7.9e-8 | 1.13e-6 | 1.13e-6 |
+| 1.75175 | 7.9e-8 | 9.7e-7 | 9.7e-7 |
+| 1.74825 | 7.9e-8 | 1.07e-6 | 1.07e-6 |
+| 1.7675 | 7.9e-8 | 9.1e-7 | 9.1e-7 |
+| 1.7325 | 7.9e-8 | 8.7e-7 | 8.7e-7 |
+
+(Largest difference relative to the largest value of the table.) `TAUT`
+is iterated in single precision as WW3 does: in double precision it would
+differ from WW3's by up to 1.2e-4 in 474 of its 40,401 cells, near the
+largest wave-supported stress at winds of 43–45 m/s, where `1 - TAUW /
+TAU` cancels in WW3's single precision. The three tables take 1.8 s on 8
+threads (16 ms for `TAUT`). The derivative of `TAUHFT` and `TAUHFT2` with
+respect to `BETAMAX` agrees with the central difference of the WW3 tables
+of `BETAMAX` ± 0.1 % to 6e-4 and 1e-3 of its largest value, the precision
+of single-precision tables over a 0.2 % step.
+
+No other entry of the parameter file depends on the calibrated parameters:
+`SDSC2`, `NLPROP` (`SNLC1`) and `BJGAM` (`SDBC2`) are scalars read at
+each call, and the saturation weights, `CUMULW` and `DIKCUMUL` of
+`INSIN4` and the DIA coefficients of `INSNL1` depend on the spectral grid
+and other parameters only; the wind factor enters no table. `hww3-src
+params` therefore writes the parameter file of any values of the four
+parameters from the base file (a file written for `BETAMAX` 1.7675 reads
+back with tables equal to the port's to 6e-8, their single-precision
+rounding), and `hww3-prop --betamax` builds the tables in memory: a new
+value needs neither `ww3_grid` nor the harness.
+
+Two GPU runs of 3 h in double precision from the restart of 8 January,
+one with the tables of the parameter file and one with the Rust tables
+(Slurm jobs 4182413 and 4182414), give the same $H_s$ to 5.0e-8 m after
+1 h and 6.5e-8 m after 2 h (RMS 1.2e-9 and 1.4e-9 m over 371,278 nodes);
+after 3 h one node differs by 4.3e-5 m (RMS 1.1e-7 m), a discrete choice
+of the source integration flipped by the 1e-6 difference of the tables,
+as in the M3 checks. In the GPU job (2 cores) the tables take 9.6 s.

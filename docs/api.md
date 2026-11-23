@@ -51,7 +51,9 @@ documented and the CI builds the documentation with warnings as errors.
 
 Programs: `hww3-wave` (M0 timings and checks), `hww3-prop` (the model;
 `--tangent` for the M3 tangent) and `hww3-src` (the source terms against
-the WW3 harness; `check-tl` for the M3 tangent kernel). The Fortran harness
+the WW3 harness; `check-tl` for the M3 tangent kernel; `tables` and
+`params` for the stress tables computed in Rust and the parameter file of
+other values of the calibrated parameters). The Fortran harness
 `harness/src_harness.F90` is built against the WW3 library.
 
 ## Scripts (`scripts/`)
@@ -91,3 +93,7 @@ the WW3 harness; `check-tl` for the M3 tangent kernel). The Fortran harness
 | `m3_tl_src_hpc.slurm` | the tangent kernel of the source terms against finite differences on the harness nodes (`hww3-src check-tl`) |
 | `m3_tl_run_hpc.slurm`, `m3_tl_compare.py` | a tangent run of `hww3-prop` and, with one or two steps, the perturbed runs and the comparison of the tangent with their central differences (with two steps, on the nodes where they agree) |
 | `m3_tl_cmp_hpc.slurm` | the 48 h tangent runs against the finite-difference runs of M2b |
+| `cal_run_hpc.slurm` | a run of the calibration: value or tangent run with given `BETAMAX` (Rust stress tables), `SDSC2`, `NLPROP`, `BJGAM` |
+| `cal_obs.py`, `cal_py_hpc.slurm` | the observation operators of the calibration (altimeter blocks, buoy hours, as the validation scripts match them), the cost and its gradient from tangent runs |
+| `cal_gn.py` | one Gauss–Newton (Levenberg–Marquardt) step with the posterior covariance |
+| `cal_fdcheck.py` | the tangent derivatives of the cost and scores against the M2b finite differences (control only) |

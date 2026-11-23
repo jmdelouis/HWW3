@@ -16,7 +16,7 @@
 
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 
 /// One record of the parameter file.
@@ -137,6 +137,47 @@ impl Params {
     /// Shape of `name`.
     pub fn shape(&self, name: &str) -> Result<&[usize]> {
         Ok(&self.get(name)?.shape)
+    }
+
+    /// Replace the values of the real record `name` (same length, rounded
+    /// to single precision as WW3 holds them).
+    pub fn set_real(&mut self, name: &str, v: &[f64]) -> Result<()> {
+        let a = self.map.get_mut(name).ok_or_else(|| anyhow!("parameter {name} not in the harness file"))?;
+        if a.real.len() != v.len() {
+            bail!("parameter {name}: {} values for {}", v.len(), a.real.len());
+        }
+        a.real = v.iter().map(|&x| x as f32).collect();
+        Ok(())
+    }
+
+    /// Write the parameter file (records in the order of their names).
+    pub fn write(&self, p: &Path) -> Result<()> {
+        let mut b: Vec<u8> = b"HWW3PAR1".to_vec();
+        let mut names: Vec<&String> = self.map.keys().collect();
+        names.sort();
+        for name in names {
+            let a = &self.map[name];
+            if name.len() > 16 {
+                bail!("record name {name} longer than 16 characters");
+            }
+            b.extend_from_slice(format!("{name:<16}").as_bytes());
+            let real = !a.real.is_empty() || a.int.is_empty();
+            b.push(if real { b'R' } else { b'I' });
+            b.extend_from_slice(&(a.shape.len() as i32).to_le_bytes());
+            for &l in &a.lbound {
+                b.extend_from_slice(&l.to_le_bytes());
+            }
+            for &s in &a.shape {
+                b.extend_from_slice(&(s as i32).to_le_bytes());
+            }
+            if real {
+                a.real.iter().for_each(|x| b.extend_from_slice(&x.to_le_bytes()));
+            } else {
+                a.int.iter().for_each(|x| b.extend_from_slice(&x.to_le_bytes()));
+            }
+        }
+        std::fs::File::create(p)?.write_all(&b)?;
+        Ok(())
     }
 }
 

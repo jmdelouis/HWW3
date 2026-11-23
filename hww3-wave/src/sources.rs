@@ -2107,3 +2107,64 @@ pub fn tabu_tauhf2(p: &St4, t: &StressTables, sigmax: f64, bbeta: f64) -> (Vec<f
     }
     (tauhft, dtauhft, tauhft2, dtauhft2)
 }
+
+/// `TABU_STRESS` of `INSIN4`: the friction velocity table
+/// `TAUT(0:ITAUMAX, 0:JUMAX) = SQRT(TAU)` as a function of the wave-supported
+/// stress (`I DELTAUW`)^2 and the wind speed `J DELU`, from the steady wind
+/// profile with the roughness length of Charnock corrected for the
+/// quasi-linear effect, `Z0 / SQRT(1 - TAUW / TAU)`, by 10 Newton
+/// iterations; zero for a zero wind. Fortran order from 0. The iterations
+/// are done in single precision, as WW3 does them: near `TAUWMAX` at strong
+/// winds `1 - TAUW / TAU` cancels, and the table of WW3 differs there from
+/// a double-precision one by up to 1.2e-4 of its largest value (474 of the
+/// 40,401 cells above 1e-5), while this one reproduces it to 8e-8. It does
+/// not depend on `BETAMAX`.
+pub fn tabu_stress(p: &St4, t: &StressTables) -> Vec<f64> {
+    let f = |x: f64| x as f32;
+    let (ni, nj) = (t.itaumax, t.jumax);
+    let (xm, eps1, wcd) = (0.5f32, 0.00001f32, 0.0012875f32.sqrt());
+    let (aalpha, grav, zz0max, zzwnd, kappa) = (f(p.aalpha), f(p.grav), f(p.zz0max), f(p.zzwnd), f(p.kappa));
+    let mut out = vec![0f64; (ni + 1) * (nj + 1)];
+    for j in 1..=nj {
+        let utop = j as f32 * f(t.delu);
+        for i in 0..=ni {
+            let ztauw = (i as f32 * f(t.deltauw)).powi(2);
+            let ustold = utop * wcd;
+            let mut tauold = (ustold * ustold).max(ztauw + eps1);
+            for _ in 0..10 {
+                let x = ztauw / tauold;
+                let mut ust = tauold.sqrt();
+                let mut zz00 = aalpha * tauold / grav;
+                if zz0max != 0.0 {
+                    zz00 = zz00.min(zz0max);
+                }
+                let zz0 = zz00 / (1.0 - x).powf(xm);
+                let l = (zzwnd / zz0).ln();
+                let fx = ust - kappa * utop / l;
+                let delf = 1.0 - kappa * utop / (l * l) * 2.0 / ust * (1.0 - (xm + 1.0) * x) / (1.0 - x);
+                ust -= fx / delf;
+                tauold = (ust * ust).max(ztauw + eps1);
+            }
+            out[i + j * (ni + 1)] = tauold.sqrt() as f64;
+        }
+    }
+    out
+}
+
+/// The stress tables of `INSIN4` (`TAUT`, `TAUHFT` and, with sheltering,
+/// `TAUHFT2`) computed here for the `BETAMAX` of `p` ([`tabu_stress`],
+/// [`tabu_tauhf2`] in double precision),
+/// in place of those read from the parameter file; their derivative with
+/// respect to `BETAMAX` comes from the same [`tabu_tauhf2`].
+pub fn rebuild_stress_tables(p: &mut St4) -> Result<()> {
+    let t = p.tables.as_ref().ok_or_else(|| anyhow::anyhow!("no stress tables (SINTABLE = 0)"))?;
+    let taut = tabu_stress(p, t);
+    let (h1, _, h2, _) = tabu_tauhf2(p, t, p.sig[p.nk], p.bbeta);
+    let tm = p.tables.as_mut().unwrap();
+    tm.taut = taut;
+    tm.tauhft = h1;
+    if !tm.tauhft2.is_empty() {
+        tm.tauhft2 = h2;
+    }
+    Ok(())
+}
