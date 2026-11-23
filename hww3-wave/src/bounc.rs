@@ -84,7 +84,11 @@ pub fn station_weights(lons: &[f32], lats: &[f32], xbpo: &[f32], ybpo: &[f32], i
             }
             let dist = (dlon * dlon + dlat * dlat).sqrt();
             let cos1 = (dlo * dlon + (ybpo[k] - lats[i1]) * dlat) / (dist * dist);
-            let c = cos1.max(0.0).min(1.0);
+            // MIN(1., MAX(0., COS1)) as gfortran evaluates it (the first
+            // argument unless the second is larger), which keeps the sign of
+            // a zero COS1, as WW3's file has it
+            let m = if 0.0 > cos1 { 0.0 } else { cos1 };
+            let c = if 1.0 < m { 1.0 } else { m };
             rd[k][0] = 1.0 - c;
             rd[k][1] = c;
         }
@@ -226,6 +230,11 @@ mod tests {
         // nearest first, then the second nearest found later in the list
         assert_eq!(&ip[2][..2], &[2, 1]);
         assert!((rd[2][0] - 0.75).abs() < 1e-6);
+        // a node at the longitude of its nearest station and south of it,
+        // the second station to the west on the same latitude: both terms of
+        // COS1 are -0, and its sign is kept as WW3 keeps it
+        let (_, rd) = station_weights(&[45.0, 44.0], &[70.0, 70.0], &[45.0], &[69.8], 2);
+        assert_eq!((rd[0][0], rd[0][1].to_bits()), (1.0, (-0.0f32).to_bits()));
         // INTERP = 1: nearest station only
         let (ip, rd) = station_weights(&lons, &lats, &[1.25], &[0.1], 1);
         assert_eq!((ip[0][0], rd[0]), (2, [1.0, 0.0, 0.0, 0.0]));

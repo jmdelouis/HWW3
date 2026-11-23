@@ -18,7 +18,7 @@
 //!     open-boundary node its two nearest stations and their weights.
 //! hww3-pre cmp-nest A.ww3 B.ww3
 //!     Compare two boundary files: header, boundary points, indices and
-//!     weights, and the spectra time by time.
+//!     weights, and the spectra over the times of A found in B.
 //! ```
 
 use anyhow::{bail, Context, Result};
@@ -275,23 +275,32 @@ fn cmp_nest(a: &Args) -> Result<()> {
         ndiff(&fa.rdbpi, &fb.rdbpi),
         maxdiff(&fa.rdbpi, &fb.rdbpi)
     );
-    let (mut times, mut nd, mut worst, mut vmax) = (0usize, 0usize, 0f32, 0f32);
-    loop {
-        match (fa.next()?, fb.next()?) {
-            (Some((ta, sa)), Some((tb, sb))) => {
-                anyhow::ensure!(ta == tb && sa.len() == sb.len(), "record {times}: {ta} with {} spectra against {tb} with {}", sa.len(), sb.len());
-                for (u, v) in sa.iter().zip(&sb) {
-                    nd += ndiff(u, v);
-                    worst = worst.max(maxdiff(u, v));
-                    vmax = u.iter().fold(vmax, |m, x| m.max(x.abs()));
-                }
-                times += 1;
-            }
-            (None, None) => break,
-            _ => bail!("the files have different numbers of times (after {times})"),
+    // the times of A found in B (B may hold a part of A's period)
+    let (mut times, mut missing, mut nd, mut worst, mut vmax) = (0usize, 0usize, 0usize, 0f32, 0f32);
+    let mut b = fb.next()?;
+    while let Some((ta, sa)) = fa.next()? {
+        while b.as_ref().is_some_and(|(tb, _)| *tb < ta) {
+            b = fb.next()?;
         }
+        let sb = match &b {
+            Some((tb, sb)) if *tb == ta => sb,
+            _ => {
+                missing += 1;
+                continue;
+            }
+        };
+        anyhow::ensure!(sa.len() == sb.len(), "{ta}: {} spectra against {}", sa.len(), sb.len());
+        for (u, v) in sa.iter().zip(sb) {
+            nd += ndiff(u, v);
+            worst = worst.max(maxdiff(u, v));
+            vmax = u.iter().fold(vmax, |m, x| m.max(x.abs()));
+        }
+        times += 1;
     }
-    println!("{times} times: {nd} spectral values differ, largest difference {worst:.3e} ({:.2e} of the largest value {vmax:.4e})", worst / vmax.max(f32::MIN_POSITIVE));
+    println!(
+        "{times} times compared, {missing} times of A not in B: {nd} spectral values differ, largest difference {worst:.3e} ({:.2e} of the largest value {vmax:.4e})",
+        worst / vmax.max(f32::MIN_POSITIVE)
+    );
     Ok(())
 }
 

@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:a100:1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=48G
-#SBATCH -t 00:40:00
+#SBATCH -t 00:15:00
 #SBATCH -o /scratch/jmdeloui/HWW3/logs/pre_restart_%j.log
 #
 # Initial state in Rust (docs/wave_results.md, "Preprocessing in Rust"), on

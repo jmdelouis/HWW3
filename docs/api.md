@@ -101,5 +101,8 @@ other values of the calibrated parameters). The Fortran harness
 | `cal_gn.py` | one Gauss–Newton (Levenberg–Marquardt) step with the posterior covariance |
 | `prnc_nc.py` | a netCDF forcing file read as `ww3_prnc` reads it, for `hww3-pre prnc` |
 | `bounc_nc.py` | the station spectrum files read as `ww3_bounc` reads them, for `hww3-pre bounc` |
+| `pre_inputs_hpc.slurm` | the forcing and boundary files built in Rust from the netCDF inputs of the January runs, compared with those of `ww3_prnc` and `ww3_bounc` |
+| `pre_allrust_hpc.slurm`, `pre_allrust_cmp_hpc.slurm` | a GPU run whose inputs all come from Rust (calm start, `build-params`, `hww3-pre`), and its comparison with the calibration's start run |
+| `pre_hs_cmp.py` | hourly $H_s$ of two `hww3-prop` runs compared node by node |
 | `pre_restart_hpc.slurm` | the start from calm conditions against WW3, and a run continued from a GPU restart against the same run in one piece |
 | `cal_fdcheck.py` | the tangent derivatives of the cost and scores against the M2b finite differences (control only) |

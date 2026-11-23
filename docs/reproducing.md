@@ -586,6 +586,13 @@ target/release/hww3-pre cmp-fields $R/pre/wind.ww3 $R/m2/forcing/wind.ww3
 $R/pyenv/bin/python scripts/bounc_nc.py spec.list $R/pre/spec_raw
 target/release/hww3-pre bounc $R/grids/natl_v5k4 --input $R/pre/spec_raw --out $R/pre/nest.ww3 --msh $R/runs/m2_week_start_full/natl.msh
 target/release/hww3-pre cmp-nest $R/pre/nest.ww3 $R/m2/forcing/nest.ww3
+# all four forcing fields and the boundary file, from the netCDF inputs of the January runs
+# (copied from Datarmor runs/natl_v5k4_jan2026_{cur,bnd} to $R/pre: wind.nc, ice.nc,
+# current.nc, level.nc, the ww3_prnc namelists, spec/, spec.list, ww3_bounc.nml), against the M2 files
+sbatch scripts/pre_inputs_hpc.slurm
+# a GPU run with Rust inputs only, and its comparison with the calibration's start run
+J=$(sbatch --parsable scripts/pre_allrust_hpc.slurm)
+sbatch --dependency=afterok:$J scripts/pre_allrust_cmp_hpc.slurm
 # control only: the start-point derivatives against the M2b finite differences of 8-10 January
 python3 scripts/cal_fdcheck.py $R/cal/op_0810.npz $R/m2/fd/cases.txt fdchk $R/cal/fdcheck.json
 ```

@@ -975,7 +975,8 @@ allocates, of which `INSIN4` fills 17. The file takes 1.8 s to build.
   (`Restart::calm`). Its check against the WW3 restart written after the
   first step of the cold start of 1 January (`runs/m2_week_start_full`,
   00:10) is queued (`scripts/pre_restart_hpc.slurm`, Slurm job 4191399,
-  after the calibration trial).
+  after the calibration trial 4189550, which waits on priority because the
+  account's fairshare is low after the GPU use of the last days).
 - **Restarts.** `Restart::write` writes a `FULL` restart in the layout of
   `W3IORS`: header, time, one record per spectrum, the times of the
   fields (`TLEV`, `TICE`, `TRHO`, `TIC1`, `TIC5`), then `WLV`, `ICE`,
@@ -1018,10 +1019,26 @@ $K=4$ they agree with the grid's raw arrays to 5e-11 degree.
 On synthetic fields on a 0.25-degree grid covering grid v5 $K=4$, a water
 level linear in longitude and latitude comes out within 7.5e-7 m of its
 exact values at the 424,123 nodes, and a uniform wind (10, 5 m/s) within
-1.9e-6 m/s; each file takes 0.2 s. The comparison with the forcing files
-of the WW3 runs needs their netCDF sources (ERA5 wind and ice, Copernicus
-Marine currents and sea level with the FES2014 tide), which are on
-Datarmor.
+1.9e-6 m/s; each file takes 0.2 s.
+
+The netCDF inputs of the January runs of grid v5 $K=4$ (ERA5 wind and ice,
+Copernicus Marine currents and sea level, 597 x 337 and 1789 x 1009
+points; the boundary station files below) were copied from Datarmor
+(`runs/natl_v5k4_jan2026_{cur,bnd}`, 329 files, 7.7 GB, md5 checked) to
+`$S/pre` on the hpc cluster. From them `scripts/pre_inputs_hpc.slurm`
+builds the forcing files of 1 to 11 January in Rust and compares them with
+those of `ww3_prnc` used by the M2 runs (Slurm jobs 4197806 and 4201526):
+
+| field | times compared | values that differ | time to build |
+|---|---|---|---|
+| wind (2 components) | 220 | 0 of 2 x 93,307,060 | 2.4 s |
+| ice | 1 | 0 of 424,123 | 0.1 s |
+| currents (2 components) | 220 | 0 of 2 x 93,307,060 | 11.0 s |
+| water level | 220 | 0 of 93,307,060 | 3.4 s |
+
+The files are identical to the bit: the single-precision arithmetic of
+`ww3_prnc` is reproduced, including the rescaling of the wind (`WNT2`) and
+of the currents (`CRT1`).
 
 ### Boundary spectra (`ww3_bounc`)
 
@@ -1036,6 +1053,25 @@ file (`nest.ww3`), and `scripts/bounc_nc.py` reads the netCDF files of
 the stations. With four synthetic stations, the file built for grid v5
 $K=4$ has the header (`NK` 32, `NTH` 36, `XFR` 1.1, `FR1` 0.0373, `TH(1)`
 0) and the 1052 boundary points of the WW3 file of the M2 runs identical
-to the bit (coordinates and order), in 0.2 s. The comparison of the station
-choice, weights and spectra needs the 318 station files of the WW3 run,
-which are on Datarmor.
+to the bit (coordinates and order), in 0.2 s.
+
+From the 318 station files of the WW3 run (31 days every 3 h), the file
+built in 0.9 s is identical to the bit to that of `ww3_bounc` over the 74
+times the M2 file holds (1 to 10 January): header, boundary points,
+station indices, weights and spectra. One detail of gfortran was needed:
+`MIN(1., MAX(0., COS1))` returns its first argument unless the second is
+larger, so a `COS1` of -0, which occurs at 25 nodes on 45 E that lie on
+the meridian of their nearest station, gives a weight of -0 in WW3's file.
+`station_weights` evaluates it in the same order.
+
+### A run with Rust inputs only
+
+`scripts/pre_allrust_hpc.slurm` runs grid v5 $K=4$ for 216 h from calm
+conditions on 1 January with the parameter file of `build-params` and the
+forcing and boundary files above, so with no WW3 tool, and
+`scripts/pre_allrust_cmp_hpc.slurm` compares it with the start run of the
+calibration (`cal/it0_value`, from WW3's restart after the first step with
+the parameter file of the harness): hourly $H_s$ node by node
+(`scripts/pre_hs_cmp.py`) and the cost and scores of the calibration on its
+training and validation windows. Both are queued (Slurm jobs 4203334 and
+4203335) after the restart check 4191399.

@@ -855,20 +855,21 @@ Details and the list of what remains are in
   without a restart file (`--restart calm`) and writes its state as a
   `FULL` WW3 restart (`--restart-out`); the writer gives back WW3's own
   restarts byte for byte. The GPU checks (calm start against WW3, a run
-  continued from a GPU restart against the same run in one piece) wait for
-  a GPU (job 4191399).
+  continued from a GPU restart against the same run in one piece) are
+  queued as job 4191399, after the calibration trial 4189550, which waits on
+  priority: the account's fairshare is low after the GPU use of the last
+  days.
 - **Forcing fields.** The interpolation of `ww3_prnc` is ported
   (`hww3_wave::prnc`, `hww3-pre prnc`, with `scripts/prnc_nc.py` reading
-  the netCDF files); it reproduces linear and uniform synthetic fields to
-  single-precision round-off. The comparison with WW3's forcing files
-  waits for the netCDF sources, which are on Datarmor.
+  the netCDF files). From the netCDF inputs of the January runs, copied
+  from Datarmor, the wind, ice, currents and water level of 1 to 10
+  January are identical to the bit to the files of `ww3_prnc`.
 - **Boundary spectra.** `ww3_bounc` is ported (`hww3_wave::bounc`,
-  `hww3-pre bounc`, with `scripts/bounc_nc.py`); the header and the 1052
-  boundary points of grid v5 $K=4$ are identical to WW3's file. The
-  station choice, weights and spectra wait for the station files.
-- Still to do: the comparison of the forcing and boundary files with WW3's
-  from the real netCDF inputs (on Datarmor), then a GPU run whose inputs
-  all come from Rust.
+  `hww3-pre bounc`, with `scripts/bounc_nc.py`); from the 318 station
+  files the boundary file is identical to the bit to that of `ww3_bounc`.
+- **A run with Rust inputs only** (calm start, `build-params`, the files
+  above) is queued with its comparison against the calibration's start run
+  (jobs 4203334 and 4203335).
 
 ## 10. Other routes, briefly
 
