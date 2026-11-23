@@ -59,7 +59,11 @@ pub mod model;
 #[cfg(feature = "cubecl")]
 pub mod prop;
 #[cfg(feature = "cubecl")]
+pub mod prop_tl;
+#[cfg(feature = "cubecl")]
 pub mod srce;
+#[cfg(feature = "cubecl")]
+pub mod srce_tl;
 
 #[cfg(feature = "cuda-c")]
 pub mod cuda_c;

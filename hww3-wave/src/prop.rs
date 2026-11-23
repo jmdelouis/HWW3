@@ -295,7 +295,7 @@ pub fn iter_finish<F: Float>(partial: &[F], iter: &mut [u32], dtk: &mut [F], dt_
 // ---------------------------------------------------------------------------
 
 #[cube]
-fn mask_bit<F: Float>(wlo: u32, whi: u32, k: usize) -> F {
+pub(crate) fn mask_bit<F: Float>(wlo: u32, whi: u32, k: usize) -> F {
     let w = select(k < 32, wlo, whi);
     F::cast_from((w >> ((k % 32) as u32)) & 1u32)
 }
@@ -366,7 +366,7 @@ pub fn geo_tri_x4<F: Float>(
 }
 
 #[cube]
-fn node_value<F: Float>(
+pub(crate) fn node_value<F: Float>(
     ui: F,
     st: F,
     dt: F,
@@ -610,7 +610,7 @@ pub fn gradient<F: Float>(
 
 /// `DSDD(IK)` of `W3KTP3`.
 #[cube]
-fn dsdd<F: Float>(wn: F, cg: F, sig: F, depth: F) -> F {
+pub(crate) fn dsdd<F: Float>(wn: F, cg: F, sig: F, depth: F) -> F {
     let v = max(F::new(0.0f32), cg * wn - F::new(0.5f32) * sig) / depth;
     select(depth * wn < F::new(5.0f32), v, F::new(0.0f32))
 }
@@ -618,7 +618,7 @@ fn dsdd<F: Float>(wn: F, cg: F, sig: F, depth: F) -> F {
 /// Limited face value of ULTIMATE QUICKEST (`W3QCK1` / `W3QCK2`, after `QB`):
 /// `qc`, `qu`, `qd` the central, upstream and downstream values.
 #[cube]
-fn uq_limit<F: Float>(qb: F, qc: F, qu: F, qd: F, cfl: F) -> F {
+pub(crate) fn uq_limit<F: Float>(qb: F, qc: F, qu: F, qd: F, cfl: F) -> F {
     let one = F::new(1.0f32);
     let dq = qd - qu;
     let m = max(F::new(1.0e-15f32), dq.abs());
@@ -633,7 +633,7 @@ fn uq_limit<F: Float>(qb: F, qc: F, qu: F, qd: F, cfl: F) -> F {
 
 /// Clipped refraction CFL number of one direction (`W3KTP3`, `CTMAX`).
 #[cube]
-fn theta_cfl<F: Float>(
+pub(crate) fn theta_cfl<F: Float>(
     es2: F,
     esc: F,
     ec2: F,
@@ -658,7 +658,7 @@ fn theta_cfl<F: Float>(
 /// `t + 1` (`W3QCK1`), from the CFL numbers of both cells and the values of
 /// cells `t - 1 .. t + 2`.
 #[cube]
-fn theta_flux<F: Float>(ct: F, ctp: F, qtm: F, qt: F, qtp: F, qtpp: F) -> F {
+pub(crate) fn theta_flux<F: Float>(ct: F, ctp: F, qtm: F, qt: F, qtp: F, qtpp: F) -> F {
     let half = F::new(0.5f32);
     let one = F::new(1.0f32);
     let sixth = one / F::new(6.0f32);
@@ -794,7 +794,7 @@ pub fn ktp3_theta<F: Float>(
 // Velocity of one cell of the frequency advection, clipped to `CTMAX`
 /// (`W3KTP3`: `VELFAC = FACK / DB`), for `db = DSIP(j) / CG(j)`.
 #[cube]
-fn k_vel<F: Float>(w: F, c: F, s: F, db: F, depth: F, fkd: F, fkc: F, fack: F, ctmax: F) -> F {
+pub(crate) fn k_vel<F: Float>(w: F, c: F, s: F, db: F, depth: F, fkd: F, fkc: F, fack: F, ctmax: F) -> F {
     let d = dsdd::<F>(w, c, s, depth);
     let velfac = fack / db;
     let v = (fkd / c * d + w * fkc) * velfac;
@@ -993,7 +993,7 @@ pub fn ulev_remap<F: Float>(
 
 //// `WAVNU3` on the device: `k d` of radian frequency `si` at depth `h`.
 #[cube]
-fn wavnu3_kh<F: Float>(si: F, h: F) -> F {
+pub(crate) fn wavnu3_kh<F: Float>(si: F, h: F) -> F {
     let kdmax = F::new(20.0f32);
     let one = F::new(1.0f32);
     let zpi = F::new(6.2831855f32);

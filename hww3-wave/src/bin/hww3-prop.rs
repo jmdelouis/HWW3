@@ -17,7 +17,13 @@
 //!     of the source-term harness, from the mod_def.ww3 of the run) and
 //!     --wind, the source terms of the simplified ST4 run after the
 //!     propagation (milestone M2a); --wind-out also writes the hourly wind
-//!     (uwnd_, vwnd_YYYYMMDDHH.f32, as WW3 outputs it).
+//!     (uwnd_, vwnd_YYYYMMDDHH.f32, as WW3 outputs it). --scale-par
+//!     NAME:F+NAME:F multiplies source parameters (SDSC2, NLPROP, BJGAM) and
+//!     --wind-factor F the wind, for finite differences. --tangent NAME
+//!     (milestone M3) also runs the tangent of the model for a relative
+//!     change of the wind (WIND) or of a source parameter (BETAMAX, SDSC2,
+//!     NLPROP, BJGAM): hourly tangent of H_s in DIR/dhs_YYYYMMDDHH.f32 and
+//!     tangent of the total energy ("denergy") in DIR/summary.json.
 //! hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
 //!     One step's forcing, then one W3KTP3 call on the GPU compared with
 //!     the CPU transcription of W3KTP3 (hww3_wave::cpu) on a sample of nodes.
@@ -61,7 +67,7 @@ fn parse() -> Result<Args> {
     let mut flags = std::collections::HashSet::new();
     let valued = [
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
-        "--dump", "--wind", "--sources", "--units",
+        "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -158,6 +164,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     cfg.flck = !a.flags.contains("--no-ck");
     cfg.host_level = a.flags.contains("--host-level");
     cfg.bccfl = !a.flags.contains("--no-bccfl");
+    perturbations(a, &mut cfg)?;
     if let Some(u) = a.opts.get("--units") {
         cfg.units = u.parse()?;
     }
@@ -180,8 +187,15 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         let (hs, t02) = m.outputs();
         write_f32(&out.join(format!("hs_{}.f32", tag(start))), &hs)?;
         write_f32(&out.join(format!("t02_{}.f32", tag(start))), &t02)?;
+        if let Some((dhs, _)) = m.tangent_outputs() {
+            write_f32(&out.join(format!("dhs_{}.f32", tag(start))), &dhs)?;
+        }
     }
-    energy.push(json!({"time": start.to_string(), "energy": m.total_energy()}));
+    let mut e0 = json!({"time": start.to_string(), "energy": m.total_energy()});
+    if let Some((_, de)) = m.tangent_outputs() {
+        e0["denergy"] = json!(de);
+    }
+    energy.push(e0);
     let t1 = Instant::now();
     let mut steps = 0u64;
     let mut iters = vec![];
@@ -196,6 +210,10 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
             let (hs, t02) = m.outputs();
             write_f32(&out.join(format!("hs_{}.f32", tag(m.time))), &hs)?;
             write_f32(&out.join(format!("t02_{}.f32", tag(m.time))), &t02)?;
+            let tan = m.tangent_outputs();
+            if let Some((dhs, _)) = &tan {
+                write_f32(&out.join(format!("dhs_{}.f32", tag(m.time))), dhs)?;
+            }
             if a.flags.contains("--wind-out") {
                 // the wind WW3 writes (UA cos UD, UA sin UD): the wind of the
                 // step before the current is removed
@@ -209,7 +227,11 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
             }
             if m.time.secs() % 21600 == 0 {
                 let e = m.total_energy();
-                energy.push(json!({"time": m.time.to_string(), "energy": e}));
+                let mut ej = json!({"time": m.time.to_string(), "energy": e});
+                if let Some((_, de)) = &tan {
+                    ej["denergy"] = json!(de);
+                }
+                energy.push(ej);
                 let valid: Vec<f32> = hs.iter().copied().filter(|&h| h > UNDEF).collect();
                 println!(
                     "{}: {} steps, {:.1} s, mean H_s {:.4} m, energy {:.6e}",
@@ -224,6 +246,14 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     }
     m.sync();
     let wall = t1.elapsed().as_secs_f64();
+    if m.time.secs() % 21600 != 0 {
+        // energy at the end of a run that does not stop at a 6-hour mark
+        let mut ej = json!({"time": m.time.to_string(), "energy": m.total_energy()});
+        if let Some((_, de)) = m.tangent_outputs() {
+            ej["denergy"] = json!(de);
+        }
+        energy.push(ej);
+    }
     let per_day = wall / (hours as f64 / 24.0);
     let t = &m.timers;
     println!(
@@ -255,7 +285,9 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         "energy": energy,
         "config": {"dtg": cfg.dtg, "dtkth": cfg.dtkth, "ctmax": cfg.ctmax, "flcx": cfg.flcx, "flcth": cfg.flcth,
                    "flck": cfg.flck, "itstep0": cfg.itstep0, "block": cfg.block,
-                   "host_level": cfg.host_level, "sources": m.has_sources(), "units": cfg.units},
+                   "host_level": cfg.host_level, "sources": m.has_sources(), "units": cfg.units,
+                   "tangent": cfg.tangent, "wind_factor": cfg.wind_factor,
+                   "scale_par": cfg.scale_par.iter().map(|(n, f)| json!([n, f])).collect::<Vec<_>>()},
     });
     std::fs::write(out.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
     Ok(())
@@ -345,6 +377,24 @@ fn check_ktp3<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     Ok(())
 }
 
+/// `--scale-par NAME:F+NAME:F` (source parameters multiplied by F) and
+/// `--wind-factor F` (wind speed multiplied by F): finite differences.
+fn perturbations(a: &Args, cfg: &mut Config) -> Result<()> {
+    if let Some(s) = a.opts.get("--scale-par") {
+        for item in s.split('+').filter(|x| !x.is_empty()) {
+            let (n, f) = item.split_once(':').ok_or_else(|| anyhow::anyhow!("--scale-par wants NAME:FACTOR, got {item}"))?;
+            cfg.scale_par.push((n.to_string(), f.parse()?));
+        }
+    }
+    if let Some(n) = a.opts.get("--tangent") {
+        cfg.tangent = Some(n.to_string());
+    }
+    if let Some(f) = a.opts.get("--wind-factor") {
+        cfg.wind_factor = f.parse()?;
+    }
+    Ok(())
+}
+
 /// Time of a WW3 restart file (its second record), without reading the spectra.
 fn restart_time(p: &Path) -> Result<Time> {
     use std::io::{Read, Seek, SeekFrom};
@@ -387,6 +437,7 @@ fn check_steps(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     cfg.flcth = !a.flags.contains("--no-cth");
     cfg.flck = !a.flags.contains("--no-ck");
     cfg.bccfl = !a.flags.contains("--no-bccfl");
+    perturbations(a, &mut cfg)?;
     if let Some(u) = a.opts.get("--units") {
         cfg.units = u.parse()?;
     }

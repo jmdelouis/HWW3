@@ -27,80 +27,80 @@ use crate::sources::*;
 use cubecl::prelude::*;
 
 // Scalar slots of `sc`.
-const S_EMEAN: usize = 0;
-const S_FMEAN: usize = 1;
-const S_FMEAN1: usize = 2;
-const S_WNMEAN: usize = 3;
-const S_AMAX: usize = 4;
-const S_USTAR: usize = 5;
-const S_Z0: usize = 6;
-const S_CHARN: usize = 7;
-const S_FMEANWS: usize = 8;
-const S_TAUWX: usize = 9;
-const S_TAUWY: usize = 10;
-const S_FHIGH: usize = 11;
-const S_DTTOT: usize = 12;
-const S_DT: usize = 13;
-const S_SHAVE: usize = 14;
-const S_COSU: usize = 17;
-const S_SINU: usize = 18;
-const S_USTP: usize = 19;
-const S_UORB: usize = 20;
-const S_FW: usize = 21;
-const S_FU: usize = 22;
-const S_FUD: usize = 23;
-const S_PTURB: usize = 24;
-const S_PVISC: usize = 25;
-const S_SX: usize = 26;
-const S_SY: usize = 27;
-const S_SNX: usize = 28;
-const S_SNY: usize = 29;
-const S_CONS: usize = 30;
-const S_NKH: usize = 31;
-const S_FBT: usize = 32;
-const S_DTDYN: usize = 33;
-const S_NSTEPS: usize = 34;
-const S_DONE: usize = 35;
-const S_TAUX: usize = 36;
-const S_TAUY: usize = 37;
-const S_SCALE: usize = 38;
-const NSC: usize = 40;
+pub(crate) const S_EMEAN: usize = 0;
+pub(crate) const S_FMEAN: usize = 1;
+pub(crate) const S_FMEAN1: usize = 2;
+pub(crate) const S_WNMEAN: usize = 3;
+pub(crate) const S_AMAX: usize = 4;
+pub(crate) const S_USTAR: usize = 5;
+pub(crate) const S_Z0: usize = 6;
+pub(crate) const S_CHARN: usize = 7;
+pub(crate) const S_FMEANWS: usize = 8;
+pub(crate) const S_TAUWX: usize = 9;
+pub(crate) const S_TAUWY: usize = 10;
+pub(crate) const S_FHIGH: usize = 11;
+pub(crate) const S_DTTOT: usize = 12;
+pub(crate) const S_DT: usize = 13;
+pub(crate) const S_SHAVE: usize = 14;
+pub(crate) const S_COSU: usize = 17;
+pub(crate) const S_SINU: usize = 18;
+pub(crate) const S_USTP: usize = 19;
+pub(crate) const S_UORB: usize = 20;
+pub(crate) const S_FW: usize = 21;
+pub(crate) const S_FU: usize = 22;
+pub(crate) const S_FUD: usize = 23;
+pub(crate) const S_PTURB: usize = 24;
+pub(crate) const S_PVISC: usize = 25;
+pub(crate) const S_SX: usize = 26;
+pub(crate) const S_SY: usize = 27;
+pub(crate) const S_SNX: usize = 28;
+pub(crate) const S_SNY: usize = 29;
+pub(crate) const S_CONS: usize = 30;
+pub(crate) const S_NKH: usize = 31;
+pub(crate) const S_FBT: usize = 32;
+pub(crate) const S_DTDYN: usize = 33;
+pub(crate) const S_NSTEPS: usize = 34;
+pub(crate) const S_DONE: usize = 35;
+pub(crate) const S_TAUX: usize = 36;
+pub(crate) const S_TAUY: usize = 37;
+pub(crate) const S_SCALE: usize = 38;
+pub(crate) const NSC: usize = 40;
 
 // Per-frequency slots of `kb` (`kb[slot nk + ik]`).
-const K_WN: usize = 0;
-const K_CG: usize = 1;
-const K_DAM: usize = 2;
-const K_EB: usize = 3;
-const K_EB2: usize = 4;
-const K_EBX: usize = 5;
-const K_EBY: usize = 6;
-const K_CBETA: usize = 7;
-const K_BTH0: usize = 8;
-const K_AMAX: usize = 9;
-const NKB: usize = 10;
+pub(crate) const K_WN: usize = 0;
+pub(crate) const K_CG: usize = 1;
+pub(crate) const K_DAM: usize = 2;
+pub(crate) const K_EB: usize = 3;
+pub(crate) const K_EB2: usize = 4;
+pub(crate) const K_EBX: usize = 5;
+pub(crate) const K_EBY: usize = 6;
+pub(crate) const K_CBETA: usize = 7;
+pub(crate) const K_BTH0: usize = 8;
+pub(crate) const K_AMAX: usize = 9;
+pub(crate) const NKB: usize = 10;
 
 /// `1 / (2 pi)` as WW3's single-precision `TPIINV`.
 #[cube]
-fn tpiinv<F: Float>() -> F {
+pub(crate) fn tpiinv<F: Float>() -> F {
     F::new(0.15915494f32)
 }
 
 /// `2 pi` as WW3's `TPI`.
 #[cube]
-fn tpi<F: Float>() -> F {
+pub(crate) fn tpi<F: Float>() -> F {
     F::new(6.2831855f32)
 }
 
 /// `LOG10(x)`.
 #[cube]
-fn log10<F: Float>(x: F) -> F {
+pub(crate) fn log10<F: Float>(x: F) -> F {
     x.ln() * F::new(0.4342945f32)
 }
 
 /// Interpolation in a table on a uniform axis as WW3 does it: index
 /// `MIN(SIZE - 1, INT(x))`, weight clipped at 1 (`x >= 0`).
 #[cube]
-fn table<F: Float>(tab: &[F], n: usize, x: F) -> F {
+pub(crate) fn table<F: Float>(tab: &[F], n: usize, x: F) -> F {
     let size = n - 1;
     let xi = u32::cast_from(max(x.trunc(), F::new(0.0f32))) as usize;
     let ind = select(xi < size - 1, xi, size - 1);
@@ -1430,7 +1430,7 @@ use crate::device::Real;
 use cubecl::client::Client;
 use cubecl::server::Handle;
 
-fn bf(h: &Handle, n: usize) -> BufferArg {
+pub(crate) fn bf(h: &Handle, n: usize) -> BufferArg {
     unsafe { BufferArg::from_raw_parts(h.clone(), n) }
 }
 
@@ -1471,28 +1471,28 @@ pub struct SrceArgs<'a> {
 /// The source-term parameters and tables on the device ([`SrceTables`])
 /// and the launcher of `srce`.
 pub struct SourceKernel<F: Real> {
-    par: Handle,
-    sig2k: Handle,
-    dden2k: Handle,
-    fwtab: Handle,
-    erftab: Handle,
-    satw: Handle,
-    sati: Handle,
-    dia_ip: Handle,
-    dia_ic: Handle,
-    af11: Handle,
-    taut: Handle,
-    tauhf: Handle,
-    cumw: Handle,
-    sig: Handle,
-    dden: Handle,
-    ecos: Handle,
-    esin: Handle,
-    nfw: usize,
-    nerf: usize,
-    ntaut: usize,
-    ntauhf: usize,
-    ncumw: usize,
+    pub(crate) par: Handle,
+    pub(crate) sig2k: Handle,
+    pub(crate) dden2k: Handle,
+    pub(crate) fwtab: Handle,
+    pub(crate) erftab: Handle,
+    pub(crate) satw: Handle,
+    pub(crate) sati: Handle,
+    pub(crate) dia_ip: Handle,
+    pub(crate) dia_ic: Handle,
+    pub(crate) af11: Handle,
+    pub(crate) taut: Handle,
+    pub(crate) tauhf: Handle,
+    pub(crate) cumw: Handle,
+    pub(crate) sig: Handle,
+    pub(crate) dden: Handle,
+    pub(crate) ecos: Handle,
+    pub(crate) esin: Handle,
+    pub(crate) nfw: usize,
+    pub(crate) nerf: usize,
+    pub(crate) ntaut: usize,
+    pub(crate) ntauhf: usize,
+    pub(crate) ncumw: usize,
     /// DIA sizes and the first dimension of the saturation tables.
     pub nspecx: usize,
     /// See [`SourceKernel::nspecx`].

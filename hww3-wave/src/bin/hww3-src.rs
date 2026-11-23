@@ -5,12 +5,18 @@
 //! ```text
 //! hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
 //! hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R]
+//! hww3-src check-tl HARNESS [--units N] [--h H]
+//! hww3-src tables BASE.params [PLUS.params MINUS.params]
 //! ```
 //!
 //! `check-gpu` (CubeCL build) runs the GPU kernel of the whole `W3SRCE`
 //! integration (`hww3_wave::srce`) on the harness nodes and compares the
 //! spectra after the step with WW3 and with the CPU transcription; with
 //! `--replicate R` each node is repeated `R` times for the timing.
+//! `check-tl` (CubeCL build, milestone M3) checks the tangent kernel
+//! `hww3_wave::srce_tl` against finite differences of that kernel in double
+//! precision, and `tables` the tail-stress tables computed here against
+//! those of WW3.
 //!
 //! Each call of the transcription gets the inputs WW3 got in the harness,
 //! so that each routine is checked on its own: `W3SPR4` (twice), `W3SIN4`
@@ -352,12 +358,285 @@ fn check_gpu<F: hww3_wave::device::Real>(path: PathBuf, nu: usize, replicate: us
     Ok(())
 }
 
+/// The tangent kernel `hww3_wave::srce_tl` on the harness nodes against
+/// central differences of the GPU source kernel, both in double precision,
+/// for six directions: a random relative change of the spectrum, a relative
+/// change of the wind speed and of `BETAMAX` (with the tail-stress table of
+/// `TABU_TAUHF2` recomputed here), `SDSC2`, `NLPROP` and `BJGAM`. The
+/// differences are taken with relative steps `h` and `h / 10`; a node where
+/// they differ by more than `1e-6` of the largest derivative is counted as
+/// not smooth (a discrete choice of the integration or a cell edge of an
+/// interpolation table is crossed within the step) and the tangent is
+/// checked against the step `h / 10` elsewhere. Derivatives below `1e-9` of
+/// the largest spectral density of the node are below what the differences
+/// resolve and count as zero.
+#[cfg(feature = "cubecl")]
+fn check_tl(path: PathBuf, nu: usize, h1: f64) -> Result<()> {
+    use burn::tensor::Device;
+    use cubecl::prelude::CubeElement;
+    use hww3_wave::sources::{par_index, tabu_tauhf2, SrceTables, NPAR, P_BBETA};
+    use hww3_wave::srce::{SourceKernel, SrceArgs};
+    use hww3_wave::srce_tl::TangentArgs;
+    let h = Harness::read(&path)?;
+    let mut pp = path.clone().into_os_string();
+    pp.push(".params");
+    let q = SrcePar::new(&Params::read(&PathBuf::from(pp))?)?;
+    let (nk, nth) = (h.nk, h.nth);
+    let nspec = nk * nth;
+    let n = h.nodes.len();
+    let st = q.st.tables.as_ref().ok_or_else(|| anyhow::anyhow!("no stress tables (SINTABLE = 0)"))?;
+    let shelter = q.st.ttauwshelter > 0.0;
+    let bb = q.st.bbeta;
+    let table = |b: f64| {
+        let (t1, d1, t2, d2) = tabu_tauhf2(&q.st, st, q.st.sig[nk], b);
+        if shelter {
+            (t2, d2)
+        } else {
+            (t1, d1)
+        }
+    };
+    let t0 = std::time::Instant::now();
+    let (tauhf0, dtauhf0) = table(bb);
+    let mut base = SrceTables::new(&q)?;
+    base.tauhf = tauhf0;
+    println!(
+        "harness {}: {} nodes, NK {nk}, NTH {nth}; tail-stress table in f64 for BETAMAX {bb} in {:.1} s",
+        path.display(),
+        n,
+        t0.elapsed().as_secs_f64()
+    );
+    let device = Device::cuda(0);
+    let client = hww3_wave::burn_ext::client(&device)?;
+    let mut va = vec![0f64; nspec * n];
+    let mut wn = vec![0f64; (nk + 2) * n];
+    let mut cg = vec![0f64; (nk + 2) * n];
+    let (mut dw, mut u10, mut u10d, mut ice) = (vec![0f64; n], vec![0f64; n], vec![0f64; n], vec![0f64; n]);
+    let (mut d50, mut psic) = (vec![0f64; n], vec![0f64; n]);
+    for (j, node) in h.nodes.iter().enumerate() {
+        let inp = &node.inputs;
+        for ik in 0..nk {
+            for th in 0..nth {
+                va[(ik * n + j) * nth + th] = inp.spec[ik * nth + th] as f64;
+            }
+            wn[(ik + 1) * n + j] = inp.wn[ik] as f64;
+            cg[(ik + 1) * n + j] = inp.cg[ik] as f64;
+        }
+        dw[j] = inp.v[0] as f64;
+        u10[j] = inp.v[3] as f64;
+        u10d[j] = inp.v[4] as f64;
+        ice[j] = inp.v[7] as f64;
+        d50[j] = inp.v[10] as f64;
+        psic[j] = inp.v[11] as f64;
+    }
+    let up = |v: &[f64]| client.create_from_slice(f64::as_bytes(v));
+    let sync = || futures_lite::future::block_on(client.sync()).expect("device sync");
+    let down = |hd: &cubecl::server::Handle| -> Vec<f64> { f64::from_bytes(&client.read_one(hd.clone()).expect("device read")).to_vec() };
+    let (d_wn, d_cg, d_dw, d_u10d, d_ice, d_d50, d_psic) = (up(&wn), up(&cg), up(&dw), up(&u10d), up(&ice), up(&d50), up(&psic));
+    let d_nflag = client.create_from_slice(u32::as_bytes(&vec![4u32; n]));
+    let zeros = vec![0f64; n];
+    // one step of the value kernel with tables `tb`, spectra `v`, wind speeds `u`
+    let run = |tb: &SrceTables, v: &[f64], u: &[f64]| -> (Vec<f64>, f64) {
+        let k = SourceKernel::<f64>::new(&client, tb, nu);
+        let (d_va, d_u10, d_ust, d_dt) = (up(v), up(u), up(&zeros), up(&zeros));
+        let args = SrceArgs {
+            va: &d_va,
+            wn: &d_wn,
+            cg: &d_cg,
+            dw: &d_dw,
+            u10: &d_u10,
+            u10d: &d_u10d,
+            ice: &d_ice,
+            d50: &d_d50,
+            psic: &d_psic,
+            nflag: &d_nflag,
+            ust: &d_ust,
+            dtdyn: &d_dt,
+        };
+        sync();
+        let t = std::time::Instant::now();
+        k.launch(&client, &args, h.dtg, false, n, nk, nth);
+        sync();
+        let s = t.elapsed().as_secs_f64();
+        (down(&d_va), s)
+    };
+    // the first launch compiles the kernel
+    let (v_first, _) = run(&base, &va, &u10);
+    let (v_base, t_val) = run(&base, &va, &u10);
+    if v_first != v_base {
+        println!("  two launches of the value kernel differ");
+    }
+    let rnd: Vec<f64> = (0..nspec * n).map(|i| ((i * 7919 + 13) % 2001) as f64 / 1000.0 - 1.0).collect();
+    let dva: Vec<f64> = va.iter().zip(&rnd).map(|(a, r)| a * r).collect();
+    let at = |v: &[f64], j: usize, isp: usize| v[((isp / nth) * n + j) * nth + isp % nth];
+    let energy = |v: &[f64], j: usize| -> f64 {
+        let cgk = &h.nodes[j].inputs.cg;
+        (0..nk).map(|ik| (0..nth).map(|th| at(v, j, ik * nth + th)).sum::<f64>() * q.st.dden[ik] / cgk[ik] as f64).sum()
+    };
+    let pct = |v: &mut Vec<f64>, p: f64| -> f64 {
+        if v.is_empty() {
+            return f64::NAN;
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[((v.len() - 1) as f64 * p).round() as usize]
+    };
+    println!("value kernel {:.4} s per launch; relative steps h = {h1:e} and {:e}", t_val, h1 / 10.0);
+    println!(
+        "{:<9} {:>9} {:>9} {:>7} {:>10} {:>10} {:>10} {:>6} {:>10} {:>10} {:>10}",
+        "direction", "value", "sensitive", "smooth", "tl median", "tl p99", "tl max", ">1e-4", "dE median", "dE max", "rough med"
+    );
+    for name in ["spectrum", "wind", "BETAMAX", "SDSC2", "NLPROP", "BJGAM"] {
+        let pert = |s: f64| -> Vec<f64> {
+            let mut tb = base.clone();
+            let mut v = va.clone();
+            let mut u = u10.clone();
+            match name {
+                "spectrum" => v.iter_mut().zip(&dva).for_each(|(x, d)| *x += s * d),
+                "wind" => u.iter_mut().for_each(|x| *x *= 1.0 + s),
+                "BETAMAX" => {
+                    tb.par[P_BBETA] = bb * (1.0 + s);
+                    tb.tauhf = table(bb * (1.0 + s)).0;
+                }
+                _ => {
+                    let i = par_index(name).unwrap();
+                    tb.par[i] *= 1.0 + s;
+                }
+            }
+            run(&tb, &v, &u).0
+        };
+        let fd = |hh: f64| -> Vec<f64> {
+            let (p, m) = (pert(hh), pert(-hh));
+            p.iter().zip(&m).map(|(a, b)| (a - b) / (2.0 * hh)).collect()
+        };
+        let (fd1, fd2) = (fd(h1), fd(h1 / 10.0));
+        let mut dpar = vec![0f64; NPAR];
+        let mut dtab = vec![0f64; base.tauhf.len()];
+        let mut du = vec![0f64; n];
+        let mut dv = vec![0f64; nspec * n];
+        match name {
+            "spectrum" => dv.copy_from_slice(&dva),
+            "wind" => du.copy_from_slice(&u10),
+            "BETAMAX" => {
+                dpar[P_BBETA] = bb;
+                dtab = dtauhf0.iter().map(|x| x * bb).collect();
+            }
+            _ => {
+                let i = par_index(name)?;
+                dpar[i] = base.par[i];
+            }
+        }
+        let k = SourceKernel::<f64>::new(&client, &base, nu);
+        let (d_va, d_vad, d_u10, d_ust, d_dt) = (up(&va), up(&dv), up(&u10), up(&zeros), up(&zeros));
+        let (d_du, d_dud, d_dpar, d_dtab) = (up(&du), up(&zeros), up(&dpar), up(&dtab));
+        let args = SrceArgs {
+            va: &d_va,
+            wn: &d_wn,
+            cg: &d_cg,
+            dw: &d_dw,
+            u10: &d_u10,
+            u10d: &d_u10d,
+            ice: &d_ice,
+            d50: &d_d50,
+            psic: &d_psic,
+            nflag: &d_nflag,
+            ust: &d_ust,
+            dtdyn: &d_dt,
+        };
+        let targs = TangentArgs { vad: &d_vad, du10: &d_du, du10d: &d_dud, dpar: &d_dpar, dtauhf: &d_dtab };
+        sync();
+        let t = std::time::Instant::now();
+        k.launch_tl(&client, &args, &targs, h.dtg, n, nk, nth);
+        sync();
+        let t_tl = t.elapsed().as_secs_f64();
+        let (val, tl) = (down(&d_va), down(&d_vad));
+        let (mut vdiff, mut nsens) = (0f64, 0usize);
+        let (mut e_s, mut e_r, mut e_de) = (vec![], vec![], vec![]);
+        let mut worst = (0f64, 0usize);
+        for j in 0..n {
+            let vmax = (0..nspec).map(|i| at(&v_base, j, i).abs()).fold(0f64, f64::max).max(1e-300);
+            vdiff = vdiff.max((0..nspec).map(|i| (at(&val, j, i) - at(&v_base, j, i)).abs()).fold(0f64, f64::max) / vmax);
+            let fmax = (0..nspec).map(|i| at(&fd2, j, i).abs()).fold(0f64, f64::max);
+            let tmax = (0..nspec).map(|i| at(&tl, j, i).abs()).fold(0f64, f64::max);
+            if fmax < 1e-9 * vmax && tmax < 1e-9 * vmax {
+                continue;
+            }
+            nsens += 1;
+            let fm = fmax.max(1e-9 * vmax);
+            let e = (0..nspec).map(|i| (at(&tl, j, i) - at(&fd2, j, i)).abs()).fold(0f64, f64::max) / fm;
+            let rough = (0..nspec).map(|i| (at(&fd1, j, i) - at(&fd2, j, i)).abs()).fold(0f64, f64::max) / fm;
+            if rough <= 1e-6 {
+                e_s.push(e);
+                if e > worst.0 {
+                    worst = (e, h.nodes[j].isea);
+                }
+                // relative to the energy norm of the derivative (no cancellation)
+                let (a, b) = (energy(&tl, j), energy(&fd2, j));
+                let fa: Vec<f64> = fd2.iter().map(|x| x.abs()).collect();
+                e_de.push((a - b).abs() / energy(&fa, j).max(1e-300));
+            } else {
+                e_r.push(e);
+            }
+        }
+        let above = e_s.iter().filter(|&&e| e > 1e-4).count();
+        println!(
+            "{:<9} {:>9.1e} {:>9} {:>7} {:>10.2e} {:>10.2e} {:>10.2e} {:>6} {:>10.2e} {:>10.2e} {:>10.2e}",
+            name,
+            vdiff,
+            nsens,
+            e_s.len(),
+            pct(&mut e_s.clone(), 0.5),
+            pct(&mut e_s.clone(), 0.99),
+            worst.0,
+            above,
+            pct(&mut e_de.clone(), 0.5),
+            pct(&mut e_de, 1.0),
+            pct(&mut e_r, 0.5)
+        );
+        println!("          worst smooth node ISEA {}; tangent kernel {:.4} s ({:.2} times the value kernel)", worst.1, t_tl, t_tl / t_val);
+    }
+    Ok(())
+}
+
+/// The tail-stress tables of `TABU_TAUHF2` computed here in double precision
+/// against those of WW3 (`BASE.params`), and their derivative with respect to
+/// `BETAMAX` against the central difference of the WW3 tables of two
+/// perturbed configurations (`PLUS.params`, `MINUS.params`).
+fn tables(base: PathBuf, plus: Option<PathBuf>, minus: Option<PathBuf>) -> Result<()> {
+    use hww3_wave::sources::tabu_tauhf2;
+    let q = SrcePar::new(&Params::read(&base)?)?;
+    let t = q.st.tables.as_ref().ok_or_else(|| anyhow::anyhow!("no stress tables (SINTABLE = 0)"))?;
+    let rel = |x: &[f64], y: &[f64]| -> f64 {
+        let m = y.iter().fold(0f64, |m, v| m.max(v.abs())).max(1e-300);
+        x.iter().zip(y).fold(0f64, |e, (a, b)| e.max((a - b).abs())) / m
+    };
+    let t0 = std::time::Instant::now();
+    let (h1, dh1, h2, dh2) = tabu_tauhf2(&q.st, t, q.st.sig[q.st.nk], q.st.bbeta);
+    println!("TABU_TAUHF2 in f64 for BETAMAX {}: {:.1} s", q.st.bbeta, t0.elapsed().as_secs_f64());
+    println!("  TAUHFT against WW3: max |diff| / max {:.3e}; TAUHFT2: {:.3e}", rel(&h1, &t.tauhft), rel(&h2, &t.tauhft2));
+    if let (Some(pp), Some(pm)) = (plus, minus) {
+        let qp = SrcePar::new(&Params::read(&pp)?)?;
+        let qm = SrcePar::new(&Params::read(&pm)?)?;
+        let (tp, tm) = (qp.st.tables.unwrap(), qm.st.tables.unwrap());
+        let db = qp.st.bbeta - qm.st.bbeta;
+        let fd1: Vec<f64> = tp.tauhft.iter().zip(&tm.tauhft).map(|(a, b)| (a - b) / db).collect();
+        let fd2: Vec<f64> = tp.tauhft2.iter().zip(&tm.tauhft2).map(|(a, b)| (a - b) / db).collect();
+        println!(
+            "  d/dBETAMAX against the central difference of the WW3 tables (BETAMAX {} and {}): TAUHFT {:.3e}, TAUHFT2 {:.3e}",
+            qp.st.bbeta,
+            qm.st.bbeta,
+            rel(&dh1, &fd1),
+            rel(&dh2, &fd2)
+        );
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let a: Vec<String> = std::env::args().collect();
     let opt = |k: &str| a.iter().position(|x| x == k).and_then(|i| a.get(i + 1)).cloned();
     let _ = &opt;
     match (a.get(1).map(|s| s.as_str()), a.get(2)) {
         (Some("check"), Some(f)) => check(PathBuf::from(f)),
+        (Some("tables"), Some(f)) => tables(PathBuf::from(f), a.get(3).map(PathBuf::from), a.get(4).map(PathBuf::from)),
         #[cfg(feature = "cubecl")]
         (Some("check-gpu"), Some(f)) => {
             let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
@@ -368,6 +647,14 @@ fn main() -> Result<()> {
                 check_gpu::<f32>(PathBuf::from(f), nu, rep)
             }
         }
-        _ => bail!("usage: hww3-src check HARNESS | check-gpu HARNESS [--f64] [--units N] [--replicate R]"),
+        #[cfg(feature = "cubecl")]
+        (Some("check-tl"), Some(f)) => {
+            let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
+            let h: f64 = opt("--h").map(|s| s.parse()).transpose()?.unwrap_or(1e-4);
+            check_tl(PathBuf::from(f), nu, h)
+        }
+        _ => bail!(
+            "usage: hww3-src check HARNESS | tables BASE.params [PLUS.params MINUS.params] | check-gpu HARNESS [--f64] [--units N] [--replicate R] | check-tl HARNESS [--units N] [--h H]"
+        ),
     }
 }

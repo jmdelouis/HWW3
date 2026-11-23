@@ -263,8 +263,9 @@ Calendar time depends on his availability. At half time, M2a takes roughly
   - Burn tensor operations for the source terms save 6–11 pw against fused
     hand-written adjoints, at a cost in speed, memory and fidelity.
   - GPU Enzyme through `std::autodiff` and `std::offload` would remove most
-    hand-written adjoints. As far as could be found, offload is not yet in
-    nightly Rust for NVIDIA GPUs; re-assess at M3.
+    hand-written adjoints. Re-assessed at M3 (section 3): offload still has
+    no NVIDIA device side, and it could not differentiate CubeCL kernels in
+    any case, so the tangents and adjoints stay hand-written.
 - **Sharing of the work.** Coding assistants cut Jean-Marc's time by a
   factor of 2–3. Validation and physics judgement stay with him.
 - **Scope.** Not included, each costing extra:
@@ -280,7 +281,7 @@ Calendar time depends on his availability. At half time, M2a takes roughly
 |---|---|---|
 | Burn 0.22 with the CubeCL backends | Tape-based reverse mode over tensor operations (`Autodiff<B>`). Balanced gradient checkpointing is available. Custom CubeCL kernels are opaque to the tape and need a hand-written backward. CUDA, ROCm, Vulkan and WebGPU. | **chosen**: tensors and tape; custom kernels for the propagation (hand backward); source terms either as tensor operations (automatic backward) or as fused kernels (hand backward). M0: a sub-step of the N scheme works as a tape operation whose backward is the transpose kernel |
 | CubeCL | Rust GPU kernels (`#[cube]`), compiled just in time to CUDA, HIP or WGSL, generic over the float type (f32 or f64). Version 0.11 needs glibc 2.34: it builds on the Ifremer hpc cluster, not on Datarmor (glibc 2.19) | **chosen**: language of all kernels. M0: as fast as the same kernels in CUDA C (3 % slower to 11 % faster), and f64 works |
-| `std::autodiff` (Enzyme) | Nightly Rust: `rustup component add enzyme`, `lto = "fat"`, `-Zautodiff=Enable`; experimental, CPU. `std::offload` (GPU) is planned but was not confirmed in nightly. | not installed for now. It could later give reference derivatives of the per-node source functions on the CPU; until then the references are finite differences in double precision |
+| `std::autodiff` (Enzyme) | Nightly Rust: `rustup component add enzyme`, `lto = "fat"`, `-Zautodiff=Enable`; experimental, CPU. Re-assessed at M3 (23 November 2026): the CPU side ships with nightly as a rustup component; `std::offload`, which would run Rust functions on the GPU, still lacks its NVIDIA device side (under review, waiting on LLVM 22; its CI tests the CPU side only). Neither can see inside CubeCL kernels, which are compiled at run time from CubeCL's own representation. | not installed (it would need a nightly toolchain, which needs Jean-Marc's agreement). It could give reference derivatives of the CPU transcriptions of the source terms; the M3 tangents are hand-written CubeCL kernels checked against finite differences in double precision |
 | `rustc_codegen_nvvm` (Rust-CUDA) | Rebooted in 2025, pinned nightly, last crates.io release 2022 | not recommended |
 | NVIDIA CUDA Rust: `cuda-oxide` (SIMT) and `cutile-rs` (tiles) | Announced September 2026, experimental. `cuda-oxide` 0.3 (October 2026) needs a pinned nightly and CUDA 12 or later; `cutile-rs` needs CUDA 13.3 (the driver of the Datarmor A100 nodes supports CUDA 11.4 at most; the hpc cluster has CUDA 13.0). Both need compute capability 8.0 (A100). | a later option for kernels in ordinary generic Rust, where dual numbers would work |
 | `cudarc` with CUDA C kernels (NVRTC) | Stable and widely used; CubeCL's CUDA backend is built on it | M0 fallback, not needed. It runs the same kernels on the Datarmor A100s, compiled with the NVRTC of CUDA 11.4, as a cross-check |
@@ -317,9 +318,13 @@ Calendar time depends on his availability. At half time, M2a takes roughly
   $p$ tangent lanes and need no checkpointing.
 - Dual numbers carried by generic kernels would avoid writing tangent
   kernels, but need a kernel language that accepts a user-defined number
-  type: ordinary Rust through `cuda-oxide`, or a CubeCL custom type, which
-  is not verified. Hand-written tangent kernels cost about half of the
-  forward effort of the source terms.
+  type: ordinary Rust through `cuda-oxide`, or a CubeCL custom type. A
+  CubeCL dual type was tried at M3 and does not work: CubeCL structs cannot
+  be reassigned and their values move on use, so the arithmetic of the
+  kernels cannot be written over them. The M3 tangent kernels are written
+  by hand, each line of the value kernel with its derivative next to it
+  (`srce_tl`, `prop_tl`). Hand-written tangent kernels cost about half of
+  the forward effort of the source terms.
 
 **Reverse mode for the fields** (wind at every node and time step) is the
 only way to get gradients with respect to $10^8$ controls. It needs the
@@ -751,6 +756,23 @@ Details and the list of what remains are in
   model day against the 430 s of the target (jobs 4162075 to 4162077). The
   largest differences (5.4 cm RMS) are at the mouth of Ungava Bay in
   partial ice, over several hours; they are the one open point.
+
+### 9.4 Progress of M3 (from 23 November 2026)
+
+- **Tangent kernels.** `srce_tl` differentiates the whole `W3SRCE`
+  integration with the full ST4; `prop_tl` differentiates `W3KTP3` (the
+  ULTIMATE QUICKEST face values are linear in the cell values once the
+  limiter branch is chosen), the geographic node update with zero boundary
+  tangent, the level remap, the wind relative to the current and the
+  outputs. `hww3-prop run --tangent NAME` carries the tangent through the
+  whole time loop for a relative change of the wind or of `BETAMAX`,
+  `SDSC2`, `NLPROP` or `BJGAM`.
+- **Sources checked.** On the harness nodes of grids v5 $K=4$ and v4, the
+  tangent of one source step agrees with double-precision central
+  differences to at most 9.5e-5 on every node where the model is smooth,
+  with medians from 1.6e-11 to 3.0e-8, for the spectrum, the wind and the
+  four parameters (jobs 4163750 and 4163751, [GPU model
+  results](wave_results.md)). It costs 1.2 to 1.7 times the value kernel.
 
 ## 10. Other routes, briefly
 

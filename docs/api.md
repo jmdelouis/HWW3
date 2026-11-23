@@ -36,16 +36,22 @@ documented and the CI builds the documentation with warnings as errors.
 | `ww3io` | no | `Restart`, `FieldFile`, `NestFile`, `SeqFile`, `Time` |
 | `reference` | no | `step`: `PDLIB_W3XYPFSN2` on the CPU in double precision |
 | `cpu` | no | `ktp3` (`W3KTP3`) and `geo_freq` (`PDLIB_W3XYPUG`) on the CPU |
+| `harness` | no | readers of the WW3 source-term harness files and of their parameter files (`Harness`, `Params`) |
+| `sources` | no | the ST4 source terms, DIA, LN1, DB1, BT4 and `W3SRCE` on the CPU in double precision; `SrceTables` (their layout for the GPU), `tabu_tauhf2` (the tail-stress tables and their derivative with respect to `BETAMAX`) |
 | `backend` | no | `Sweeper` (forward and transposed sub-steps), `Scalar`, `Dims` |
 | `kernels` | CubeCL | N-scheme kernels: `fused`, `two_phase`, `two_phase_x4`, forward and transpose |
 | `device` | CubeCL | `DeviceGrid`: the CubeCL `Sweeper` |
 | `burn_ext` | CubeCL | `substep`: a sub-step on Burn's autodiff tape |
 | `prop` | CubeCL | kernels of the propagation-only model |
-| `model` | CubeCL | `Model`, `Config`, `Inputs`: the propagation-only time loop |
+| `srce` | CubeCL | `srce`: the whole `W3SRCE` integration, one cube per node; `wind_interp` (`W3UWND`); `SourceKernel` |
+| `srce_tl` | CubeCL | `srce_tl`: `srce` with its tangent (M3), `TangentArgs`, `SourceKernel::launch_tl` |
+| `prop_tl` | CubeCL | tangents of `W3KTP3`, of the geographic node update, of the level remap, of the wind and of the outputs (M3) |
+| `model` | CubeCL | `Model`, `Config`, `Inputs`: the time loop, with the source terms and, with `Config::tangent`, the tangent |
 | `cuda_c` | CUDA C | `CudaGrid`: the `cudarc` `Sweeper` |
 
-Programs: `hww3-wave` (M0 timings and checks), `hww3-prop` (M1 model) and
-`hww3-src` (M2a source terms against the WW3 harness). The Fortran harness
+Programs: `hww3-wave` (M0 timings and checks), `hww3-prop` (the model;
+`--tangent` for the M3 tangent) and `hww3-src` (the source terms against
+the WW3 harness; `check-tl` for the M3 tangent kernel). The Fortran harness
 `harness/src_harness.F90` is built against the WW3 library.
 
 ## Scripts (`scripts/`)
@@ -80,3 +86,7 @@ Programs: `hww3-wave` (M0 timings and checks), `hww3-prop` (M1 model) and
 | `m2_src_harness_hpc.slurm` | builds the source-term harness against the hpc WW3 library and runs it on a restart |
 | `m2_src_gpu_hpc.slurm` | the GPU source kernel on the harness nodes against WW3 and the CPU transcription (`hww3-src check-gpu`), single and double precision, and its timing |
 | `m2_prop_hpc.slurm` | `hww3-prop` with the source terms on one A100: `check-steps` against the WW3 restarts of the M2a reference, or hourly $H_s$ and $T_{m02}$ |
+| `m2_moddef_hpc.slurm` | the calibrated `mod_def.ww3` with another `BETAMAX` (its stress tables), for the finite differences |
+| `m2_fd_gradients.py`, `m2_fd_hpc.slurm` | finite-difference gradients of the energy, mean $H_s$ and scores of 48 h GPU runs with respect to `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM` and the wind |
+| `m3_tl_src_hpc.slurm` | the tangent kernel of the source terms against finite differences on the harness nodes (`hww3-src check-tl`) |
+| `m3_tl_run_hpc.slurm`, `m3_tl_compare.py` | a tangent run of `hww3-prop` and, with a step, the two perturbed runs and the comparison of the tangent with their central difference |

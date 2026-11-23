@@ -1840,6 +1840,18 @@ pub struct SrceTables {
     pub cumw: Vec<f64>,
 }
 
+/// Index in [`SrceTables::par`] of a namelist parameter of the source terms:
+/// `BETAMAX`, `SDSC2`, `NLPROP` (`SNLC1` of the DIA), `BJGAM` (`SDBC2`).
+pub fn par_index(name: &str) -> Result<usize> {
+    Ok(match name {
+        "BETAMAX" => P_BBETA,
+        "SDSC2" => P_SDSC2,
+        "NLPROP" => P_SNLC1,
+        "BJGAM" => P_SDBC2,
+        _ => bail!("unknown source parameter {name} (BETAMAX, SDSC2, NLPROP, BJGAM)"),
+    })
+}
+
 /// The sediment diameter `SED_D50` and critical Shields number `SED_PSIC`
 /// of every sea point (`ISEA = 1 .. NSEA`), from the harness parameter file.
 pub fn sediment(p: &Params) -> Result<(Vec<f32>, Vec<f32>)> {
@@ -1986,4 +1998,112 @@ impl SrceTables {
             cumw,
         })
     }
+}
+
+/// `TABU_TAUHF2` of `INSIN4`: the tail-stress tables `TAUHFT(0:IUSTAR,
+/// 0:IALPHA)` and `TAUHFT2(0:IUSTAR, 0:IALPHA, 0:ILEVTAIL)` for `BETAMAX =
+/// bbeta`, in double precision, with their derivatives with respect to
+/// `BETAMAX` (forward mode). `sigmax` is `SIG(NK)`. Returns
+/// `(TAUHFT, d TAUHFT, TAUHFT2, d TAUHFT2)` in Fortran order from 0.
+pub fn tabu_tauhf2(p: &St4, t: &StressTables, sigmax: f64, bbeta: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    use rayon::prelude::*;
+    const JTOT: usize = 250;
+    let (grav, kappa) = (p.grav, p.kappa);
+    let (ius, ial, ilv) = (t.iustar, t.ialpha, t.ilevtail);
+    let ustarm = 5.0;
+    let alpham = 20.0 * p.aalpha;
+    let delust = ustarm / ius as f64;
+    let delalp = alpham / ial as f64;
+    let deltail = alpham / ilv as f64;
+    let const1 = bbeta / (kappa * kappa);
+    let dconst1 = 1.0 / (kappa * kappa);
+    let omegac = sigmax;
+    let x0 = 0.05;
+    let n1 = ius + 1;
+    let n2 = ial + 1;
+    // one K (u* bin) per task: (tauhft, d, tauhft2, d) of that K
+    let rows: Vec<_> = (0..=ius)
+        .into_par_iter()
+        .map(|k| {
+            let mut h1 = vec![0f64; n2];
+            let mut dh1 = vec![0f64; n2];
+            let mut h2 = vec![0f64; n2 * (ilv + 1)];
+            let mut dh2 = vec![0f64; n2 * (ilv + 1)];
+            let ust0 = (k as f64 * delust).max(0.000001);
+            for l in 0..=ial {
+                let zz0 = ust0 * ust0 * (p.aalpha + l as f64 * delalp) / grav;
+                let omegacc = omegac.max(x0 * grav / ust0);
+                let yc = omegacc * (zz0 / grav).sqrt();
+                let dely = ((1.0 - yc) / JTOT as f64).max(0.0);
+                // as in WW3, UST is set to UST0 once per (K, L): each tail
+                // level I starts from the UST the previous level ended with
+                let mut ust = ust0;
+                let mut dust = 0.0;
+                for i in 0..=ilv {
+                    let levtail = i as f64 * deltail;
+                    let (mut t1, mut dt1, mut t2, mut dt2) = (0.0, 0.0, 0.0, 0.0);
+                    let mut tauw = ust0 * ust0;
+                    let mut dtauw = 0.0;
+                    for j in 1..=JTOT {
+                        let w = if j == 1 || j == JTOT { 0.5 } else { 1.0 };
+                        let y = yc + (j - 1) as f64 * dely;
+                        let omega = y * (grav / zz0).sqrt();
+                        let cm = grav / omega;
+                        // TAUHFT: u* fixed at UST0
+                        let zx = ust0 / cm + p.zzalp;
+                        let zarg = (kappa / zx).min(20.0);
+                        let zmu = (grav * zz0 / (cm * cm) * zarg.exp()).min(1.0);
+                        let zlog = zmu.ln().min(0.0);
+                        let zb = zmu * zlog.powi(4);
+                        t1 += w * const1 * zb / y * dely;
+                        dt1 += w * dconst1 * zb / y * dely;
+                        // TAUHFT2: u* reduced by the stress of the tail
+                        let zx = ust / cm + p.zzalp;
+                        let dzx = dust / cm;
+                        let zargv = kappa / zx;
+                        let (zarg, dzarg) = if zargv < 20.0 { (zargv, -kappa * dzx / (zx * zx)) } else { (20.0, 0.0) };
+                        let zmuv = grav * zz0 / (cm * cm) * zarg.exp();
+                        let (zmu, dzmu) = if zmuv < 1.0 { (zmuv, zmuv * dzarg) } else { (1.0, 0.0) };
+                        let lnz = zmu.ln();
+                        let (zlog, dzlog) = if lnz < 0.0 { (lnz, dzmu / zmu) } else { (0.0, 0.0) };
+                        let zbeta = const1 * zmu * zlog.powi(4);
+                        let dzbeta = dconst1 * zmu * zlog.powi(4) + const1 * (dzmu * zlog.powi(4) + zmu * 4.0 * zlog.powi(3) * dzlog);
+                        let r = ust / ust0;
+                        let dr = dust / ust0;
+                        t2 += w * zbeta * r * r / y * dely;
+                        dt2 += w * (dzbeta * r * r + zbeta * 2.0 * r * dr) / y * dely;
+                        tauw -= w * ust * ust * zbeta * levtail / y * dely;
+                        dtauw -= w * (2.0 * ust * dust * zbeta + ust * ust * dzbeta) * levtail / y * dely;
+                        if tauw > 0.0 {
+                            ust = tauw.sqrt();
+                            dust = 0.5 * dtauw / ust;
+                        } else {
+                            ust = 0.0;
+                            dust = 0.0;
+                        }
+                    }
+                    if i == ilv {
+                        h1[l] = t1;
+                        dh1[l] = dt1;
+                    }
+                    h2[l + i * n2] = t2;
+                    dh2[l + i * n2] = dt2;
+                }
+            }
+            (h1, dh1, h2, dh2)
+        })
+        .collect();
+    let (mut tauhft, mut dtauhft) = (vec![0f64; n1 * n2], vec![0f64; n1 * n2]);
+    let (mut tauhft2, mut dtauhft2) = (vec![0f64; n1 * n2 * (ilv + 1)], vec![0f64; n1 * n2 * (ilv + 1)]);
+    for (k, (h1, dh1, h2, dh2)) in rows.into_iter().enumerate() {
+        for l in 0..n2 {
+            tauhft[k + l * n1] = h1[l];
+            dtauhft[k + l * n1] = dh1[l];
+            for i in 0..=ilv {
+                tauhft2[k + l * n1 + i * n1 * n2] = h2[l + i * n2];
+                dtauhft2[k + l * n1 + i * n1 * n2] = dh2[l + i * n2];
+            }
+        }
+    }
+    (tauhft, dtauhft, tauhft2, dtauhft2)
 }

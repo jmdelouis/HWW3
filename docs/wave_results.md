@@ -628,3 +628,57 @@ change $T_{m02}$ by up to 1.3 s, so they reach more than the top bands. The
 same nodes stand out on grid v5 $K=4$ (up to 28 cm in one hour). This is the
 one open point. The next step is WW3 restarts during an Ungava episode on
 grid v5 $K=4$ and the harness on that state, as was done for the fjords.
+
+## Milestone M3: tangent kernels (in progress)
+
+The tangent kernels differentiate the GPU model in forward mode for a
+relative change of the wind speed or of a source parameter (`BETAMAX`,
+`SDSC2`, `NLPROP`, `BJGAM`). They are written by hand, each line of the
+value kernel with its derivative next to it: `srce_tl` for the whole
+`W3SRCE` integration, `prop_tl` for `W3KTP3`, the geographic node update,
+the level remap, the wind and the outputs. The discrete choices of the
+model (number of dynamic steps, `NKH`, the limiter, the table cells, the
+clamps at zero) are taken from the values and carry no derivative, so the
+tangent is exact where the model is smooth. For `BETAMAX` the derivative
+of the tail-stress table `TAUHFT2` comes from `TABU_TAUHF2` differentiated
+in double precision (`hww3-src tables` checks it against the tables of
+perturbed `mod_def.ww3` files).
+
+### Tangent of the source terms
+
+`hww3-src check-tl` runs the tangent kernel and the value kernel in double
+precision on the harness nodes, one 600 s step from the harness state, and
+compares the tangent with central differences of the value kernel with
+relative steps $10^{-4}$ and $10^{-5}$. Where the two differences agree to
+$10^{-6}$ of the largest derivative of the node (no limiter decision or
+table cell changes within the step), the tangent is compared with the
+$10^{-5}$ difference: largest difference over the spectrum relative to the
+largest derivative, per node. The spectrum direction is a random relative
+change of every bin.
+
+| harness (nodes) | direction | smooth / sensitive nodes | median | p99 | max |
+|---|---|---|---|---|---|
+| v5 $K=4$, 8 January 00 h (1,869) | spectrum | 1,854 / 1,869 | 1.6e-11 | 1.0e-9 | 4.7e-7 |
+| | wind | 1,705 / 1,869 | 2.8e-9 | 3.4e-7 | 9.5e-5 |
+| | `BETAMAX` | 1,586 / 1,861 | 2.2e-9 | 6.6e-7 | 9.5e-7 |
+| | `SDSC2` | 1,587 / 1,621 | 8.9e-10 | 3.2e-7 | 9.9e-7 |
+| | `NLPROP` | 1,811 / 1,864 | 1.9e-9 | 4.6e-7 | 9.2e-7 |
+| | `BJGAM` | 2 / 3 | 7.8e-9 | 7.8e-9 | 7.8e-9 |
+| v4, 1 January 00:10 (1,695) | spectrum | 1,608 / 1,652 | 6.4e-11 | 5.0e-9 | 9.8e-7 |
+| | wind | 1,400 / 1,658 | 2.3e-10 | 7.5e-9 | 2.1e-6 |
+| | `BETAMAX` | 1,418 / 1,647 | 7.8e-11 | 6.1e-7 | 3.3e-6 |
+| | `SDSC2` | 191 / 251 | 1.3e-10 | 4.8e-7 | 5.6e-7 |
+| | `NLPROP` | 561 / 1,472 | 3.0e-8 | 9.8e-7 | 1.5e-6 |
+
+(Jobs 4163750 and 4163751.) No smooth node is above the $10^{-4}$ of the
+M3 target. The values of the tangent kernel are those of the value kernel
+to 1.3e-16, and it takes 1.2 to 1.7 times its time. Nodes are sensitive
+where the derivative exceeds $10^{-9}$ of the largest spectral density of
+the node, below what the differences resolve. Depth-induced breaking acts
+at three harness nodes of grid v5 $K=4$ and at none of grid v4, and the
+saturation term of `SDSC2` at 251 nodes of the grid v4 state, ten minutes
+after the cold start.
+The first version of the comparison, with steps $10^{-3}$ and $10^{-4}$ and
+agreement to $10^{-4}$ (job 4163415), counted more nodes as smooth and
+found up to 1.1e-3 for the wind: there the larger step crosses cell edges
+of the bilinear tables `TAUT` and `TAUHFT2` where the derivative jumps.

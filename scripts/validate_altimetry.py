@@ -36,7 +36,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 import matplotlib.tri as mtri  # noqa: E402
 
 MAXDIST_FRAC = 0.75
-SPINUP_DAYS = 3.0
+# VAL_SPINUP_DAYS shortens it for runs started from a restart
+SPINUP_DAYS = float(os.environ.get("VAL_SPINUP_DAYS", 3.0))
 BLOCK = 7
 EARTH_KM = 6371.0
 L3_DEFAULT = "/home/ref-cmems-public/tac/wave/WAVE_GLO_PHY_SWH_L3_NRT_014_001"

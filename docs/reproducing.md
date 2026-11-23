@@ -501,6 +501,40 @@ python3 scripts/m1_compare_nc.py $R/refs/natl_v4_jan2026_exp/ww3.202601.nc $R/m2
 sbatch --mem=96G --export=ALL,WW3NC=$R/refs/natl_v4_jan2026_exp/ww3.202601.nc,GPU=$R/m2/out_JOBID,OUT=$R/m2/val_v4_full,GRID=$R/grids/natl_v4 scripts/m2_scores_hpc.slurm
 ```
 
+Finite-difference gradients of M2b: 48 h in double precision from the
+restart of 8 January on grid v5 $K=4$, each parameter multiplied by
+$1 \pm 0.01$ (and $1 \pm 0.001$ for the wind and `BETAMAX`). `BETAMAX`
+enters the stress tables of `ww3_grid`, so it goes through perturbed
+`mod_def.ww3` files and their harness parameter files; `hww3-src tables`
+checks the derivative of `TABU_TAUHF2` against them. One line `NAME JOBID`
+per run in `$R/m2/fd/cases.txt`, then the gradients of the energy, mean
+$H_s$ and scores:
+
+```bash
+F=src_8jan_full.bin.params
+sbatch -t 01:00:00 "--export=ALL,PARAMS=$F,HOURS=48,EXTRA=--f64" scripts/m2_prop_hpc.slurm                              # base
+sbatch -t 01:00:00 "--export=ALL,PARAMS=$F,HOURS=48,EXTRA=--f64 --scale-par SDSC2:1.01" scripts/m2_prop_hpc.slurm       # likewise NLPROP, BJGAM, 0.99
+sbatch -t 01:00:00 "--export=ALL,PARAMS=$F,HOURS=48,EXTRA=--f64 --wind-factor 1.01" scripts/m2_prop_hpc.slurm           # likewise 0.99, 1.001, 0.999
+sbatch --export=ALL,BETAMAX=1.7675,TAG=bp1 scripts/m2_moddef_hpc.slurm                                                     # likewise 1.7325, 1.75175, 1.74825
+sbatch --export=ALL,RUN=$R/runs/m2_moddef_bp1,OUT=par_bp1.bin,STEP=1000000,NODES=169562 scripts/m2_src_harness_hpc.slurm
+sbatch -t 01:00:00 "--export=ALL,PARAMS=par_bp1.bin.params,HOURS=48,EXTRA=--f64" scripts/m2_prop_hpc.slurm
+target/release/hww3-src tables $R/m2/harness/$F $R/m2/harness/par_bp1.bin.params $R/m2/harness/par_bm1.bin.params
+sbatch --dependency=afterany:JOBIDS scripts/m2_fd_hpc.slurm
+```
+
+Milestone M3, with the binaries built in `$R/target_wave_m3`: the tangent
+kernel of the source terms on the harness nodes, short tangent runs with
+their own finite differences, and the 48 h tangent runs against the runs
+above:
+
+```bash
+sbatch --export=ALL,HARNESS=src_8jan_full.bin scripts/m3_tl_src_hpc.slurm
+sbatch --export=ALL,HARNESS=src_v4_full.bin scripts/m3_tl_src_hpc.slurm
+sbatch -t 00:40:00 --export=ALL,NAME=WIND,HOURS=3,H=1e-3 scripts/m3_tl_run_hpc.slurm
+sbatch --export=ALL,NAME=BETAMAX,HOURS=48 scripts/m3_tl_run_hpc.slurm            # one per direction; lines NAME JOBID in $R/m3/tl48.txt
+sbatch --dependency=afterok:JOBIDS scripts/m3_tl_cmp_hpc.slurm
+```
+
 ## 9. Note
 
 ```bash

@@ -19,6 +19,12 @@
 //!    ([`crate::srce`]). The start call of `W3WAVE` (`IT = 0`) is skipped:
 //!    it only sets u*, which the next call computes again without using it.
 //!
+//! With [`Config::tangent`] (milestone M3) the run also carries the tangent
+//! of the spectrum for a relative change of the wind or of a source
+//! parameter ([`crate::prop_tl`], [`crate::srce_tl`]): every kernel that
+//! changes the spectrum is replaced by its tangent version, which updates
+//! the values in the same way.
+//!
 //! Forcing fields are read as `ww3_shel` does at the start of each `W3WAVE`
 //! call: currents and winds are kept between the two records around the time, levels
 //! and ice keep the first record after the call start (the Copernicus Marine
@@ -32,6 +38,8 @@ use crate::harness::Params;
 use crate::sources::{sediment, SrcePar, SrceTables};
 use crate::spec::{node_wavenumbers, Spec, DERA, RADIUS};
 use crate::srce::{SourceKernel, SrceArgs};
+use crate::srce_tl::TangentArgs;
+use crate::prop_tl;
 use crate::ww3io::{FieldFile, NestFile, Restart, Time};
 use anyhow::{anyhow, bail, Result};
 use cubecl::client::Client;
@@ -99,6 +107,16 @@ pub struct Config {
     /// `RWNDC` (namelist `MISC` of `ww3_grid`): part of the current removed
     /// from the wind.
     pub rwindc: f32,
+    /// Source parameters multiplied by a factor, by name (`SDSC2`,
+    /// `NLPROP`, `BJGAM`; `BETAMAX` with `SINTABLE = 0` only, since the
+    /// stress tables depend on it): finite differences of the parameters.
+    pub scale_par: Vec<(String, f64)>,
+    /// Factor applied to the wind speed of the forcing.
+    pub wind_factor: f32,
+    /// Tangent run: the direction of the tangent, a relative change of the
+    /// wind speed (`WIND`) or of a source parameter (`BETAMAX`, `SDSC2`,
+    /// `NLPROP`, `BJGAM`).
+    pub tangent: Option<String>,
 }
 
 impl Default for Config {
@@ -117,6 +135,9 @@ impl Default for Config {
             bccfl: true,
             units: 128,
             rwindc: 1.0,
+            scale_par: vec![],
+            wind_factor: 1.0,
+            tangent: None,
         }
     }
 }
@@ -170,6 +191,54 @@ pub struct Timers {
     pub sources: f64,
     /// Number of frequency sweeps of the geographic propagation.
     pub sweeps: u64,
+}
+
+/// Tangent state of a run with [`Config::tangent`]: the tangent of the
+/// spectrum and of its propagated form, the tangent inputs of the source
+/// kernel and the tangent outputs.
+struct Tangent {
+    /// The direction is the wind (`du10`, `du10d` set every step).
+    wind: bool,
+    d_vad: Handle,
+    d_dac: Handle,
+    d_dac2: Handle,
+    d_dut: Handle,
+    d_du10: Handle,
+    d_du10d: Handle,
+    d_dpar: Handle,
+    d_dtauhf: Handle,
+    d_dhs: Handle,
+    d_den: Handle,
+}
+
+/// Seeds of the tangent direction `name` (`WIND`, or a source parameter of
+/// [`crate::sources::par_index`]) for a relative change: the parameter
+/// tangents, the tangent of the tail-stress table (`BETAMAX` with the
+/// stress tables, from `TABU_TAUHF2` in double precision) and whether the
+/// wind is perturbed.
+fn tangent_seeds(name: &str, q: &SrcePar, t: &SrceTables) -> Result<(Vec<f64>, Vec<f64>, bool)> {
+    use crate::sources::{par_index, tabu_tauhf2, NPAR, P_BBETA, P_SINTABLE};
+    let mut dpar = vec![0.0; NPAR];
+    let mut dtab = vec![0.0; t.tauhf.len()];
+    if name == "WIND" {
+        eprintln!("tangent: relative change of the wind speed");
+        return Ok((dpar, dtab, true));
+    }
+    let i = par_index(name)?;
+    dpar[i] = t.par[i];
+    if i == P_BBETA && t.par[P_SINTABLE] > 0.0 {
+        let st = q.st.tables.as_ref().ok_or_else(|| anyhow!("no stress tables"))?;
+        let t0 = std::time::Instant::now();
+        let (_, d1, _, d2) = tabu_tauhf2(&q.st, st, q.st.sig[q.st.nk], q.st.bbeta);
+        let d = if q.st.ttauwshelter > 0.0 { d2 } else { d1 };
+        if d.len() != dtab.len() {
+            bail!("tail-stress table of {} values against {}", d.len(), dtab.len());
+        }
+        dtab = d.iter().map(|x| x * q.st.bbeta).collect();
+        eprintln!("tangent: d TAUHF / d BETAMAX in {:.1} s", t0.elapsed().as_secs_f64());
+    }
+    eprintln!("tangent: relative change of {name} ({})", t.par[i]);
+    Ok((dpar, dtab, false))
 }
 
 /// The propagation-only model on the GPU: grid, spectral grid, forcing
@@ -338,6 +407,7 @@ pub struct Model<F: Real> {
     pub d_ust: Handle,
     /// Mean dynamic step of the last source call per node on the device.
     pub d_dtdyn: Handle,
+    tl: Option<Tangent>,
     _f: PhantomData<F>,
 }
 
@@ -469,16 +539,44 @@ impl<F: Real> Model<F> {
                 if d50.len() != np || psic.len() != np {
                     bail!("SED_D50 and SED_PSIC for {} and {} sea points against {np}", d50.len(), psic.len());
                 }
-                let t = SrceTables::new(&q)?;
+                let mut t = SrceTables::new(&q)?;
+                for (name, f) in &cfg.scale_par {
+                    let i = crate::sources::par_index(name)?;
+                    if name == "BETAMAX" && t.par[crate::sources::P_SINTABLE] > 0.0 {
+                        bail!("BETAMAX enters the stress tables: perturb it through the parameter file of a perturbed mod_def.ww3");
+                    }
+                    eprintln!("sources: {name} {} -> {}", t.par[i], t.par[i] * f);
+                    t.par[i] *= f;
+                }
                 eprintln!("sources: {} (BETAMAX {}, {} units per cube)", p.display(), q.st.bbeta, cfg.units);
-                Some((SourceKernel::<F>::new(&client, &t, cfg.units), d50, psic))
+                let seeds = match &cfg.tangent {
+                    Some(name) => Some(tangent_seeds(name, &q, &t)?),
+                    None => None,
+                };
+                Some((SourceKernel::<F>::new(&client, &t, cfg.units), d50, psic, seeds))
             }
             None => None,
         };
-        let (src, d_d50, d_psic) = match src {
-            Some((k, d, s)) => (Some(k), upf(&d), upf(&s)),
-            None => (None, upf(&[0.0]), upf(&[0.0])),
+        let (src, d_d50, d_psic, seeds) = match src {
+            Some((k, d, s, sd)) => (Some(k), upf(&d), upf(&s), sd),
+            None => (None, upf(&[0.0]), upf(&[0.0]), None),
         };
+        if cfg.tangent.is_some() && seeds.is_none() {
+            bail!("a tangent run needs the source terms (--sources)");
+        }
+        let tl = seeds.map(|(dpar, dtab, wind)| Tangent {
+            wind,
+            d_vad: upf(&vec![0.0; nspec * np]),
+            d_dac: upf(&vec![0.0; np * nth]),
+            d_dac2: upf(&vec![0.0; np * nth]),
+            d_dut: upf(&vec![0.0; ne * nth]),
+            d_du10: upf(&vec![0.0; np]),
+            d_du10d: upf(&vec![0.0; np]),
+            d_dpar: upd(&dpar),
+            d_dtauhf: upd(&dtab),
+            d_dhs: upf(&vec![0.0; np]),
+            d_den: upf(&vec![0.0; np]),
+        });
         let mut m = Model {
             np,
             ne,
@@ -596,6 +694,7 @@ impl<F: Real> Model<F> {
             d_psic,
             d_ust: upf(&vec![0.0; np]),
             d_dtdyn: upf(&vec![0.0; np]),
+            tl,
             sp,
             client,
             _f: PhantomData,
@@ -952,8 +1051,8 @@ impl<F: Real> Model<F> {
             if dd.abs() > pi {
                 dd -= tpi * dd.signum();
             }
-            ua0[i] = a0;
-            uai[i] = an - a0;
+            ua0[i] = a0 * self.cfg.wind_factor;
+            uai[i] = (an - a0) * self.cfg.wind_factor;
             ud0[i] = c0;
             udi[i] = dd;
         }
@@ -990,6 +1089,28 @@ impl<F: Real> Model<F> {
                 np,
             );
         }
+        if let Some(tl) = self.tl.as_ref().filter(|t| t.wind) {
+            let (c, d) = self.dims(np);
+            unsafe {
+                prop_tl::wind_interp_tl::launch_unchecked::<F>(
+                    &self.client,
+                    c,
+                    d,
+                    bf(&self.d_ua0, np),
+                    bf(&self.d_uai, np),
+                    bf(&self.d_ud0, np),
+                    bf(&self.d_udi, np),
+                    bf(&self.d_cx, np),
+                    bf(&self.d_cy, np),
+                    bf(&tl.d_du10, np),
+                    bf(&tl.d_du10d, np),
+                    rd,
+                    self.cfg.rwindc,
+                    self.cur.is_some() as u32,
+                    np,
+                );
+            }
+        }
     }
 
     /// `W3SRCE` at every node with `MAPSTA = 1` (call after the propagation).
@@ -1010,7 +1131,13 @@ impl<F: Real> Model<F> {
             ust: &self.d_ust,
             dtdyn: &self.d_dtdyn,
         };
-        k.launch(&self.client, &args, self.cfg.dtg, false, self.np, self.nk, self.nth);
+        match self.tl.as_ref() {
+            Some(tl) => {
+                let targs = TangentArgs { vad: &tl.d_vad, du10: &tl.d_du10, du10d: &tl.d_du10d, dpar: &tl.d_dpar, dtauhf: &tl.d_dtauhf };
+                k.launch_tl(&self.client, &args, &targs, self.cfg.dtg, self.np, self.nk, self.nth);
+            }
+            None => k.launch(&self.client, &args, self.cfg.dtg, false, self.np, self.nk, self.nth),
+        }
         self.tick(5, &mut t);
     }
 
@@ -1093,6 +1220,10 @@ impl<F: Real> Model<F> {
                 nth,
             );
         }
+        if let Some(tl) = self.tl.as_ref() {
+            // the boundary spectra do not depend on the parameters
+            self.zero_list(&tl.d_vad, &self.d_bnode, self.nbnd);
+        }
     }
 
     /// `W3UICE` when the next ice field is within half an interval.
@@ -1136,22 +1267,22 @@ impl<F: Real> Model<F> {
         if nodes.is_empty() {
             return;
         }
-        let (np, nk, nth) = (self.np, self.nk, self.nth);
         let d_nodes = self.client.create_from_slice(u32::as_bytes(nodes));
-        let n = nodes.len() * nk * nth;
-        let (c, d) = self.dims(n);
+        self.zero_list(&self.d_va, &d_nodes, nodes.len());
+        if let Some(tl) = self.tl.as_ref() {
+            self.zero_list(&tl.d_vad, &d_nodes, nodes.len());
+        }
+    }
+
+    /// Zero the spectra `va` of the `nl` nodes listed in `d_nodes`.
+    fn zero_list(&self, va: &Handle, d_nodes: &Handle, nl: usize) {
+        if nl == 0 {
+            return;
+        }
+        let (np, nk, nth) = (self.np, self.nk, self.nth);
+        let (c, d) = self.dims(nl * nk * nth);
         unsafe {
-            prop::zero_nodes::launch_unchecked::<F>(
-                &self.client,
-                c,
-                d,
-                bf(&self.d_va, nk * np * nth),
-                bf(&d_nodes, nodes.len()),
-                np,
-                nodes.len(),
-                nk,
-                nth,
-            );
+            prop::zero_nodes::launch_unchecked::<F>(&self.client, c, d, bf(va, nk * np * nth), bf(d_nodes, nl), np, nl, nk, nth);
         }
     }
 
@@ -1231,25 +1362,31 @@ impl<F: Real> Model<F> {
             let d_i1 = self.client.create_from_slice(u32::as_bytes(&i1v));
             let d_r1 = self.upf(&r1v);
             let d_tail = self.client.create_from_slice(u32::as_bytes(&tail));
-            let (c, d) = self.dims(nl * self.nth);
-            unsafe {
-                prop::ulev_remap::launch_unchecked::<F>(
-                    &self.client,
-                    c,
-                    d,
-                    bf(&self.d_va, nk * np * self.nth),
-                    bf(&d_nodes, nl),
-                    bf(&d_own, nl * nk),
-                    bf(&d_dwn, nl * nk),
-                    bf(&d_i1, nl * nk),
-                    bf(&d_r1, nl * nk),
-                    bf(&d_tail, nl),
-                    self.sp.fachfa,
-                    np,
-                    nl,
-                    nk,
-                    self.nth,
-                );
+            let mut targets = vec![&self.d_va];
+            if let Some(tl) = self.tl.as_ref() {
+                targets.push(&tl.d_vad);
+            }
+            for va in targets {
+                let (c, d) = self.dims(nl * self.nth);
+                unsafe {
+                    prop::ulev_remap::launch_unchecked::<F>(
+                        &self.client,
+                        c,
+                        d,
+                        bf(va, nk * np * self.nth),
+                        bf(&d_nodes, nl),
+                        bf(&d_own, nl * nk),
+                        bf(&d_dwn, nl * nk),
+                        bf(&d_i1, nl * nk),
+                        bf(&d_r1, nl * nk),
+                        bf(&d_tail, nl),
+                        self.sp.fachfa,
+                        np,
+                        nl,
+                        nk,
+                        self.nth,
+                    );
+                }
             }
         }
         if self.profile {
@@ -1301,24 +1438,47 @@ impl<F: Real> Model<F> {
         self.d_dw = self.upf(&self.dw);
         let d_mode = self.client.create_from_slice(u32::as_bytes(&mode));
         let (c, d) = self.dims(np);
-        unsafe {
-            prop::ulev_node::launch_unchecked::<F>(
-                &self.client,
-                c,
-                d,
-                bf(&self.d_va, nk * np * nth),
-                bf(&self.d_wn, (nk + 2) * np),
-                bf(&self.d_cg, (nk + 2) * np),
-                bf(&self.d_dw, np),
-                bf(&d_mode, np),
-                bf(&self.d_sig, nk + 2),
-                bf(&self.d_dsip, nk + 2),
-                self.dmin,
-                self.sp.fachfa,
-                np,
-                nk,
-                nth,
-            );
+        if let Some(tl) = self.tl.as_ref() {
+            unsafe {
+                prop_tl::ulev_node_tl::launch_unchecked::<F>(
+                    &self.client,
+                    c.clone(),
+                    d,
+                    bf(&self.d_va, nk * np * nth),
+                    bf(&tl.d_vad, nk * np * nth),
+                    bf(&self.d_wn, (nk + 2) * np),
+                    bf(&self.d_cg, (nk + 2) * np),
+                    bf(&self.d_dw, np),
+                    bf(&d_mode, np),
+                    bf(&self.d_sig, nk + 2),
+                    bf(&self.d_dsip, nk + 2),
+                    self.dmin,
+                    self.sp.fachfa,
+                    np,
+                    nk,
+                    nth,
+                );
+            }
+        } else {
+            unsafe {
+                prop::ulev_node::launch_unchecked::<F>(
+                    &self.client,
+                    c,
+                    d,
+                    bf(&self.d_va, nk * np * nth),
+                    bf(&self.d_wn, (nk + 2) * np),
+                    bf(&self.d_cg, (nk + 2) * np),
+                    bf(&self.d_dw, np),
+                    bf(&d_mode, np),
+                    bf(&self.d_sig, nk + 2),
+                    bf(&self.d_dsip, nk + 2),
+                    self.dmin,
+                    self.sp.fachfa,
+                    np,
+                    nk,
+                    nth,
+                );
+            }
         }
         if self.profile {
             let remapped = self.download_u32(&d_mode).iter().filter(|&&m| m == 3).count();
@@ -1416,13 +1576,51 @@ impl<F: Real> Model<F> {
         }
         let (np, nk, nth) = (self.np, self.nk, self.nth);
         // rows staged in shared memory: keep block (nth + 1) values within 48 KiB
+        let arrays = if self.tl.is_some() { 2 } else { 1 };
         let mut tb = self.cfg.block as usize;
-        while tb > 32 && tb * (nth + 1) * std::mem::size_of::<F>() > 48 * 1024 {
+        while tb > 32 && arrays * tb * (nth + 1) * std::mem::size_of::<F>() > 48 * 1024 {
             tb /= 2;
         }
         let c = CubeCount::Static((np * nk).div_ceil(tb) as u32, 1, 1);
         let d = CubeDim::new_1d(tb as u32);
         let flcur = if self.cur.is_some() { 1.0 } else { 0.0 };
+        if let Some(tl) = self.tl.as_ref() {
+            unsafe {
+                prop_tl::ktp3_theta_tl::launch_unchecked::<F>(
+                    &self.client,
+                    c,
+                    d,
+                    bf(&self.d_va, nk * np * nth),
+                    bf(&tl.d_vad, nk * np * nth),
+                    bf(&self.d_wn, (nk + 2) * np),
+                    bf(&self.d_cg, (nk + 2) * np),
+                    bf(&self.d_sig, nk + 2),
+                    bf(&self.d_dw, np),
+                    bf(&self.d_dddx, np),
+                    bf(&self.d_dddy, np),
+                    bf(&self.d_dcxdx, np),
+                    bf(&self.d_dcxdy, np),
+                    bf(&self.d_dcydx, np),
+                    bf(&self.d_dcydy, np),
+                    bf(&self.d_cthg0, np),
+                    bf(&self.d_nflag, np),
+                    bf(&self.d_ecos, nth),
+                    bf(&self.d_esin, nth),
+                    bf(&self.d_es2, nth),
+                    bf(&self.d_ec2, nth),
+                    bf(&self.d_esc, nth),
+                    facth,
+                    self.cfg.ctmax,
+                    flcur,
+                    self.dmin,
+                    np,
+                    nk,
+                    nth,
+                    tb,
+                );
+            }
+            return;
+        }
         unsafe {
             prop::ktp3_theta::launch_unchecked::<F>(
                 &self.client,
@@ -1465,6 +1663,42 @@ impl<F: Real> Model<F> {
         }
         let (np, nk, nth) = (self.np, self.nk, self.nth);
         let (c, d) = self.dims(np * nth);
+        if let Some(tl) = self.tl.as_ref() {
+            unsafe {
+                prop_tl::ktp3_k_tl::launch_unchecked::<F>(
+                    &self.client,
+                    c,
+                    d,
+                    bf(&self.d_va, nk * np * nth),
+                    bf(&tl.d_vad, nk * np * nth),
+                    bf(&self.d_wn, (nk + 2) * np),
+                    bf(&self.d_cg, (nk + 2) * np),
+                    bf(&self.d_sig, nk + 2),
+                    bf(&self.d_dsip, nk + 2),
+                    bf(&self.d_dw, np),
+                    bf(&self.d_dddx, np),
+                    bf(&self.d_dddy, np),
+                    bf(&self.d_cx, np),
+                    bf(&self.d_cy, np),
+                    bf(&self.d_dcxdx, np),
+                    bf(&self.d_dcxdy, np),
+                    bf(&self.d_dcydx, np),
+                    bf(&self.d_dcydy, np),
+                    bf(&self.d_nflag, np),
+                    bf(&self.d_es2, nth),
+                    bf(&self.d_ec2, nth),
+                    bf(&self.d_esc, nth),
+                    fack,
+                    self.cfg.ctmax,
+                    self.sp.fachfa,
+                    self.dmin,
+                    np,
+                    nk,
+                    nth,
+                );
+            }
+            return;
+        }
         unsafe {
             prop::ktp3_k::launch_unchecked::<F>(
                 &self.client,
@@ -1501,6 +1735,10 @@ impl<F: Real> Model<F> {
 
     /// `PDLIB_W3XYPUG` for every direction of frequency `ik`.
     pub fn geographic(&mut self, ik: usize) {
+        if self.tl.is_some() {
+            self.geographic_tl(ik);
+            return;
+        }
         let (np, ne, nk, nth) = (self.np, self.ne, self.nk, self.nth);
         let nspec = nk * nth;
         let n = np * nth;
@@ -1593,6 +1831,137 @@ impl<F: Real> Model<F> {
                 nth,
             );
         }
+    }
+
+    /// [`Model::geographic`] with the tangent: the triangle values of the
+    /// values and of the tangent, then the node update of both (zero tangent
+    /// at the open-boundary nodes).
+    fn geographic_tl(&mut self, ik: usize) {
+        let (np, ne, nk, nth) = (self.np, self.ne, self.nk, self.nth);
+        let nspec = nk * nth;
+        let n = np * nth;
+        let (c, d) = self.dims(n);
+        let (rd10, rd20) = self.boundary_rd();
+        let nb1 = self.nbnd.max(1);
+        let (ct, dt) = self.dims(ne * (nth / 4));
+        let (cn, dn) = self.dims(np * (nth / 4));
+        let nsub = self.max_iter(ik);
+        let mut tl = self.tl.take().expect("tangent state");
+        unsafe {
+            prop::va_to_ac::launch_unchecked::<F>(
+                &self.client,
+                c.clone(),
+                d,
+                bf(&self.d_va, nk * n),
+                bf(&self.d_ac, n),
+                bf(&self.d_cg, (nk + 2) * np),
+                bf(&self.d_clats, np),
+                np,
+                ik,
+                nth,
+            );
+            prop::va_to_ac::launch_unchecked::<F>(
+                &self.client,
+                c.clone(),
+                d,
+                bf(&tl.d_vad, nk * n),
+                bf(&tl.d_dac, n),
+                bf(&self.d_cg, (nk + 2) * np),
+                bf(&self.d_clats, np),
+                np,
+                ik,
+                nth,
+            );
+        }
+        for sub in 0..nsub {
+            unsafe {
+                for (u, ut) in [(&self.d_ac, &self.d_ut), (&tl.d_dac, &tl.d_dut)] {
+                    prop::geo_tri_x4::launch_unchecked::<F>(
+                        &self.client,
+                        ct.clone(),
+                        dt,
+                        bf(u, n),
+                        bf(ut, ne * nth),
+                        bf(&self.d_coef, nk * ne * 12),
+                        bf(&self.d_ccoef, ne * 6),
+                        bf(&self.d_ecos, nth),
+                        bf(&self.d_esin, nth),
+                        bf(&self.d_iter, nspec),
+                        bf(&self.d_ine, 3 * ne),
+                        ne,
+                        ik,
+                        sub,
+                        nth,
+                    );
+                }
+                prop_tl::geo_node_x4_tl::launch_unchecked::<F>(
+                    &self.client,
+                    cn.clone(),
+                    dn,
+                    bf(&self.d_ac, n),
+                    bf(&tl.d_dac, n),
+                    bf(&self.d_ac2, n),
+                    bf(&tl.d_dac2, n),
+                    bf(&self.d_ut, ne * nth),
+                    bf(&tl.d_dut, ne * nth),
+                    bf(&self.d_coef, nk * ne * 12),
+                    bf(&self.d_ccoef, ne * 6),
+                    bf(&self.d_ecos, nth),
+                    bf(&self.d_esin, nth),
+                    bf(&self.d_dtk, nspec),
+                    bf(&self.d_iter, nspec),
+                    bf(&self.d_si_inv, np),
+                    bf(&self.d_mlo, np),
+                    bf(&self.d_mhi, np),
+                    bf(&self.d_start, np + 1),
+                    bf(&self.d_slot, 3 * ne),
+                    bf(&self.d_bidx, np),
+                    bf(&self.d_bb0, nb1 * nspec),
+                    bf(&self.d_bbn, nb1 * nspec),
+                    bf(&self.d_clats, np),
+                    rd10,
+                    rd20,
+                    self.cfg.dtg,
+                    np,
+                    ne,
+                    nspec,
+                    ik,
+                    sub,
+                    nth,
+                );
+            }
+            std::mem::swap(&mut self.d_ac, &mut self.d_ac2);
+            std::mem::swap(&mut tl.d_dac, &mut tl.d_dac2);
+            self.timers.sweeps += 1;
+        }
+        unsafe {
+            prop_tl::ac_to_va_tl::launch_unchecked::<F>(
+                &self.client,
+                c.clone(),
+                d,
+                bf(&self.d_ac, n),
+                bf(&tl.d_dac, n),
+                bf(&tl.d_vad, nk * n),
+                bf(&self.d_cg, (nk + 2) * np),
+                bf(&self.d_clats, np),
+                np,
+                ik,
+                nth,
+            );
+            prop::ac_to_va::launch_unchecked::<F>(
+                &self.client,
+                c,
+                d,
+                bf(&self.d_ac, n),
+                bf(&self.d_va, nk * n),
+                bf(&self.d_cg, (nk + 2) * np),
+                bf(&self.d_clats, np),
+                np,
+                ik,
+                nth,
+            );
+        }
+        self.tl = Some(tl);
     }
 
     fn tick(&mut self, what: usize, t: &mut std::time::Instant) {
@@ -1773,6 +2142,36 @@ impl<F: Real> Model<F> {
     pub fn total_energy(&self) -> f64 {
         self.launch_outputs();
         self.download(&self.d_en).iter().map(|&x| x as f64).sum()
+    }
+
+    /// In a tangent run, the tangent of H_s per node (`UNDEF` where
+    /// `MAPSTA <= 0`) and of the total energy of [`Model::total_energy`].
+    pub fn tangent_outputs(&self) -> Option<(Vec<f32>, f64)> {
+        let tl = self.tl.as_ref()?;
+        let (np, nk, nth) = (self.np, self.nk, self.nth);
+        let (c, d) = self.dims(np);
+        unsafe {
+            prop_tl::outputs_tl::launch_unchecked::<F>(
+                &self.client,
+                c,
+                d,
+                bf(&self.d_va, nk * np * nth),
+                bf(&tl.d_vad, nk * np * nth),
+                bf(&self.d_cg, (nk + 2) * np),
+                bf(&self.d_dden, nk),
+                bf(&self.d_nflag, np),
+                bf(&tl.d_dhs, np),
+                bf(&tl.d_den, np),
+                self.sp.fte,
+                UNDEF,
+                np,
+                nk,
+                nth,
+            );
+        }
+        let dhs = self.download(&tl.d_dhs);
+        let de = self.download(&tl.d_den).iter().map(|&x| x as f64).sum();
+        Some((dhs, de))
     }
 }
 

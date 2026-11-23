@@ -41,7 +41,8 @@ from scipy.spatial import cKDTree
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-SPINUP_DAYS = 3.0
+# VAL_SPINUP_DAYS shortens it for runs started from a restart
+SPINUP_DAYS = float(os.environ.get("VAL_SPINUP_DAYS", 3.0))
 MAXDIST_KM = 10.0
 # VAL_MIN_HOURS lowers it for short runs (the 92 hours of the explicit runs after spin-up)
 MIN_HOURS = int(os.environ.get("VAL_MIN_HOURS", 100))
