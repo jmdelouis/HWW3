@@ -72,9 +72,10 @@ with WW3 to \SI{2}{\micro\metre} in $H_s$ at the median node and
 does. With the source terms of a simplified ST4 it runs a week in
 \SI{143}{s} per model day, against \SI{715}{s} for WW3 on 64 cores, with
 the altimeter and buoy scores of WW3 to \SI{1}{\micro\metre}. With the
-calibrated ST4 it reproduces the week of the explicit run of grid v5
-$K=4$ to \SI{2}{\micro\metre} at the median node, with the same scores, in
-\SI{124}{s} per model day against \SI{2601}{s} for WW3 on 112 cores.
+calibrated ST4 it reproduces the weeks of the explicit runs of grids v5
+$K=4$ and v4 to 2 and \SI{4}{\micro\metre} at the median node, with the
+same scores, in 124 and \SI{220}{s} per model day against 2601 and
+\SI{4318}{s} for WW3 on 112 cores.
 \end{abstract}
 
 \section{Motivation}
@@ -1889,7 +1890,7 @@ differ between WW3 and the GPU but are shared by the two GPU precisions.
 The observation operators and the first finite-difference gradients with
 respect to the parameters are still to be written.
 
-\paragraph{Milestone M2b (in progress).} M2b runs the source terms of the
+\paragraph{Milestone M2b (targets met).} M2b runs the source terms of the
 calibrated configuration, with the stress tables of \texttt{INSIN4}
 (\texttt{SINTABLE = 1}) and the directional cumulative breaking term of
 \texttt{W3SDS4} (\texttt{SDSCUM = -0.40}, through the matrix
@@ -1927,11 +1928,30 @@ against the altimeters, as in Table~\ref{tab:v5val}, and \SI{-5.38}{cm}
 and \SI{32.46}{cm} against the 252 buoys (job 4162040). One A100 takes
 \SI{124}{s} per model day (job 4162038), against \SI{2601}{s} for WW3 on
 112 Datarmor cores.
-\item Grid v4 comes next, with its explicit run and the speed target.
+\item Grid v4 (794\,613 nodes) runs from the restart after the first step
+of a calibrated cold start on the hpc cluster (job 4162072) to 7 January
+21\,h. Against its explicit run made on Datarmor, the RMS difference is
+\SI{3.6}{\micro\metre} at the median node and \SI{0.14}{mm} at the 99th
+percentile of 679\,867 nodes (job 4162076). The scores are those of WW3
+and of Table~\ref{tab:v5val}: \SI{-1.74}{cm} and \SI{28.25}{cm} against
+44\,670 altimeter blocks, \SI{-5.66}{cm} and \SI{30.10}{cm} against the
+252 buoys (job 4162077). One A100 takes \SI{220}{s} per model day
+(job 4162075), against \SI{4318}{s} for WW3 on 112 cores.
 \end{itemize}
-The targets of M2b are those of M2a, against the existing explicit runs on
+The targets of M2b were those of M2a, against the existing explicit runs on
 grids v5 $K=4$ and v4, and at least ten times the speed of the Fortran
-explicit scheme, i.e. under \SI{430}{s} per model day on grid v4.
+explicit scheme, i.e. under \SI{430}{s} per model day on grid v4. Both
+are met.
+
+One point remains open. On grid v4 the largest differences, up to
+\SI{5.4}{cm} RMS and \SI{44}{cm} in one hour, are in a cluster of nodes at
+the mouth of Ungava Bay from 4 to 7 January. These nodes are in partial
+ice (concentration 0.35--0.43, which scales the source terms), under
+15--\SI{17}{m/s} of wind and 0.2--\SI{0.3}{m/s} of tidal current. Unlike
+the fjord spikes, the differences last several hours and change $T_{m02}$
+by up to \SI{1.3}{s}, so they reach more than the top bands. The same nodes
+stand out on grid v5 $K=4$. They are being diagnosed as the fjords were,
+with WW3 restarts every 10 minutes during an episode.
 
 \begin{table}[H]
 \centering\small
@@ -1944,17 +1964,20 @@ run & ST4 & median & p99 & max & GPU & WW3 & cores \\
 week & simplified & \SI{2.5}{\micro\metre} & \SI{110}{\micro\metre} & \SI{1.9}{cm} & 143 & 715 & 64 \\
 48 h & calibrated & \SI{2.0}{\micro\metre} & \SI{77}{\micro\metre} & \SI{2.1}{cm} & 127 & 1491 & 32 \\
 week & calibrated & \SI{2.2}{\micro\metre} & \SI{100}{\micro\metre} & \SI{3.0}{cm} & 124 & 2601 & 112 \\
+week, v4 & calibrated & \SI{3.6}{\micro\metre} & \SI{140}{\micro\metre} & \SI{5.4}{cm} & 220 & 4318 & 112 \\
 \bottomrule
 \end{tabular}
 \caption{Milestones M2a and M2b: the GPU model with source terms on one
-A100 against WW3, grid v5 $K=4$. \emph{Median}, \emph{p99} and
-\emph{max}: RMS difference of the hourly $H_s$ over the run at the median
-node, at the 99th percentile and at the worst of 371\,278 nodes. The 48 h
-runs start from the restart of 8 January 00\,h, the weeks from a WW3
-restart of 1 January 00:10. WW3 on the hpc cluster, Slurm jobs 4122569,
-4122614 and 4139131, except the calibrated week, which is the explicit run
-of grid v5 $K=4$ on Datarmor (Table~\ref{tab:coastcfl}); GPU jobs 4139023,
-4139117, 4162034 and 4162038.}
+A100 against WW3, grid v5 $K=4$ except the last row, grid v4.
+\emph{Median}, \emph{p99} and \emph{max}: RMS difference of the hourly
+$H_s$ over the run at the median node, at the 99th percentile and at the
+worst of 371\,278 nodes (679\,867 on grid v4). The 48 h runs start from the
+restart of 8 January 00\,h, the weeks from a WW3 restart of 1 January
+00:10; the week of grid v4 stops on 7 January 21\,h. WW3 on the hpc
+cluster, Slurm jobs 4122569, 4122614 and 4139131, except the calibrated
+weeks, which are the explicit runs made on Datarmor
+(Table~\ref{tab:coastcfl}); GPU jobs 4139023, 4139117, 4162034, 4162038
+and 4162075.}
 \label{tab:m2}
 \end{table}
 
