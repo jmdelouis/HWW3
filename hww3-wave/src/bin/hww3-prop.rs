@@ -463,6 +463,10 @@ fn check_steps(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     cfg.flcth = !a.flags.contains("--no-cth");
     cfg.flck = !a.flags.contains("--no-ck");
     cfg.bccfl = !a.flags.contains("--no-bccfl");
+    if let Some(s) = a.opts.get("--itstep0") {
+        // ITSTEP of the restart (its parity sets the order of W3KTP3)
+        cfg.itstep0 = s.parse()?;
+    }
     perturbations(a, &mut cfg)?;
     if let Some(u) = a.opts.get("--units") {
         cfg.units = u.parse()?;

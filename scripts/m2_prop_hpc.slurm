@@ -39,7 +39,7 @@ export RAYON_NUM_THREADS=$SLURM_CPUS_PER_TASK
 F="--current $D/current.ww3 --level $D/level.ww3 --ice $D/ice.ww3 --nest $D/nest.ww3 --wind $D/wind.ww3 --sources $P --units ${UNITS:-128}"
 echo "restart $R, $F"
 if [ -n "$STEPS_REF" ]; then
-  time $B check-steps $G --restart $R $F --ref ${STEPS_REF//:/,} ${NODES:+--nodes ${NODES//+/,}}
+  time $B check-steps $G --restart $R $F --ref ${STEPS_REF//:/,} ${NODES:+--nodes ${NODES//+/,}} $EXTRA
   exit 0
 fi
 time $B run $G --restart $R $F --hours ${HOURS:-48} --out $S/m2/out_$J $EXTRA
