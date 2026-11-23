@@ -683,7 +683,7 @@ water. The $H_s$ RMSE against the buoys falls slightly with the wind,
 `BETAMAX`, `NLPROP` and `BJGAM` and rises with `SDSC2`, while the
 $T_{m02}$ RMSE rises with all but `NLPROP`. The 15 runs take 5 GPU-hours.
 
-## Milestone M3: tangent kernels (in progress)
+## Milestone M3: tangent kernels (target met where the model is smooth)
 
 The tangent kernels differentiate the GPU model in forward mode for a
 relative change of the wind speed or of a source parameter (`BETAMAX`,
@@ -781,3 +781,34 @@ The finite differences of aggregates do not converge either (0.13 % and
 derivative of the model where it is smooth, and the finite differences
 with a step of 1 % include the mean effect of the jumps, which a
 calibration sees.
+
+### 48 h against the finite differences of M2b
+
+The tangent runs of the five directions over the 48 h of the M2b finite
+differences (Slurm jobs 4163952 to 4163956, comparison job 4163958) take
+645 s per model day on one A100 in double precision, 1.5 times the 433 s
+of a value run: one tangent run costs less than the two runs of a central
+difference. Against the differences with steps of 1 % (and 0.1 % for the
+wind and `BETAMAX`):
+
+| direction | energy, 9 January 00 h | energy, 10 January 00 h | mean $H_s$, 10 January 00 h |
+|---|---|---|---|
+| wind | 2.0 % (2.0 %) | 1.0 % (1.05 %) | 0.92 % |
+| `BETAMAX` | 0.92 % (1.2 %) | 0.20 % (0.09 %) | 0.30 % |
+| `SDSC2` | 0.19 % | 0.11 % | 0.15 % |
+| `NLPROP` | 3.2 % | 1.1 % | 1.1 % |
+| `BJGAM` | 4.3 % | 3.4 % | 3.6 % |
+
+(Relative differences between the tangent and the finite difference of
+step 1 %, and of step 0.1 % in brackets.) The tangent gives the
+derivatives of the aggregates to 0.1–4 %: closest for the parameters that
+scale a term smoothly (`SDSC2`, `BETAMAX`), farthest for depth-induced
+breaking, whose fraction of breaking waves `QB` has thresholds at
+$H_{rms}/H_m$ = 0.2, 0.5 and 1 and acts at a few shallow nodes. The wind
+tangent is 1–2 % above the differences over the whole run, as over 3 h,
+and the differences of steps 1 % and 0.1 % agree with each other to
+$10^{-3}$, so the gap is the mean effect of the discrete choices of the
+model, whose share of a difference does not shrink with the step, and not
+an error of the tangent. Node by node over 48 h, the two finite differences
+agree to $10^{-3}$ at only 19–31 % of the nodes, where the tangent differs
+by 0.2 % at the median node after 48 h.

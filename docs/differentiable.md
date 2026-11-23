@@ -572,7 +572,7 @@ coastal-scale corrections can therefore be computed on uniform maps.
 | M1 | propagation-only model: geographic and spectral propagation, depth, currents, sea level, boundary spectra, ice mask, restart reader | the propagation-only targets of section 6. **Targets met** on 22 November 2026: once `ITER` counts the coast nodes as WW3 does, $H_s$ is within 1.5 µm (median node) and 24 µm (99th percentile) RMS of WW3 over 48 h, energy within 2.4e-7, 65 s on one A100 against 813 s on 32 cores (section 9.1, [GPU model results](wave_results.md)) | 10–18 |
 | M2a | forward model with the simplified ST4 (`SINTABLE = 0`, `SDSCUM = 0`), DIA, LN1, DB1, BT4, integration and limiter, outputs, observation operators | the targets with sources of section 6 against the WW3 run with the same settings. **First gradients:** finite differences in double precision for `BETAMAX` and a few parameters, at GPU speed, to build and test the calibration chain | 15–32 |
 | M2b | full ST4: the stress tables `TAUT`, `TAUHFT`, `TAUHFT2` and the directional cumulative term (`SDSCUM = −0.40`) | the targets with sources of section 6 against the existing explicit runs, and at least 10 times the Fortran explicit speed (under 430 s per model day on grid v4). **First scientific gradients** with respect to the parameters of the calibrated configuration. **Done** on 23 November 2026: targets met on grids v5 $K=4$ and v4 at 220 s per model day on grid v4, and finite-difference gradients of the energy, mean $H_s$ and scores for `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM` and the wind (section 9.3) | 4–7 |
-| M3 | tangent kernels for parameters (sources and stress tables) | agreement with the double-precision finite differences to $10^{-4}$ where the model is smooth | 4–7 (optional) |
+| M3 | tangent kernels for parameters (sources and stress tables) | agreement with the double-precision finite differences to $10^{-4}$ where the model is smooth. **Met** on 23 November 2026 for one source step and over 3 h; over 48 h the model is smooth almost nowhere and the tangent gives the derivatives of the aggregates to 0.1–4 % (section 9.4) | 4–7 (optional) |
 | M4 | reverse mode for the fields: adjoint kernels, revolve driver, adjoint of the observation operators, PyTorch bridge | the Taylor test and the comparison with WW3 of section 6; one wind gradient over 7 days on grid v5 $K=4$ in under 3 h | 18–32 (hand-written adjoints) or 12–21 (Burn source terms) |
 | M5 | learning: HEALPix wind corrections, then hybrid source terms | an independent month improves | open |
 
@@ -797,8 +797,16 @@ Details and the list of what remains are in
   differences by 1.5 % for the wind and 0.2 % for the initial spectra, and
   the differences themselves do not converge with the step. The tangent is
   the derivative along the path of the values; finite differences with a
-  1 % step include the mean effect of the jumps. 48 h tangent runs are
-  compared with the M2b finite differences (jobs 4163952 to 4163958).
+  1 % step include the mean effect of the jumps.
+- **Over 48 h.** Against the M2b finite differences (jobs 4163952 to
+  4163958), the tangent gives the derivative of the total energy at
+  10 January to 0.1 % for `SDSC2`, 0.1–0.2 % for `BETAMAX`, 1.0 % for the
+  wind and `NLPROP` and 3.4 % for `BJGAM`, and that of the mean $H_s$ to
+  0.15–3.6 %, at 645 s per model day in double precision (1.5 times a
+  value run, less than the two runs of a central difference). For a
+  calibration this is a gradient within a few per cent of the 1 %
+  finite differences, which include the mean effect of the jumps; the
+  reverse mode of M4 will see the same jumps.
 
 ## 10. Other routes, briefly
 
