@@ -5,9 +5,12 @@
 //! hww3-prop restart-hs <grid dir> --restart FILE --out FILE.f32
 //!     H_s and T_m02 of the restart spectra (CPU), to check the reader
 //!     against the WW3 output at the restart time.
-//! hww3-prop run <grid dir> --restart FILE [--current FILE] [--level FILE]
+//! hww3-prop restart-copy <restart> --out FILE
+//!     Read a FULL restart and write it again (CPU), to check the writer:
+//!     the copy is identical byte for byte.
+//! hww3-prop run <grid dir> --restart FILE|calm [--current FILE] [--level FILE]
 //!     [--ice FILE] [--nest FILE] [--wind FILE --sources PARAMS] [--start YYYYMMDDHHMMSS]
-//!     --hours H --out DIR [--f64] [--block B] [--units U]
+//!     --hours H|--stop YYYYMMDDHHMMSS --out DIR [--restart-out FILE] [--f64] [--block B] [--units U]
 //!     [--itstep0 N] [--no-cx] [--no-cth] [--no-ck] [--host-level] [--no-bccfl] [--profile]
 //!     Hourly H_s and T_m02 (little-endian f32, one value per node,
 //!     UNDEF = -999.9 where MAPSTA <= 0) in DIR/hs_YYYYMMDDHH.f32 and
@@ -28,7 +31,11 @@
 //!     DIR/summary.json, and of T_m02 in DIR/dt02_YYYYMMDDHH.f32. --out64
 //!     also writes H_s, T_m02 and their tangents in double precision (hs_,
 //!     t02_, dhs_, dt02_YYYYMMDDHH.f64). --betamax B sets BETAMAX with the
-//!     tail-stress tables computed for it in double precision.
+//!     tail-stress tables computed for it in double precision. --restart
+//!     calm starts from calm conditions (zero spectra, WW3's start without
+//!     a restart file) at --start; --restart-out writes the state at the
+//!     end as a FULL WW3 restart, from which a run continues with
+//!     --itstep0 set to the ITSTEP it prints.
 //! hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
 //!     One step's forcing, then one W3KTP3 call on the GPU compared with
 //!     the CPU transcription of W3KTP3 (hww3_wave::cpu) on a sample of nodes.
@@ -73,6 +80,7 @@ fn parse() -> Result<Args> {
     let valued = [
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
         "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent", "--init-factor", "--betamax",
+        "--stop", "--restart-out",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -216,7 +224,11 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     m.sync();
     let setup = t0.elapsed().as_secs_f64();
     let start = m.time;
-    let stop = Time::from_secs(start.secs() + 3600 * hours);
+    let stop = match a.opts.get("--stop") {
+        Some(s) => Time::parse(s)?,
+        None => Time::from_secs(start.secs() + 3600 * hours),
+    };
+    anyhow::ensure!(stop > start, "stop {stop} is not after the start {start}");
     println!("start {start}, stop {stop}, {} nodes, {} boundary points, setup {setup:.1} s", m.np, m.nbnd);
     let tag = |t: Time| format!("{:08}{:02}", t.0, t.1 / 10000);
     let mut energy = vec![];
@@ -283,7 +295,12 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         }
         energy.push(ej);
     }
-    let per_day = wall / (hours as f64 / 24.0);
+    let per_day = wall / ((stop.secs() - start.secs()) as f64 / 86400.0);
+    if let Some(p) = a.opts.get("--restart-out") {
+        let t = Instant::now();
+        m.restart_state().write(Path::new(p))?;
+        println!("restart {p} at {}, ITSTEP {} (continue with --itstep0 {}), {:.1} s", m.time, m.itstep, m.itstep, t.elapsed().as_secs_f64());
+    }
     let t = &m.timers;
     println!(
         "{steps} steps in {wall:.1} s: {per_day:.1} s per model day; forcing {:.1} s (level update on the host {:.1} s, {} threads), iter {:.1} s, ktp3 {:.1} s (theta {:.1} s), geographic {:.1} s ({} sweeps), sources {:.1} s, outputs {:.1} s",
@@ -304,6 +321,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         "start": start.to_string(),
         "stop": stop.to_string(),
         "steps": steps,
+        "itstep": m.itstep,
         "setup_seconds": setup,
         "wall_seconds": wall,
         "seconds_per_model_day": per_day,
@@ -733,6 +751,27 @@ fn check_steps(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
 
 fn main() -> Result<()> {
     let a = parse()?;
+    if a.cmd == "restart-copy" {
+        // the second argument is the restart, not a grid
+        let t = Instant::now();
+        let r = Restart::read(&a.grid)?;
+        let out = a.opts.get("--out").ok_or_else(|| anyhow::anyhow!("restart-copy needs --out"))?;
+        r.write(Path::new(out))?;
+        println!(
+            "restart {} ({}, {}, NSEA {}, NSPEC {}, time {}, TLEV {}, TICE {}, bytes after FPIS {}) written to {out} in {:.1} s",
+            a.grid.display(),
+            r.version,
+            r.gname.trim_end(),
+            r.nsea,
+            r.nspec,
+            r.time,
+            r.tlev,
+            r.tice,
+            r.tail.len(),
+            t.elapsed().as_secs_f64()
+        );
+        return Ok(());
+    }
     let grid = Grid::read(&a.grid)?;
     match a.cmd.as_str() {
         "restart-hs" => restart_hs(&grid, &a),

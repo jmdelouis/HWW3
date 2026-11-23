@@ -326,6 +326,9 @@ pub struct Model<F: Real> {
     pub ice_c: Vec<f32>,
     src: Option<SourceKernel<F>>,
     nest: Option<NestFile>,
+    /// `VERINI`, `GNAME` and `TRHO`, `TIC1`, `TIC5` of the restart the run
+    /// started from, for [`Model::restart_state`].
+    rst_meta: (String, String, [Time; 3]),
     tbpi0: Option<Time>,
     tbpin: Option<Time>,
     abpin: Vec<Vec<f32>>,
@@ -444,7 +447,8 @@ impl<F: Real> Model<F> {
         anyhow::ensure!(nk >= 3, "the W3KTP3 kernels need NK >= 3");
         let sp = Spec::new(nk, nth, s.freq1 as f32, s.xfr as f32, s.thoff as f32);
         let dmin = s.dmin as f32;
-        let mut rs = Restart::read(&inp.restart)?;
+        // `calm`: start from calm conditions, as WW3 does without a restart file
+        let mut rs = if inp.restart.as_os_str() == "calm" { Restart::calm(np, nspec) } else { Restart::read(&inp.restart)? };
         if rs.nsea != np || rs.nspec != nspec {
             bail!("restart NSEA {} NSPEC {} against grid {} nodes, {} components", rs.nsea, rs.nspec, np, nspec);
         }
@@ -651,6 +655,7 @@ impl<F: Real> Model<F> {
             ice_c: rs.ice.clone(),
             src,
             nest,
+            rst_meta: (rs.version.clone(), rs.gname.clone(), rs.tother),
             tbpi0: None,
             tbpin: None,
             abpin: vec![],
@@ -793,6 +798,49 @@ impl<F: Real> Model<F> {
     pub fn download(&self, h: &Handle) -> Vec<f32> {
         let b = self.client.read_one(h.clone()).expect("device read");
         F::from_bytes(&b).iter().map(|&x| <F as crate::backend::Scalar>::as_f64(x) as f32).collect()
+    }
+
+    /// The state at [`Model::time`] as a `FULL` WW3 restart: the spectra (in
+    /// single precision), the water levels, ice and masks with the times of
+    /// their fields, u* of the last source call, and the header and `TRHO`,
+    /// `TIC1`, `TIC5` of the restart the run started from; no coupling
+    /// fields, and `USTDIR`, `FPIS` zero and `ASF` one, which the model does
+    /// not compute. A run continues from it with `ITSTEP` =
+    /// [`Model::itstep`] (`Config::itstep0`).
+    pub fn restart_state(&self) -> Restart {
+        let (np, nk, nth) = (self.np, self.nk, self.nth);
+        let nspec = nk * nth;
+        let dv = self.download(&self.d_va);
+        let mut va = vec![0f32; np * nspec];
+        va.par_chunks_mut(nspec).enumerate().for_each(|(i, s)| {
+            for ik in 0..nk {
+                let o = (ik * np + i) * nth;
+                s[ik * nth..(ik + 1) * nth].copy_from_slice(&dv[o..o + nth]);
+            }
+        });
+        let (version, gname, tother) = self.rst_meta.clone();
+        Restart {
+            time: self.time,
+            nsea: np,
+            nspec,
+            va,
+            tlev: self.tlev,
+            tice: self.tice,
+            wlv: self.wlv.clone(),
+            ice: self.ice_c.clone(),
+            mapsta: self.mapsta.clone(),
+            mapst2: self.mapst2.clone(),
+            cold: false,
+            version,
+            gname,
+            flogrr: vec![],
+            tother,
+            ust: self.download(&self.d_ust),
+            ustdir: vec![],
+            asf: vec![],
+            fpis: vec![],
+            tail: vec![],
+        }
     }
 
     /// Copy a `u32` buffer to the host.

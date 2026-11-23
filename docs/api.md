@@ -33,7 +33,7 @@ documented and the CI builds the documentation with warnings as errors.
 | `grid` | no | HWW3 grid reader (`Grid`, `Spectrum`), lon/lat box cut |
 | `geom` | no | `Geometry`: normals, `PDLIB_SI`, boundary flags, velocities, `ITER` |
 | `spec` | no | `Spec` (spectral grid of `W3GRID`), `wavnu3`, `node_wavenumbers` |
-| `ww3io` | no | `Restart`, `FieldFile`, `NestFile`, `SeqFile`, `Time` |
+| `ww3io` | no | `Restart` (`read`, `write`, `calm`), `FieldFile`, `NestFile`, `SeqFile`, `Time` |
 | `reference` | no | `step`: `PDLIB_W3XYPFSN2` on the CPU in double precision |
 | `cpu` | no | `ktp3` (`W3KTP3`) and `geo_freq` (`PDLIB_W3XYPUG`) on the CPU |
 | `harness` | no | readers of the WW3 source-term harness files and of their parameter files (`Harness`, `Params`) |

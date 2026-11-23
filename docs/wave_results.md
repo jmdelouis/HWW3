@@ -965,3 +965,32 @@ double precision here). Two WW3 details are kept: `TABU_ERF` computes
 `(1 + erf x) / 2` (its `2**(1/2)` is 1 in integer arithmetic), and the
 saturation tables have the `2 (NTH/2 - 1) + 1` rows that `W3DIMS`
 allocates, of which `INSIN4` fills 17. The file takes 1.8 s to build.
+
+### Initial state
+
+- **Start from calm conditions.** Without a restart file, WW3 with the
+  `LN1` switch starts from calm conditions (`W3IORS`: `TYPE = 'CALM'`;
+  `W3INIT`: zero spectra; levels and ice zero until the first fields are
+  read). `hww3-prop run --restart calm --start T` does the same
+  (`Restart::calm`). Its check against the WW3 restart written after the
+  first step of the cold start of 1 January (`runs/m2_week_start_full`,
+  00:10) is queued (`scripts/pre_restart_hpc.slurm`, Slurm job 4191399,
+  after the calibration trial).
+- **Restarts.** `Restart::write` writes a `FULL` restart in the layout of
+  `W3IORS`: header, time, one record per spectrum, the times of the
+  fields (`TLEV`, `TICE`, `TRHO`, `TIC1`, `TIC5`), then `WLV`, `ICE`,
+  `MAPSTA + 8 MAPST2`, `UST`, `USTDIR`, `ASF`, `FPIS`, and whatever follows
+  (the coupling fields, none here). The reader now keeps all of these.
+  `hww3-prop restart-copy` reads and writes back the WW3 restarts of 1
+  January 00:10 and 8 January 00:00 (1.97 GB each, `NSEA` 424,123, `NSPEC`
+  1152) identical byte for byte, in 1.4 s. `hww3-prop run --restart-out
+  FILE` writes the state at the end of a run: the spectra in single
+  precision, levels, ice and masks with the times of their fields, and
+  u* of the last source call. `USTDIR` and `FPIS` are written as zero and
+  `ASF` as one, since the GPU model recomputes u* at each source call and
+  does not keep the others. A run continues from such a restart with
+  `--itstep0` set to the `ITSTEP` the first run prints (its parity sets the
+  order of `W3KTP3`). The same job checks that a run from calm to 01 h
+  gives the same $H_s$ and $T_{m02}$ in one piece and in two pieces joined
+  by a restart at 00:10. Reading such a restart with WW3 has not been
+  tried.

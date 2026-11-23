@@ -68,7 +68,7 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | `grid` | no | read an HWW3 grid (`raw/*`, `ww3_grid.nml`); cut a lon/lat box |
 | `geom` | no | what WW3 builds for the PDLIB scheme: normals, `PDLIB_SI`, `IOBP`, `IOBPA`, `IOBDP`, `IOBPD`, velocities, `ITER` |
 | `spec` | no | spectral grid of `W3GRID`; `WAVNU3` |
-| `ww3io` | no | big-endian WW3 files: restart, forcing fields, boundary spectra |
+| `ww3io` | no | big-endian WW3 files: restart (read and write), forcing fields, boundary spectra |
 | `reference` | no | `PDLIB_W3XYPFSN2` on the CPU in double precision, as WW3 writes it |
 | `cpu` | no | CPU transcriptions of `W3KTP3` and `PDLIB_W3XYPUG` |
 | `harness` | no | reader of the WW3 source-term harness: inputs, outputs and parameters of the source terms |
@@ -148,12 +148,14 @@ The job scripts are `scripts/wave_m0_hpc.slurm` (CubeCL, hpc) and
 ### `hww3-prop` (milestones M1 and M2a)
 
 ```text
-hww3-prop run <grid dir> --restart FILE [--current FILE] [--level FILE] [--ice FILE]
+hww3-prop run <grid dir> --restart FILE|calm [--current FILE] [--level FILE] [--ice FILE]
           [--nest FILE] [--wind FILE --sources PARAMS] [--start YYYYMMDDHHMMSS]
-          --hours H --out DIR [--f64] [--block B] [--units U] [--itstep0 N]
+          --hours H|--stop YYYYMMDDHHMMSS --out DIR [--restart-out FILE]
+          [--f64] [--block B] [--units U] [--itstep0 N]
           [--no-cx] [--no-cth] [--no-ck]
           [--host-level] [--no-bccfl] [--profile]
 hww3-prop restart-hs <grid dir> --restart FILE --out FILE.f32
+hww3-prop restart-copy RESTART --out FILE
 hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
 hww3-prop check-geo  <grid dir> --restart FILE [forcing as for run]
 hww3-prop check-steps <grid dir> --restart FILE [forcing as for run]
@@ -163,7 +165,9 @@ hww3-prop check-steps <grid dir> --restart FILE [forcing as for run]
 
 | Option | Meaning |
 |---|---|
-| `--restart` | WW3 restart: `FULL` (from `ww3_shel`) or `COLD` (from `ww3_strt`, then `--start` is needed) |
+| `--restart` | WW3 restart: `FULL` (from `ww3_shel` or `--restart-out`) or `COLD` (from `ww3_strt`, then `--start` is needed); `calm`: zero spectra at `--start`, as WW3 starts without a restart file |
+| `--stop` | stop time instead of `--hours` |
+| `--restart-out` | write the state at the end as a `FULL` WW3 restart; continue with `--itstep0` set to the `ITSTEP` printed |
 | `--current`, `--level`, `--ice` | forcing files of `ww3_prnc` (`current.ww3`, `level.ww3`, `ice.ww3`) |
 | `--nest` | open-boundary spectra of `ww3_bounc` (`nest.ww3`) |
 | `--wind`, `--sources` | wind of `ww3_prnc` (`wind.ww3`) and the parameter file of the source-term harness (`*.params`, from the `mod_def.ww3` of the run): the source terms of the simplified ST4 run after the propagation (milestone M2a) |
@@ -181,7 +185,9 @@ hww3-prop check-steps <grid dir> --restart FILE [forcing as for run]
 `run` writes hourly $H_s$ and $T_{m02}$ to `DIR/hs_YYYYMMDDHH.f32` and
 `DIR/t02_YYYYMMDDHH.f32` (little-endian `f32`, one value per node, −999.9
 where `MAPSTA <= 0`) and a `DIR/summary.json`. `restart-hs` gives $H_s$
-and $T_{m02}$ of the restart spectra, to check the reader. `check-ktp3`
+and $T_{m02}$ of the restart spectra, to check the reader, and
+`restart-copy` reads a restart and writes it back, to check the writer.
+`check-ktp3`
 and `check-geo` compare one `W3KTP3` call and one geographic step on the
 GPU with the CPU transcriptions. `check-steps` steps from the restart and
 compares the full spectra with WW3 restarts written at the end of some

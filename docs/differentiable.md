@@ -850,9 +850,15 @@ Details and the list of what remains are in
   (`hww3_wave::ww3grid`, `hww3-src build-params`): from the namelists and
   the grid it builds the 137 records of the harness parameter file, 121
   identical and the others at WW3's single-precision round-off (1.5e-6 at
-  most), in 1.8 s ([GPU model results](wave_results.md)). Still to port:
-  the interpolation of the forcing (`ww3_prnc`), the boundary spectra
-  (`ww3_bounc`) and the initial state (cold start, restarts).
+  most), in 1.8 s ([GPU model results](wave_results.md)).
+- **Initial state.** `hww3-prop` starts from calm conditions as WW3 does
+  without a restart file (`--restart calm`) and writes its state as a
+  `FULL` WW3 restart (`--restart-out`); the writer gives back WW3's own
+  restarts byte for byte. The GPU checks (calm start against WW3, a run
+  continued from a GPU restart against the same run in one piece) wait for
+  a GPU (job 4191399).
+- Still to port: the interpolation of the forcing (`ww3_prnc`) and the
+  boundary spectra (`ww3_bounc`).
 
 ## 10. Other routes, briefly
 

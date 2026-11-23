@@ -4,11 +4,12 @@
 //!
 //! The HWW3 build of WW3 writes big-endian files. Forcing and boundary
 //! files are Fortran sequential unformatted files (4-byte record markers);
-//! the restart is a stream file of fixed-length records of `4 NSPEC` bytes.
+//! the restart is a stream file of fixed-length records of `4 NSPEC` bytes,
+//! which [`Restart::write`] also writes.
 
 use anyhow::{anyhow, bail, Context, Result};
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// A WW3 time `(yyyymmdd, hhmmss)`.
@@ -130,7 +131,17 @@ impl SeqFile {
 // Restart
 // ---------------------------------------------------------------------------
 
-/// The fields of a `FULL` WW3 restart that the propagation needs.
+/// `VERINI` of `W3IORS`: the version a restart must carry to be read by
+/// the WW3 of HWW3.
+pub const RESTART_VERSION: &str = "2024-04-26";
+
+/// Record length of a restart (`LRECL` of `W3IORS`): `NSPEC` reals, or
+/// the header if longer.
+fn restart_lrecl(nspec: usize) -> usize {
+    4 * nspec.max(6 + 25 / 4 + 9 / 4 + 29 / 4 + 3 / 4)
+}
+
+/// The fields of a WW3 restart (`FULL`, or the spectra of a `COLD` one).
 pub struct Restart {
     /// Model time of the restart.
     pub time: Time,
@@ -155,14 +166,66 @@ pub struct Restart {
     /// `COLD` restart (`ww3_strt`): spectra only; `time` is zero, levels
     /// and ice are zero and `mapsta` is 1 (the caller sets the grid's).
     pub cold: bool,
+    /// Version of the header (`VERINI`).
+    pub version: String,
+    /// Grid name of the header (`GNAME`, 30 characters).
+    pub gname: String,
+    /// Rest of the header record after `NSPEC`: the `FLOGRR` flags of the
+    /// coupling fields, then zeros (empty: all false).
+    pub flogrr: Vec<u8>,
+    /// `TRHO`, `TIC1`, `TIC5` of a `FULL` restart (`(-1, 0)`: none read).
+    pub tother: [Time; 3],
+    /// `UST`, `USTDIR`, `ASF`, `FPIS` per sea point of a `FULL` restart
+    /// (empty for a `COLD` one). The GPU model recomputes u* at each
+    /// source call and does not read them.
+    pub ust: Vec<f32>,
+    /// See [`Restart::ust`].
+    pub ustdir: Vec<f32>,
+    /// See [`Restart::ust`].
+    pub asf: Vec<f32>,
+    /// See [`Restart::ust`].
+    pub fpis: Vec<f32>,
+    /// The bytes after the values of `FPIS`: the zero padding of its last
+    /// record, or the coupling fields when `FLOGRR` has any.
+    pub tail: Vec<u8>,
 }
 
 impl Restart {
+    /// The start from calm conditions of `W3IORS` when there is no restart
+    /// file (`TYPE = 'CALM'` with the `LN1` switch of HWW3): zero spectra,
+    /// as a `COLD` restart (the caller sets the time and the grid's
+    /// `MAPSTA`; levels and ice are zero until the first fields).
+    pub fn calm(nsea: usize, nspec: usize) -> Restart {
+        Restart {
+            time: Time(0, 0),
+            nsea,
+            nspec,
+            va: vec![0f32; nsea * nspec],
+            tlev: Time(0, 0),
+            tice: Time(0, 0),
+            wlv: vec![0f32; nsea],
+            ice: vec![0f32; nsea],
+            mapsta: vec![1i32; nsea],
+            mapst2: vec![0i32; nsea],
+            cold: true,
+            version: RESTART_VERSION.into(),
+            gname: String::new(),
+            flogrr: vec![],
+            tother: [Time(-1, 0); 3],
+            ust: vec![],
+            ustdir: vec![],
+            asf: vec![],
+            fpis: vec![],
+            tail: vec![],
+        }
+    }
+
     /// Read a restart of an unstructured grid (`NX = NSEA`, `NY = 1`).
     pub fn read(p: &Path) -> Result<Restart> {
         let mut f = File::open(p).with_context(|| format!("open {}", p.display()))?;
         let mut head = vec![0u8; 26 + 10 + 30 + 4 + 8];
         f.read_exact(&mut head)?;
+        let gname = String::from_utf8_lossy(&head[36..66]).to_string();
         let id = String::from_utf8_lossy(&head[..26]).to_string();
         if id != "WAVEWATCH III RESTART FILE" {
             bail!("{}: not a WW3 restart (id {id:?})", p.display());
@@ -175,7 +238,9 @@ impl Restart {
         let cold = typ == "COLD";
         let nsea = be_i32(&head[70..74]) as usize;
         let nspec = be_i32(&head[74..78]) as usize;
-        let lrecl = 4 * nspec.max(6 + 25 / 4 + 9 / 4 + 29 / 4 + 3 / 4);
+        let lrecl = restart_lrecl(nspec);
+        let mut flogrr = vec![0u8; lrecl - 78];
+        f.read_exact(&mut flogrr)?;
         let len = f.metadata()?.len() as usize;
         let nsize = lrecl / 4;
         let npart = (nsea + nsize - 1) / nsize;
@@ -202,13 +267,35 @@ impl Restart {
         if cold {
             let (wlv, ice) = (vec![0f32; nsea], vec![0f32; nsea]);
             let (mapsta, mapst2) = (vec![1i32; nsea], vec![0i32; nsea]);
-            return Ok(Restart { time, nsea, nspec, va, tlev: time, tice: time, wlv, ice, mapsta, mapst2, cold });
+            return Ok(Restart {
+                time,
+                nsea,
+                nspec,
+                va,
+                tlev: time,
+                tice: time,
+                wlv,
+                ice,
+                mapsta,
+                mapst2,
+                cold,
+                version: ver,
+                gname,
+                flogrr,
+                tother: [Time(-1, 0); 3],
+                ust: vec![],
+                ustdir: vec![],
+                asf: vec![],
+                fpis: vec![],
+                tail: vec![],
+            });
         }
         let mut tb = vec![0u8; 40];
         f.seek(SeekFrom::Start(rec(nsea + 3)))?;
         f.read_exact(&mut tb)?;
         let tlev = Time(be_i32(&tb[0..4]), be_i32(&tb[4..8]));
         let tice = Time(be_i32(&tb[8..12]), be_i32(&tb[12..16]));
+        let tother = [16, 24, 32].map(|k| Time(be_i32(&tb[k..k + 4]), be_i32(&tb[k + 4..k + 8])));
         let mut read_parts = |first: usize, n: usize| -> Result<Vec<u8>> {
             let mut out = Vec::with_capacity(4 * n);
             for ip in 0..(n + nsize - 1) / nsize {
@@ -226,7 +313,121 @@ impl Restart {
         let maptmp = be_i32s(&read_parts(r0 + 2 * npart, nsea)?);
         let mapsta: Vec<i32> = maptmp.iter().map(|&m| (m + 2).rem_euclid(8) - 2).collect();
         let mapst2: Vec<i32> = maptmp.iter().zip(&mapsta).map(|(&m, &s)| (m - s) / 8).collect();
-        Ok(Restart { time, nsea, nspec, va, tlev, tice, wlv, ice, mapsta, mapst2, cold })
+        // UST, USTDIR, ASF, FPIS, then what follows the values of FPIS
+        let fpis_end = lrecl * (r0 + 7 * npart - 2) + 4 * (nsea - (npart - 1) * nsize);
+        let (mut ust, mut ustdir, mut asf, mut fpis, mut tail) = (vec![], vec![], vec![], vec![], vec![]);
+        if len >= fpis_end {
+            ust = be_f32s(&read_parts(r0 + 3 * npart, nsea)?);
+            ustdir = be_f32s(&read_parts(r0 + 4 * npart, nsea)?);
+            asf = be_f32s(&read_parts(r0 + 5 * npart, nsea)?);
+            fpis = be_f32s(&read_parts(r0 + 6 * npart, nsea)?);
+            f.seek(SeekFrom::Start(fpis_end as u64))?;
+            f.read_to_end(&mut tail)?;
+        }
+        Ok(Restart {
+            time,
+            nsea,
+            nspec,
+            va,
+            tlev,
+            tice,
+            wlv,
+            ice,
+            mapsta,
+            mapst2,
+            cold,
+            version: ver,
+            gname,
+            flogrr,
+            tother,
+            ust,
+            ustdir,
+            asf,
+            fpis,
+            tail,
+        })
+    }
+
+    /// Write a `FULL` restart in the layout of `W3IORS` (unstructured grid,
+    /// one process): header, time, one record per spectrum, the times of
+    /// the fields, then `WLV`, `ICE`, `MAPSTA + 8 MAPST2`, `UST`, `USTDIR`,
+    /// `ASF` and `FPIS` in records of `LRECL / 4` values, and
+    /// [`Restart::tail`]. Empty `UST`, `USTDIR`, `FPIS` are written as
+    /// zeros and an empty `ASF` as ones. A `FULL` restart read by
+    /// [`Restart::read`] is written back byte for byte.
+    pub fn write(&self, p: &Path) -> Result<()> {
+        let (nsea, nspec) = (self.nsea, self.nspec);
+        anyhow::ensure!(self.va.len() == nsea * nspec, "restart: {} spectral values for NSEA {nsea} NSPEC {nspec}", self.va.len());
+        let lrecl = restart_lrecl(nspec);
+        let nsize = lrecl / 4;
+        let mut w = BufWriter::with_capacity(1 << 22, File::create(p).with_context(|| format!("create {}", p.display()))?);
+        let mut rec = vec![0u8; lrecl];
+        let mut put = |w: &mut BufWriter<File>, body: &[u8]| -> Result<()> {
+            rec.iter_mut().for_each(|b| *b = 0);
+            rec[..body.len()].copy_from_slice(body);
+            w.write_all(&rec)?;
+            Ok(())
+        };
+        let fixed = |s: &str, n: usize| -> Vec<u8> {
+            let mut b: Vec<u8> = s.bytes().take(n).collect();
+            b.resize(n, b' ');
+            b
+        };
+        let mut head = b"WAVEWATCH III RESTART FILE".to_vec();
+        head.extend(fixed(&self.version, 10));
+        head.extend(fixed(&self.gname, 30));
+        head.extend(b"FULL");
+        head.extend((nsea as i32).to_be_bytes());
+        head.extend((nspec as i32).to_be_bytes());
+        let room = lrecl - head.len();
+        head.extend(&self.flogrr[..self.flogrr.len().min(room)]);
+        put(&mut w, &head)?;
+        let times = |t: &[Time]| -> Vec<u8> { t.iter().flat_map(|t| [t.0.to_be_bytes(), t.1.to_be_bytes()].concat()).collect() };
+        put(&mut w, &times(&[self.time]))?;
+        let mut b = vec![0u8; 4 * nspec];
+        for s in 0..nsea {
+            for (j, v) in self.va[s * nspec..(s + 1) * nspec].iter().enumerate() {
+                b[4 * j..4 * j + 4].copy_from_slice(&v.to_be_bytes());
+            }
+            put(&mut w, &b)?;
+        }
+        put(&mut w, &times(&[self.tlev, self.tice, self.tother[0], self.tother[1], self.tother[2]]))?;
+        let fill = |v: &[f32], x: f32| -> Vec<u8> {
+            if v.is_empty() {
+                std::iter::repeat(x.to_be_bytes()).take(nsea).flatten().collect()
+            } else {
+                v.iter().flat_map(|x| x.to_be_bytes()).collect()
+            }
+        };
+        let maptmp: Vec<u8> = self.mapsta.iter().zip(&self.mapst2).flat_map(|(&s, &m2)| (s + 8 * m2).to_be_bytes()).collect();
+        let parts = [
+            fill(&self.wlv, 0.0),
+            fill(&self.ice, 0.0),
+            maptmp,
+            fill(&self.ust, 0.0),
+            fill(&self.ustdir, 0.0),
+            fill(&self.asf, 1.0),
+            fill(&self.fpis, 0.0),
+        ];
+        let mut last = 0;
+        for (k, part) in parts.iter().enumerate() {
+            anyhow::ensure!(part.len() == 4 * nsea, "restart: field {k} has {} values for NSEA {nsea}", part.len() / 4);
+            for chunk in part.chunks(4 * nsize) {
+                put(&mut w, chunk)?;
+                last = chunk.len();
+            }
+        }
+        w.flush()?;
+        if !self.tail.is_empty() {
+            // the tail starts right after the values of FPIS, over the
+            // padding of their last record
+            let mut f = w.into_inner().map_err(|e| anyhow!("restart: {e}"))?;
+            f.seek(SeekFrom::Current(last as i64 - lrecl as i64))?;
+            f.write_all(&self.tail)?;
+            let end = f.stream_position()?;
+            f.set_len(end)?;
+        }
+        Ok(())
     }
 }
 
@@ -492,6 +693,53 @@ mod tests {
         assert_eq!(&r.mapsta[2..6], &[1, 2, -1, -2]);
         assert_eq!(&r.mapst2[2..6], &[0, 0, 1, 2]);
         assert_eq!(r.va[2 * nspec + 5], 2005.0);
+    }
+
+    #[test]
+    fn restart_written_back() {
+        // the layout of W3IORS: UST, USTDIR, ASF, FPIS after MAPTMP, then
+        // coupling fields from the end of the values of FPIS
+        let (nsea, nspec) = (30, 24);
+        let lrecl = 4 * nspec;
+        let maptmp: Vec<i32> = (0..nsea as i32).map(|s| if s == 4 { 7 } else { 1 }).collect();
+        let mut b = restart_bytes("FULL", nsea, nspec, &maptmp);
+        // TRHO, TIC1, TIC5 after TLEV, TICE
+        let r = lrecl * (nsea + 2);
+        b[r + 16..r + 40].copy_from_slice(&i32s(&[-1, 0, 20260101, 0, -1, 0]));
+        b[66 + 4 + 8..66 + 4 + 8 + 4].copy_from_slice(&i32s(&[1]));
+        for x in [0.3f32, 1.2, 1.0, 0.1] {
+            let v: Vec<f32> = (0..nsea).map(|s| x + s as f32).collect();
+            for chunk in f32s(&v).chunks(lrecl) {
+                let mut c = chunk.to_vec();
+                c.resize(lrecl, 0);
+                b.extend(c);
+            }
+        }
+        let p = tmp("restart_rw");
+        let q = tmp("restart_rw2");
+        for extra in [vec![], vec![9u8; 37]] {
+            let mut bb = b.clone();
+            if !extra.is_empty() {
+                // a coupling field written from the end of the values of FPIS
+                let end = bb.len() - lrecl + 4 * (nsea - lrecl / 4);
+                bb.truncate(end);
+                bb.extend(&extra);
+            }
+            std::fs::write(&p, &bb).unwrap();
+            let r = Restart::read(&p).unwrap();
+            assert_eq!((r.ust[2], r.asf[0], r.fpis[29]), (2.3, 1.0, 29.1));
+            assert_eq!(r.tother, [Time(-1, 0), Time(20260101, 0), Time(-1, 0)]);
+            r.write(&q).unwrap();
+            assert_eq!(std::fs::read(&q).unwrap(), bb);
+        }
+        let mut c = Restart::calm(nsea, nspec);
+        c.time = Time(20260101, 1000);
+        c.write(&q).unwrap();
+        let r = Restart::read(&q).unwrap();
+        assert!(!r.cold && r.va.iter().all(|&v| v == 0.0) && r.asf.iter().all(|&v| v == 1.0));
+        assert_eq!((r.time, r.version.as_str()), (Time(20260101, 1000), RESTART_VERSION));
+        std::fs::remove_file(&p).unwrap();
+        std::fs::remove_file(&q).unwrap();
     }
 
     #[test]
