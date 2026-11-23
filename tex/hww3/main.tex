@@ -75,9 +75,12 @@ the altimeter and buoy scores of WW3 to \SI{1}{\micro\metre}. With the
 calibrated ST4 it reproduces the weeks of the explicit runs of grids v5
 $K=4$ and v4 to 2 and \SI{4}{\micro\metre} at the median node, with the
 same scores, in 124 and \SI{220}{s} per model day against 2601 and
-\SI{4318}{s} for WW3 on 112 cores. The hand-written tangent of its source
-terms agrees with double-precision finite differences to better than
-$10^{-4}$.
+\SI{4318}{s} for WW3 on 112 cores. Finite differences of 48-hour runs in
+double precision give the first gradients of its scores with respect to the
+wind and four ST4 parameters. Its hand-written tangent agrees with
+double-precision finite differences to $10^{-4}$ at nearly every node where
+the model is smooth, but within hours a change of $10^{-4}$ in the wind
+flips discrete choices of the model at most nodes.
 \end{abstract}
 
 \section{Motivation}
@@ -1889,11 +1892,8 @@ bands are grown or reset. These differences come from the order of the
 operations, the fused multiply-adds and the elementary functions, which
 differ between WW3 and the GPU but are shared by the two GPU precisions.
 \end{itemize}
-The first finite-difference gradients with respect to the parameters, from
-15 runs of 48 hours in double precision with the full ST4, are running
-(jobs 4162941 to 4162955).
 
-\paragraph{Milestone M2b (targets met).} M2b runs the source terms of the
+\paragraph{Milestone M2b (done).} M2b runs the source terms of the
 calibrated configuration, with the stress tables of \texttt{INSIN4}
 (\texttt{SINTABLE = 1}) and the directional cumulative breaking term of
 \texttt{W3SDS4} (\texttt{SDSCUM = -0.40}, through the matrix
@@ -1946,15 +1946,83 @@ grids v5 $K=4$ and v4, and at least ten times the speed of the Fortran
 explicit scheme, i.e. under \SI{430}{s} per model day on grid v4. Both
 are met.
 
-One point remains open. On grid v4 the largest differences, up to
-\SI{5.4}{cm} RMS and \SI{44}{cm} in one hour, are in a cluster of nodes at
-the mouth of Ungava Bay from 4 to 7 January. These nodes are in partial
-ice (concentration 0.35--0.43, which scales the source terms), under
-15--\SI{17}{m/s} of wind and 0.2--\SI{0.3}{m/s} of tidal current. Unlike
-the fjord spikes, the differences last several hours and change $T_{m02}$
-by up to \SI{1.3}{s}, so they reach more than the top bands. The same nodes
-stand out on grid v5 $K=4$. They are being diagnosed as the fjords were,
-with WW3 restarts every 10 minutes during an episode.
+On grid v4 the largest differences, up to \SI{5.4}{cm} RMS and \SI{44}{cm}
+in one hour, are in a cluster of nodes at the mouth of Ungava Bay from 4 to
+7 January. These nodes are in partial ice (concentration 0.35--0.43, which
+scales the source terms), under 15--\SI{17}{m/s} of wind and
+0.2--\SI{0.3}{m/s} of tidal current. Unlike the fjord spikes, the
+differences last several hours and change $T_{m02}$ by up to \SI{1.3}{s},
+so they reach more than the top bands. The same nodes stand out on grid v5
+$K=4$, where they were diagnosed as the fjords were:
+\begin{itemize}
+\item The calibrated WW3 week of grid v5 $K=4$ was rerun with restarts
+every 10 minutes from 5 January 00:00 to 02:00 (job 4162775, \SI{1}{h} on
+64 cores). Against them, the GPU run from 1 January differs by \SI{13}{cm}
+at the mouth of the bay at 00:00, and the difference grows by about
+\SI{2.5}{cm} per step, in the peak bands (job 4162776).
+\item Started from the WW3 restart of 00:00 itself, the GPU stays within
+\SI{5}{mm} of WW3 everywhere over the 12 steps, and the Ungava nodes are no
+longer among the largest differences (job 4163960).
+\item On the same state, the harness finds the CPU \texttt{W3SRCE} within
+$2.1\times10^{-7}$ of WW3 at six nodes of the bay, with the same limiter
+and breaking decisions and 3 to 40 dynamic steps (job 4163959).
+\end{itemize}
+Each step of the model is therefore WW3's there. The difference builds up
+over days in a fast-growing sea in partial ice, where small differences of
+state are amplified, as with the fjord spikes. A double-precision GPU run
+from 1 to 5 January (job 4165288) will show whether single-precision
+round-off alone gives centimetres there.
+
+\emph{Gradients.} M2b also gives the first gradients of the model with the
+calibrated ST4, by finite differences. Fifteen runs of 48 hours in double
+precision from the restart of 8 January on grid v5 $K=4$ multiply each
+parameter by $1\pm0.01$, and also by $1\pm0.001$ for the wind and
+\texttt{BETAMAX} (jobs 4162941 to 4162955 and 4163276, 5 GPU-hours).
+\texttt{BETAMAX} enters the stress tables, so its runs read the tables of
+perturbed \texttt{mod\_def.ww3} files; the wind is the forcing wind times a
+factor. The responses are the total energy and the mean $H_s$ at
+10 January 00\,h and the scores of 8--10 January against 22\,933 altimeter
+blocks and 12\,153 buoy hours (job 4163939, Table~\ref{tab:m2grad}). The
+two steps agree to about $10^{-3}$ on the energy, the mean $H_s$ and the
+biases, and to 2--20\,\% on the RMSEs, which are differences of nearly
+equal numbers. Over two days the energy goes as the wind to the power 3.3.
+A 1\,\% increase of \texttt{BETAMAX} raises the mean $H_s$ by \SI{5.6}{mm}
+and the altimeter bias by \SI{5.3}{mm}; one of \texttt{SDSC2} lowers them
+by 2.6 and \SI{2.5}{mm}. Depth-induced breaking (\texttt{BJGAM}) acts only
+at the buoys in shallow water. The buoy $H_s$ RMSE falls slightly with the
+wind, \texttt{BETAMAX}, \texttt{NLPROP} and \texttt{BJGAM} and rises with
+\texttt{SDSC2}, while the $T_{m02}$ RMSE rises with all but
+\texttt{NLPROP}. M2b is complete.
+
+\begin{table}[H]
+\centering\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llrrrrrrrr}
+\toprule
+ & & & & \multicolumn{2}{c}{altimeters, $H_s$ (m)} & \multicolumn{2}{c}{buoys, $H_s$ (m)} & \multicolumn{2}{c}{buoys, $T_{m02}$ (s)} \\
+$p$ & step & energy & $\overline{H_s}$ (m) & bias & RMSE & bias & RMSE & bias & RMSE \\
+\midrule
+wind & 1\,\% & $3.347\times10^{5}$ & 2.769 & 2.675 & 0.847 & 1.833 & $-0.018$ & 1.294 & 0.521 \\
+wind & 0.1\,\% & $3.346\times10^{5}$ & 2.769 & 2.672 & 0.850 & 1.835 & $-0.021$ & 1.266 & 0.466 \\
+\texttt{BETAMAX} & 1\,\% & $6.700\times10^{4}$ & 0.564 & 0.530 & 0.159 & 0.444 & $-0.017$ & 0.193 & 0.116 \\
+\texttt{BETAMAX} & 0.1\,\% & $6.707\times10^{4}$ & 0.564 & 0.530 & 0.159 & 0.442 & $-0.017$ & 0.183 & 0.097 \\
+\texttt{SDSC2} & 1\,\% & $-3.15\times10^{4}$ & $-0.264$ & $-0.254$ & $-0.072$ & $-0.206$ & 0.018 & $-0.091$ & 0.003 \\
+\texttt{NLPROP} & 1\,\% & $1.66\times10^{4}$ & 0.146 & 0.146 & 0.038 & 0.094 & $-0.010$ & 0.238 & $-0.070$ \\
+\texttt{BJGAM} & 1\,\% & 310 & 0.003 & 0.000 & 0.000 & 0.017 & $-0.012$ & 0.004 & 0.002 \\
+\bottomrule
+\end{tabular}
+\caption{Milestone M2b: finite-difference gradients of the GPU model with
+the calibrated ST4 on grid v5 $K=4$, $\partial R/\partial\ln p$, from
+central differences of 48-hour runs in double precision from the restart
+of 8 January 00\,h with relative steps of 1\,\% and 0.1\,\%. Energy and
+mean $H_s$ at 10 January 00\,h; scores over 8--10 January against 22\,933
+altimeter blocks and 12\,153 buoy hours. The base run has a total energy
+of $1.0028\times10^{5}$, a mean $H_s$ of \SI{1.7358}{m}, altimeter scores
+of \SI{+6.23}{cm} and \SI{25.73}{cm}, and buoy scores of \SI{-3.89}{cm}
+and \SI{42.35}{cm} in $H_s$ and \SI{-0.376}{s} and \SI{1.196}{s} in
+$T_{m02}$. Slurm jobs 4162941 to 4162955, 4163276 and 4163939.}
+\label{tab:m2grad}
+\end{table}
 
 \begin{table}[H]
 \centering\small
@@ -2017,7 +2085,7 @@ function, friction factor) set the larger values of \texttt{W3SDS4} and
 \label{tab:m2src}
 \end{table}
 
-\paragraph{Milestone M3 (started).} M3 differentiates the GPU model in
+\paragraph{Milestone M3 (in progress).} M3 differentiates the GPU model in
 forward mode, for a relative change of the wind speed or of a source
 parameter (\texttt{BETAMAX}, \texttt{SDSC2}, \texttt{NLPROP},
 \texttt{BJGAM}).
@@ -2051,9 +2119,38 @@ see inside CubeCL kernels. A CubeCL dual-number type cannot carry the
 arithmetic of the kernels either, since CubeCL structures can neither be
 reassigned nor reused once moved. The tangents, and later the adjoints,
 therefore stay hand-written.
-\item \emph{Next.} The tangent through the time loop
-(\texttt{hww3-prop run --tangent}) is being checked against
-finite-difference runs over 3 and 48 hours.
+\item \emph{Through the time loop.} \texttt{hww3-prop run --tangent}
+carries the tangent through the whole step: forcing, boundary (zero
+tangent), ice and level updates, \texttt{W3KTP3}, the geographic
+propagation and \texttt{W3SRCE}. Over 3 hours from the restart of
+8 January on grid v5 $K=4$, its hourly $H_s$ derivative is compared with
+central differences of double-precision runs with relative steps $10^{-4}$
+and $10^{-5}$, on the nodes where the two differences agree
+(Table~\ref{tab:m3loop}). Without the source terms, the tangent with
+respect to the initial spectra agrees with the differences to round-off,
+and the total energy to $2\times10^{-9}$ (job 4163934). With them, it
+agrees to $10^{-4}$ on all but 7 to 30 of the nodes where the model is
+smooth, for the initial spectra and for the wind (jobs 4163935 and
+4163936).
+\item \emph{Discrete choices along the run.} These smooth nodes become
+fewer with time: from 64\,\% of the nodes after one hour to 24\,\% after
+three for the initial spectra, from 19\,\% to 3.4\,\% for the wind. Within
+three hours, a change of $10^{-4}$ in the wind flips at least one discrete
+choice (dynamic steps, \texttt{NKH} and limiter of \texttt{W3SRCE},
+limiter branches of \texttt{W3KTP3}) at 97\,\% of the nodes. Each flip
+is a small jump that the tangent, a derivative along the path of the
+values, does not see. On aggregates the jumps add up instead of vanishing
+with the step. After three hours, the derivative of the total energy with
+respect to the wind is $8.416\times10^{4}$ for the tangent against
+$8.291\times10^{4}$ and $8.280\times10^{4}$ for the two steps
+(1.5\,\%). For the initial spectra it is $4.384\times10^{4}$
+against $4.373\times10^{4}$ and $4.378\times10^{4}$ (0.2\,\%).
+The differences themselves do not converge with the step. The tangent is
+the exact derivative of the model where it is smooth. Finite differences
+with a step of 1\,\%, as in M2b, include the mean effect of the jumps,
+which is what a calibration sees.
+\item \emph{Next.} Tangent runs of 48 hours for each direction are being
+compared with the finite differences of M2b (jobs 4163952 to 4163958).
 \end{itemize}
 
 \begin{table}[H]
@@ -2084,6 +2181,34 @@ a random relative change of every bin. Depth-induced breaking
 (\texttt{BJGAM}) acts at three harness nodes of grid v5 $K=4$ and none of
 grid v4. Slurm jobs 4163750 and 4163751.}
 \label{tab:m3}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{llrrrrr}
+\toprule
+direction & after & smooth & median & p99 & $>10^{-4}$ & max \\
+\midrule
+spectra, no sources & \SI{1}{h} & 100\,\% & $1.5\times10^{-11}$ & $4.9\times10^{-11}$ & 0 & $3.1\times10^{-7}$ \\
+ & \SI{3}{h} & 100\,\% & $1.5\times10^{-11}$ & $5.5\times10^{-11}$ & 1 & $1.1\times10^{-4}$ \\
+spectra & \SI{1}{h} & 64\,\% & $7.6\times10^{-11}$ & $8.7\times10^{-7}$ & 7 & $1.0\times10^{-3}$ \\
+ & \SI{3}{h} & 24\,\% & $4.0\times10^{-9}$ & $3.6\times10^{-6}$ & 14 & $4.8\times10^{-4}$ \\
+wind & \SI{1}{h} & 19\,\% & $6.9\times10^{-9}$ & $6.6\times10^{-6}$ & 18 & $7.5\times10^{-4}$ \\
+ & \SI{3}{h} & 3.4\,\% & $6.6\times10^{-8}$ & $3.5\times10^{-5}$ & 28 & $2.5\times10^{-2}$ \\
+\bottomrule
+\end{tabular}
+\caption{Milestone M3: tangent of the GPU model through the time loop on
+grid v5 $K=4$ from the restart of 8 January 00\,h, against central
+differences of double-precision runs with relative steps $10^{-4}$ and
+$10^{-5}$. Per node, the hourly derivative of $H_s$ is compared on the
+nodes where the two differences agree to $10^{-6}$ of the node's scale
+$s=\max(|d|,10^{-3}\,\mathrm{rms}(d))$ (\emph{smooth}, in percent of
+the 371\,278 nodes with $H_s$). \emph{Median}, \emph{p99} and \emph{max}
+of the difference relative to $s$ over these nodes; $>10^{-4}$: the number
+of these nodes above the target. \emph{Spectra}: the same relative change
+of all the restart spectra, without the source terms (\emph{no sources})
+or with them. Slurm jobs 4163934 to 4163936.}
+\label{tab:m3loop}
 \end{table}
 
 
@@ -2165,8 +2290,19 @@ figures) is described step by step in the Sphinx documentation,
   \texttt{scripts/m2\_prop\_hpc.slurm} with \texttt{HOURS=48} or
   \texttt{168}, then \texttt{scripts/m1\_compare\_nc.py} and
   \texttt{scripts/m2\_scores\_hpc.slurm} (\texttt{docs/reproducing.md}).
+\item \begin{sloppypar}Table~\ref{tab:m2grad}: the runs of
+  \texttt{scripts/m2\_prop\_hpc.slurm} with the options of
+  \texttt{hww3-prop} \texttt{--f64}, \texttt{--scale-par} and
+  \texttt{--wind-factor}, and for \texttt{BETAMAX} the tables written by
+  \texttt{scripts/m2\_moddef\_hpc.slurm}, then the gradients of
+  \texttt{scripts/m2\_fd\_hpc.slurm}
+  (\texttt{docs/reproducing.md}).\end{sloppypar}
 \item Table~\ref{tab:m3}: \texttt{scripts/m3\_tl\_src\_hpc.slurm}, which
   runs \texttt{hww3-src check-tl} on each harness
+  (\texttt{docs/reproducing.md}).
+\item Table~\ref{tab:m3loop}: \texttt{scripts/m3\_tl\_run\_hpc.slurm}
+  with \texttt{HOURS=3} and \texttt{H=1e-4:1e-5} (and \texttt{NOSRC=1}
+  for the propagation alone), then \texttt{scripts/m3\_tl\_compare.py}
   (\texttt{docs/reproducing.md}).
 \end{itemize}
 
