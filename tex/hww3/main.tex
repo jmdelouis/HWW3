@@ -2273,9 +2273,9 @@ of 1\,\%, and with a step of 0.1\,\% in brackets. Slurm jobs 4163952 to
 \end{table}
 
 \paragraph{Calibration (in progress).} The calibration trial fits
-\texttt{BETAMAX}, \texttt{SDSC2}, \texttt{NLPROP} and \texttt{BJGAM} on
-grid v5 $K=4$, with the wind fixed, by Gauss--Newton steps whose Jacobians
-come from tangent runs only.
+\texttt{BETAMAX}, \texttt{SDSC2} and \texttt{NLPROP} on grid v5 $K=4$,
+with the wind fixed and \texttt{BJGAM} kept at 0.73, by Gauss--Newton
+steps whose Jacobians come from tangent runs only.
 \begin{itemize}
 \item \emph{Stress tables in Rust.} A new value of \texttt{BETAMAX}
 changes the stress tables that \texttt{ww3\_grid} writes in
@@ -2337,15 +2337,49 @@ $3$ to $6\times10^{-3}$ at the median node and its mean matches
 ($-0.0874$ against \SI{-0.0871}{s} for \texttt{BETAMAX}). The aggregate
 gaps come from the jumps of the tail cut-off \texttt{NKH}, which
 $T_{m02}$ weights by $\sigma^2$.
-\item \emph{First Gauss--Newton step.} The posterior correlations are
+\item \emph{\texttt{BJGAM} kept fixed.} The posterior correlations are
 0.64 between \texttt{BETAMAX} and \texttt{SDSC2} and 0.74 between
 \texttt{SDSC2} and \texttt{NLPROP}. \texttt{BJGAM} is constrained only by
-a few shallow buoys: the full step would raise its logarithm by 0.75, and
-the limit of 0.3 per step scales the whole step by 0.40. The trial point
-multiplies \texttt{BETAMAX} by 0.990, \texttt{SDSC2} by 1.070,
-\texttt{NLPROP} by 1.095 and \texttt{BJGAM} by 1.35, for a predicted
-decrease of the cost of 0.77\,\%. Its value run (job 4184904) decides
-whether the step is taken. About 12 GPU-hours have been used so far.
+a few shallow buoys, the altimeters being insensitive to it: the full step
+would raise its logarithm by 0.75, and the limit of 0.3 per step scaled
+the whole step by 0.40. That trial point (\texttt{BJGAM} $\times1.35$)
+lowered the cost by 0.80\,\%, but \texttt{BJGAM}, whose tangent is also
+the least reliable, was then kept at 0.73 and the step recomputed with
+the three other parameters from the same tangent runs.
+\item \emph{First step.} It multiplies \texttt{BETAMAX} by 0.976 (1.708),
+\texttt{SDSC2} by 1.183 and \texttt{NLPROP} by 1.255, for a predicted
+decrease of 1.11\,\%. The value run gives 1.32\,\%, from 47\,250 to
+46\,629 on the training window, and 0.71\,\% on the validation window,
+from 69\,351 to 68\,857. On the training window the altimeter bias and
+RMSE go to \SI{+1.04}{cm} and \SI{25.27}{cm}, the buoy $H_s$ to
+\SI{-6.38}{cm} and \SI{31.64}{cm}, and $T_{m02}$ to \SI{-0.352}{s} and
+\SI{1.100}{s}; on the validation window to \SI{+3.67}{cm} and
+\SI{26.28}{cm}, \SI{-5.60}{cm} and \SI{41.68}{cm}, \SI{-0.344}{s} and
+\SI{1.123}{s}. The step lowers $H_s$ offshore, which the altimeters
+want, and the buoy $H_s$ with it.
+\item \emph{WW3 with the calibrated parameters.} The Fortran model with
+these parameters (job 4269275, 64 ranks, \SI{717}{s} per model day)
+gives a cost of 46\,628.4 on the training window and 68\,856.6 on the
+validation window, against 46\,628.5 and 68\,856.7 for the GPU model.
+\item \emph{Second step.} The tangent runs at the new point (jobs 4269271
+to 4269273) change $A^\mathsf{T}A$ by 4.5\,\% at most, and the
+correlation between \texttt{BETAMAX} and \texttt{SDSC2} rises to 0.89.
+This Jacobian is kept for the following steps, each checked by one value
+run, until a step gains less than 0.2\,\%. The next step lowers
+\texttt{BETAMAX} and \texttt{SDSC2} together along that valley, for a
+predicted further 1.3\,\%. About 18 GPU-hours have been used so far.
+\item \emph{Coastal buoys.} The buoy bias is not an error of the
+matching. The node depth matches the buoy's (median ratio 1.00, 10--90\,\%
+0.71--1.82), the bias does not grow with the mismatch, and a matching to
+the nearest node of similar depth makes the scores worse. The bias sits
+in cells that hold land. The 113 buoys within \SI{5}{km} of the coast
+have \SI{-8.7}{cm} on the training window and \SI{-10.6}{cm} on the
+validation window. The 14 buoys whose cell is at least 30\,\% land in
+GEBCO, sites in bays or behind islands that the mesh does not resolve,
+have \SI{-27}{cm} and \SI{-35}{cm}, with RMSEs of 58 to \SI{70}{cm}.
+These 14 buoys alone give $-1.4$ of the \SI{-4.85}{cm} and $-2.0$ of the
+\SI{-3.30}{cm}. The bias also grows with the spread of the GEBCO depth
+inside the cell, and is larger at HEALPix level 11 than at level 10.
 \end{itemize}
 
 \begin{table}[H]
@@ -2355,10 +2389,10 @@ whether the step is taken. About 12 GPU-hours have been used so far.
  & & \multicolumn{3}{c}{derivative of the bias} & & \\
 $p$ & $\partial J/\partial\ln p$ & altimeters & buoy $H_s$ & buoy $T_{m02}$ & s.d. & step \\
 \midrule
-\texttt{BETAMAX} & 25\,108 & 0.925 & 0.416 & 0.423 & 0.0045 & 0.990 \\
-\texttt{SDSC2} & $-10\,585$ & $-0.435$ & $-0.203$ & $-0.218$ & 0.015 & 1.070 \\
-\texttt{NLPROP} & 5\,913 & 0.344 & 0.129 & 0.412 & 0.014 & 1.095 \\
-\texttt{BJGAM} & $-118$ & 0.000 & 0.001 & 0.001 & 0.110 & 1.350 \\
+\texttt{BETAMAX} & 25\,108 & 0.925 & 0.416 & 0.423 & 0.0045 & 0.976 \\
+\texttt{SDSC2} & $-10\,585$ & $-0.435$ & $-0.203$ & $-0.218$ & 0.015 & 1.183 \\
+\texttt{NLPROP} & 5\,913 & 0.344 & 0.129 & 0.412 & 0.014 & 1.255 \\
+\texttt{BJGAM} & $-118$ & 0.000 & 0.001 & 0.001 & 0.110 & -- \\
 \bottomrule
 \end{tabular}
 \caption{Calibration: derivatives at the present parameters over the
@@ -2367,8 +2401,9 @@ of 156 hours in double precision from the cold start of 1 January on grid
 v5 $K=4$: of the cost $J$ and of the biases (m per unit of $\ln p$, s for
 $T_{m02}$). \emph{S.d.}: posterior standard deviation of $\ln p$ for
 independent errors of the given sigmas, a lower bound since the errors of
-neighbouring altimeter blocks and buoy hours are correlated. \emph{Step}:
-factor of the trial point of the first step. Slurm jobs 4178795 to 4178798.}
+neighbouring altimeter blocks and buoy hours are correlated (fit of the
+four parameters). \emph{Step}: factor of the accepted first step, with
+\texttt{BJGAM} kept at 0.73. Slurm jobs 4178795 to 4178798.}
 \label{tab:cal0}
 \end{table}
 
