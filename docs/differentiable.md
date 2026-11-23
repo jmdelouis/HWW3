@@ -574,7 +574,7 @@ coastal-scale corrections can therefore be computed on uniform maps.
 | M2b | full ST4: the stress tables `TAUT`, `TAUHFT`, `TAUHFT2` and the directional cumulative term (`SDSCUM = −0.40`) | the targets with sources of section 6 against the existing explicit runs, and at least 10 times the Fortran explicit speed (under 430 s per model day on grid v4). **First scientific gradients** with respect to the parameters of the calibrated configuration. **Done** on 23 November 2026: targets met on grids v5 $K=4$ and v4 at 220 s per model day on grid v4, and finite-difference gradients of the energy, mean $H_s$ and scores for `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM` and the wind (section 9.3) | 4–7 |
 | M3 | tangent kernels for parameters (sources and stress tables) | agreement with the double-precision finite differences to $10^{-4}$ where the model is smooth. **Met** on 23 November 2026 for one source step and over 3 h; over 48 h the model is smooth almost nowhere and the tangent gives the derivatives of the aggregates to 0.1–4 % (section 9.4) | 4–7 (optional) |
 | M4 | reverse mode for the fields: adjoint kernels, revolve driver, adjoint of the observation operators, PyTorch bridge | the Taylor test and the comparison with WW3 of section 6; one wind gradient over 7 days on grid v5 $K=4$ in under 3 h | 18–32 (hand-written adjoints) or 12–21 (Burn source terms) |
-| M5 | learning: HEALPix wind corrections, then hybrid source terms | an independent month improves | open |
+| M5 | learning: a regional wind bias, $\beta$ from a small network of wind features, coastal parameters as functions of grid descriptors (section 9.7) | an independent month improves | open |
 
 Two decision points follow from the plan:
 
@@ -870,6 +870,60 @@ Details and the list of what remains are in
 - **A run with Rust inputs only** (calm start, `build-params`, the files
   above) is queued with its comparison against the calibration's start run
   (jobs 4203334 and 4203335).
+
+### 9.7 Plan after the calibration (23 November 2026)
+
+Order of the work, approved by Jean-Marc: the calibration until "calibration
+done", the preprocessing in Rust (section 9.6), the optimisation (profile
+first; an f32 tangent checked against the f64 one, a vector tangent,
+asynchronous outputs), `BETAMAX`$(U)$ extended by degrees, then M4. M4 does
+not start before the "BETAMAX(U) done" checkpoint, and before its adjoints
+Jean-Marc chooses between hand-written fused adjoints and Burn tensor
+operations for the source terms from a comparison based on the M2 and
+optimisation timings.
+
+**Step 4, `BETAMAX` from the wind, with the tangent.** The form is
+$\ln\beta = \ln\beta_0 + \sum_k c_k\,\phi_k(\text{features})$ with
+smooth bases, a prior centred on the calibrated constant and smoothness
+penalties.
+
+1. First $\beta(U)$ in the local ERA5 $U_{10}$ (B-splines with knots every
+   5 m/s), as briefed.
+2. Then one or two features of the wind history, computed from the forcing
+   only: $dU/dt$, the turning rate of the wind direction and $|\nabla U|$,
+   with a few spline coefficients each, using the vector tangent once the
+   optimisation has made it available.
+3. On the validation month, for altimeter $H_s$ and buoy $H_s$ and
+   $T_{m02}$, compare the constant $\beta$, $\beta(U)$, $\beta(U,$
+   history$)$ and a wind correction $g(U)$; a feature is kept only if the
+   validation improves.
+4. ERA5 gusts, the air–sea temperature difference and the boundary-layer
+   height need new data: candidates, fetched only with Jean-Marc's
+   agreement.
+
+Features of the wave state (wave age) would enter the adjoint of the
+source terms and wait until after M4.
+
+**After M4 (M5, planned, not started).**
+
+1. A regional wind bias: a multiplicative factor on a HEALPix map of nside
+   8–16, constant per month, possibly in classes of $U$, constrained by the
+   scatterometer winds (ASCAT, to download only with Jean-Marc's agreement)
+   together with the altimeters, to separate a wrong wind from a wrong
+   growth.
+2. $\beta$ from a small neural network of the features above, through the
+   adjoint.
+3. Coastal parameters (`BJGAM`, bottom friction, a transparency for
+   unresolved obstacles) as functions of the grid descriptors of the
+   coastal diagnostics ([GPU model results](wave_results.md): distance to
+   the coast, land fraction and bathymetric spread inside the cell,
+   HEALPix level), not as free fields per region, validated by leaving out
+   whole regions of buoys.
+
+**Guardrails for step 4 and M5.** The learned $\beta$ absorbs the errors of
+the wind and of the dissipation and is specific to ERA5, as the present
+1.75 is; priors and smoothness penalties; physical constraints ($\beta > 0$,
+smooth); an independent validation month.
 
 ## 10. Other routes, briefly
 

@@ -593,6 +593,10 @@ sbatch scripts/pre_inputs_hpc.slurm
 # a GPU run with Rust inputs only, and its comparison with the calibration's start run
 J=$(sbatch --parsable scripts/pre_allrust_hpc.slurm)
 sbatch --dependency=afterok:$J scripts/pre_allrust_cmp_hpc.slurm
+# coastal diagnostics of the buoy scores (CPU): buoy nodes, GEBCO spread on Datarmor, then both windows
+$R/pyenv/bin/python scripts/coast_diag.py $R/cal/op_train.npz $R/grids/natl_v5k4 $R/obs/insitu_MO/202601 $R/cal/it0_value $R/cal/it1_value --emit-nodes $R/coast/buoy_nodes.json
+python scripts/coast_subgrid.py $DATAWORK/HWW3/data/gebco/natl buoy_nodes.json > buoy_subgrid.json   # on Datarmor
+$R/pyenv/bin/python scripts/coast_diag.py $R/cal/op_valid.npz $R/grids/natl_v5k4 $R/obs/insitu_MO/202601 $R/cal/it0_value $R/cal/it1_value --subgrid $R/coast/buoy_subgrid.json --json $R/coast/valid.json
 # control only: the start-point derivatives against the M2b finite differences of 8-10 January
 python3 scripts/cal_fdcheck.py $R/cal/op_0810.npz $R/m2/fd/cases.txt fdchk $R/cal/fdcheck.json
 ```

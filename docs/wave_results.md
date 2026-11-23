@@ -1075,3 +1075,75 @@ the parameter file of the harness): hourly $H_s$ node by node
 (`scripts/pre_hs_cmp.py`) and the cost and scores of the calibration on its
 training and validation windows. Both are queued (Slurm jobs 4203334 and
 4203335) after the restart check 4191399.
+
+## Coastal diagnostics of the buoy scores
+
+At the start of the calibration the buoy $H_s$ is too low (bias −4.85 cm on
+the training window), and the first step, which brought the altimeter bias
+from +2.86 to +1.04 cm, made it −6.38 cm. `scripts/coast_diag.py`
+looks at where this bias comes from, for the start run (`cal/it0_value`,
+"p0") and the run after step 1 (`cal/it1_value`), over the buoy hours of
+the calibration's operators (255 buoys and 12,247 hours on the training
+window, 257 buoys and 14,989 hours on the validation window). Each buoy is
+matched to the nearest wet node within 10 km. For each buoy it uses the
+water depth of its file (attribute `bottom_depth`, present for 174
+buoys) and, for its node, the depth, the distance to the coast (the
+nearest mesh boundary node not on the open boundary), the HEALPix level,
+the depth range over the node and its neighbours, and inside the node's
+cell (radius half its mean edge length) the spread of the GEBCO depth and
+the fraction of land, computed on Datarmor where GEBCO is
+(`scripts/coast_subgrid.py`, which writes nothing there). It needs no GPU.
+
+**The matching is not the cause.** The node depth is the buoy's to a
+median ratio of 1.00 (10–90 %: 0.71–1.82), at a median distance of
+1.8 km (at most 9.8 km). The bias does not grow with the depth mismatch:
+
+| node depth / buoy depth | buoys | training: p0 → step 1 (cm) |
+|---|---|---|
+| 0.5–0.8 | 26 | −12.3 → −14.4 |
+| 0.8–1.25 | 105 | −5.9 → −7.3 |
+| 1.25–2 | 24 | −8.3 → −9.7 |
+| above 2 | 16 | −5.5 → −5.7 |
+| no depth in the file | 81 | 0.0 → −1.8 |
+
+A depth-aware matching, tried as a diagnostic only (the nearest wet node
+within 25 km whose depth is within 25 % or 50 % of the buoy's), moves 58
+or 29 buoys and makes the scores worse: on the training window the p0
+bias goes from −4.85 to −5.97 or −7.00 cm and the RMSE from 31.3 to
+33.0 or 33.4 cm, and likewise on the validation window and at step 1.
+The operator of the calibration is unchanged.
+
+**The bias sits at the coast, in cells with land.** H_s bias in cm, p0 →
+step 1:
+
+| class | buoys | training | validation |
+|---|---|---|---|
+| node 0–5 km from the coast | 113 | −8.7 → −9.8 | −10.6 → −12.5 |
+| 5–10 km | 30 | −2.0 → −3.9 | +1.5 → −0.6 |
+| 10–25 km | 49 | −0.6 → −2.1 | +6.4 → +3.7 |
+| 25–50 km | 39 | −2.2 → −4.6 | +3.6 → +0.2 |
+| over 50 km | 24 | −3.3 → −4.9 | −5.1 → −7.4 |
+| no land in the cell (GEBCO) | 200 | −5.6 → −7.3 | −4.0 → −6.6 |
+| land 0.1–10 % of the cell | 23 | +6.6 → +5.6 | +13.3 → +11.5 |
+| land 10–30 % | 18 | +5.1 → +4.4 | +8.0 → +6.9 |
+| land 30 % or more | 14 | −27.2 → −28.3 | −35.4 → −36.7 |
+| GEBCO spread / node depth below 0.1 | 82 | −3.2 → −4.8 | −0.6 → −3.1 |
+| 0.1–0.3 | 89 | −4.6 → −6.2 | −2.2 → −4.6 |
+| 0.3–1 | 81 | −6.7 → −8.2 | −7.1 → −9.2 |
+| HEALPix level 10 | 130 | −4.2 → −6.0 | +0.5 → −2.4 |
+| level 11 | 121 | −5.8 → −7.1 | −7.5 → −9.2 |
+
+The 14 buoys whose cell is at least 30 % land (RMSE 58–70 cm) give
+−1.4 cm of the −4.85 cm of the training window and −2.0 cm of the
+−3.30 cm of the validation window: sites inside bays or behind islands
+that the mesh does not resolve. The bias also grows with the spread of the
+bathymetry inside the cell, while it does not depend clearly on the node
+depth (−4.8 cm at 0–20 m, −2.1 cm at 50–100 m, −10.0 cm at 100–200 m
+on the training window). The first calibration step lowers $H_s$ by 1–2.5 cm
+in every class: it is the same reduction everywhere that brought the
+altimeters closer, and the buoy term of the cost, dominated by these
+coastal sites, pulls the other way. Coastal parameters as functions of
+these grid descriptors (plan, section 9.7 of the
+[differentiable WW3 note](differentiable.md)) are the way to treat them;
+leaving these buoys out of the cost, or weighting them down, would be a
+decision for the calibration, not taken here.

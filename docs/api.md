@@ -104,5 +104,7 @@ other values of the calibrated parameters). The Fortran harness
 | `pre_inputs_hpc.slurm` | the forcing and boundary files built in Rust from the netCDF inputs of the January runs, compared with those of `ww3_prnc` and `ww3_bounc` |
 | `pre_allrust_hpc.slurm`, `pre_allrust_cmp_hpc.slurm` | a GPU run whose inputs all come from Rust (calm start, `build-params`, `hww3-pre`), and its comparison with the calibration's start run |
 | `pre_hs_cmp.py` | hourly $H_s$ of two `hww3-prop` runs compared node by node |
+| `coast_diag.py` | the buoy $H_s$ bias and RMSE of two runs by depth mismatch, node depth, distance to the coast, HEALPix level and sub-grid descriptors, and a depth-aware matching as a diagnostic |
+| `coast_subgrid.py` | the spread of the GEBCO depth and the fraction of land inside the cells of given nodes (run where GEBCO is, with numpy only) |
 | `pre_restart_hpc.slurm` | the start from calm conditions against WW3, and a run continued from a GPU restart against the same run in one piece |
 | `cal_fdcheck.py` | the tangent derivatives of the cost and scores against the M2b finite differences (control only) |
