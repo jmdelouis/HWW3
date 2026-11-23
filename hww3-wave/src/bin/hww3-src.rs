@@ -741,12 +741,50 @@ fn params(base: PathBuf, out: PathBuf, betamax: Option<f64>, scale: &[(String, f
     Ok(())
 }
 
+/// The parameter file of the source terms built in Rust from the grid and
+/// the namelists (`hww3_wave::ww3grid`), compared record by record with a
+/// parameter file of the harness when `check` is given.
+fn build_params(grid_dir: PathBuf, nml: PathBuf, out: PathBuf, grid_nml: Option<PathBuf>, check: Option<PathBuf>) -> Result<()> {
+    use hww3_wave::ww3grid::{compare, source_params, GridSetup, Namelists};
+    let g = hww3_wave::grid::Grid::read(&grid_dir)?;
+    let gn = Namelists::read(&grid_nml.unwrap_or_else(|| grid_dir.join("ww3_grid.nml")))?;
+    let s = &g.spec;
+    let setup = GridSetup {
+        nk: s.nk,
+        nth: s.nth,
+        fr1: s.freq1,
+        xfr: s.xfr,
+        thoff: s.thoff,
+        dmin: s.dmin,
+        dtmax: gn.f("TIMESTEPS_NML", "TIMESTEPS%DTMAX", 600.0)?,
+        dtmin: gn.f("TIMESTEPS_NML", "TIMESTEPS%DTMIN", 10.0)?,
+        nsea: g.lon.len(),
+    };
+    let t0 = std::time::Instant::now();
+    let p = source_params(&setup, &Namelists::read(&nml)?)?;
+    println!("{:?}: {} records in {:.2} s", setup, p.map.len(), t0.elapsed().as_secs_f64());
+    p.write(&out)?;
+    if let Some(c) = check {
+        let r = Params::read(&c)?;
+        for (name, line) in compare(&p, &r) {
+            println!("  {name:<14} {line}");
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let a: Vec<String> = std::env::args().collect();
     let opt = |k: &str| a.iter().position(|x| x == k).and_then(|i| a.get(i + 1)).cloned();
     let _ = &opt;
     match (a.get(1).map(|s| s.as_str()), a.get(2)) {
         (Some("check"), Some(f)) => check(PathBuf::from(f)),
+        (Some("build-params"), Some(gd)) => {
+            let usage = "build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml WW3_GRID.nml] [--check BASE.params]";
+            let nml = a.get(3).ok_or_else(|| anyhow::anyhow!(usage))?;
+            let out = a.get(4).ok_or_else(|| anyhow::anyhow!(usage))?;
+            build_params(PathBuf::from(gd), PathBuf::from(nml), PathBuf::from(out), opt("--grid-nml").map(PathBuf::from), opt("--check").map(PathBuf::from))
+        }
         (Some("tables"), Some(_)) => tables(&a[2..].iter().map(PathBuf::from).collect::<Vec<_>>()),
         (Some("params"), Some(f)) => {
             let out = a.get(3).ok_or_else(|| anyhow::anyhow!("params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+NAME:F]"))?;
@@ -777,7 +815,7 @@ fn main() -> Result<()> {
             check_tl(PathBuf::from(f), nu, h)
         }
         _ => bail!(
-            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | check-gpu HARNESS [--f64] [--units N] [--replicate R] | check-tl HARNESS [--units N] [--h H]"
+            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml F] [--check BASE.params] | check-gpu HARNESS [--f64] [--units N] [--replicate R] | check-tl HARNESS [--units N] [--h H]"
         ),
     }
 }

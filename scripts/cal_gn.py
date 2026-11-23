@@ -13,7 +13,9 @@ neighbouring altimeter blocks and buoy hours are correlated, it is also
 given scaled by the reduced chi-square J_data / (N - n).
 
 usage:
-    python scripts/cal_gn.py EVAL.npz X.json OUT.json [--lambda L] [--sigma-p S] [--max-step M]
+    python scripts/cal_gn.py EVAL.npz X.json OUT.json [--lambda L] [--sigma-p S] [--max-step M] [--names A+B+C]
+With --names only those parameters are controlled (the others stay at p0:
+BJGAM was frozen at 0.73 after the first step).
 X.json: {"names": [...], "x": [...]} (missing: x = 0); OUT.json gets the
 step, the new x and factors exp(x), the predicted cost, H, the covariance
 and the correlations.
@@ -26,7 +28,7 @@ import numpy as np
 
 def main():
     a = sys.argv[1:]
-    opts = {"--lambda": "0", "--sigma-p": "0.25", "--max-step": "0.3"}
+    opts = {"--lambda": "0", "--sigma-p": "0.25", "--max-step": "0.3", "--names": ""}
     for k in list(opts):
         if k in a:
             i = a.index(k)
@@ -35,6 +37,12 @@ def main():
     lam, sp, mx = float(opts["--lambda"]), float(opts["--sigma-p"]), float(opts["--max-step"])
     e = np.load(a[0])
     names = [str(n) for n in e["names"]]
+    if opts["--names"]:
+        sub = opts["--names"].split("+")
+        missing = [n for n in sub if n not in names]
+        if missing:
+            sys.exit("no tangent for %s in %s" % (missing, a[0]))
+        names = sub
     try:
         xs = json.load(open(a[1]))
         x = np.array([xs["x"][xs["names"].index(n)] for n in names])

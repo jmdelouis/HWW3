@@ -933,3 +933,35 @@ to 3–6e-3 at the median node, and the mean of $dT_{m02}$ over these nodes
 to 0.3–0.7 % (5 % at 9 January 00 h, where the mean is near zero). $T_{m02}$ weighs the high-frequency tail by $\sigma^2$, and the
 tail reset above the cut-off index `NKH` makes discrete jumps that the
 finite differences of the aggregates include and the tangent does not.
+
+## Preprocessing in Rust (in progress)
+
+The aim is a GPU run that needs no WW3 tool; WW3 then only makes the
+references.
+
+### Parameter file of the source terms
+
+`hww3_wave::ww3grid` builds the whole parameter file of the source terms
+from the namelists of the run and the grid, the source-term part of
+`ww3_grid` (`W3GRID`): the namelist defaults of the HWW3 switches (ST4, NL1,
+LN1, BT4, DB1, MISC) and the derived constants, the spectral grid, the
+saturation weights and `CUMULW` of `INSIN4`, the DIA geometry, weights and
+index tables of `INSNL1`, the friction-factor table of `TABU_FW` (with the
+Kelvin functions of `KZEONE`), the error-function table of `TABU_ERF`, the
+critical Shields number of the sediment, and the stress tables. `hww3-src
+build-params` writes it and compares it record by record with the file of
+the harness (grid v5 $K=4$, calibrated namelists):
+
+| records | difference relative to the largest value |
+|---|---|
+| 121 of 137 (the 48 integer records included) | identical |
+| `AF11` | 1.5e-6 |
+| `TAUHFT`, `TAUHFT2` | 1.1e-6 |
+| `SSTXFTWN`, `SWG`, `AWG`, `CUMULW`, `SATWEIGHTS`, `FTE`, `FACP`, `FACTI2`, `SLNC1`, `SNLC1`, `FFXFM`, `ERFTABLE`, `TAUT` | 6e-8 to 1.8e-7 |
+
+No record is missing or shaped otherwise; the differences are the
+single-precision round-off of WW3 (powers and logarithms computed in
+double precision here). Two WW3 details are kept: `TABU_ERF` computes
+`(1 + erf x) / 2` (its `2**(1/2)` is 1 in integer arithmetic), and the
+saturation tables have the `2 (NTH/2 - 1) + 1` rows that `W3DIMS`
+allocates, of which `INSIN4` fills 17. The file takes 1.8 s to build.

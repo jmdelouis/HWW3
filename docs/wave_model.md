@@ -81,6 +81,7 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | `srce` | CubeCL | the source kernel: the whole `W3SRCE` integration of a global step, one cube per node with the spectrum in shared memory; the wind interpolation of `W3UWND` |
 | `srce_tl` | CubeCL | the source kernel with its tangent (forward mode) |
 | `prop_tl` | CubeCL | the tangents of `W3KTP3`, of the geographic node update, of the level remap, of the wind and of the outputs |
+| `ww3grid` | no | the source-term part of `ww3_grid`: the parameter file of the source terms from the namelists and the grid |
 | `model` | CubeCL | the time loop of `W3WAVE`, propagation only or with the source terms |
 | `cuda_c` | CUDA C | the M0 kernels in CUDA C, through `cudarc` and NVRTC |
 
@@ -199,6 +200,7 @@ hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R]
 hww3-src check-tl HARNESS [--units N] [--h H]
 hww3-src tables BASE.params [OTHER.params ...]
 hww3-src params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...]
+hww3-src build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml WW3_GRID.nml] [--check BASE.params]
 ```
 
 Runs the CPU transcriptions of the source terms (`sources`) on the inputs of
@@ -224,4 +226,6 @@ and `BJGAM`, copying everything else from `BASE`: no other entry of the
 file depends on these four parameters (the saturation weights,
 `CUMULW` and the DIA coefficients do not), so a new value needs neither
 `ww3_grid` nor the harness. `hww3-prop --betamax` builds the same tables in
-memory.
+memory. `build-params` builds the whole parameter file from the namelists
+of the run and the grid (`ww3grid`, the source-term part of `ww3_grid`),
+and with `--check` compares it record by record with a harness file.

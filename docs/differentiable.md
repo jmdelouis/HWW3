@@ -844,6 +844,16 @@ Details and the list of what remains are in
   tangent agrees with them node by node to 3–6e-3 where the model is
   smooth.
 
+### 9.6 Rest of the port to Rust (from 23 November 2026)
+
+- **Parameter file.** The source-term part of `ww3_grid` is ported
+  (`hww3_wave::ww3grid`, `hww3-src build-params`): from the namelists and
+  the grid it builds the 137 records of the harness parameter file, 121
+  identical and the others at WW3's single-precision round-off (1.5e-6 at
+  most), in 1.8 s ([GPU model results](wave_results.md)). Still to port:
+  the interpolation of the forcing (`ww3_prnc`), the boundary spectra
+  (`ww3_bounc`) and the initial state (cold start, restarts).
+
 ## 10. Other routes, briefly
 
 | route | effort | why not the main route |

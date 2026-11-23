@@ -572,6 +572,8 @@ python3 scripts/cal_obs.py eval $R/cal/op_train.npz ${D}_BETAMAX BETAMAX:${D}_BE
 python3 scripts/cal_gn.py $R/cal/itK_eval.npz $R/cal/xK.json $R/cal/gnK.json
 sbatch -t 00:40:00 --export=ALL,TAG=itK+1_trial,HOURS=156,BETAMAX=...,FSDSC2=...,FNLPROP=...,FBJGAM=... scripts/cal_run_hpc.slurm
 python3 scripts/cal_obs.py eval $R/cal/op_train.npz $R/cal/itK+1_trial
+# the parameter file built in Rust from the namelists and the grid, against the harness file
+target/release/hww3-src build-params $R/grids/natl_v5k4 $R/runs/test_grid_v5k4/namelists_natl.nml $R/cal/rust_full.params --grid-nml $R/runs/test_grid_v5k4/ww3_grid.nml --check $R/m2/harness/src_8jan_full.bin.params
 # control only: the start-point derivatives against the M2b finite differences of 8-10 January
 python3 scripts/cal_fdcheck.py $R/cal/op_0810.npz $R/m2/fd/cases.txt fdchk $R/cal/fdcheck.json
 ```

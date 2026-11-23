@@ -46,6 +46,7 @@ pub mod harness;
 pub mod reference;
 pub mod sources;
 pub mod spec;
+pub mod ww3grid;
 pub mod ww3io;
 
 #[cfg(feature = "cubecl")]

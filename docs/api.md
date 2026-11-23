@@ -37,6 +37,7 @@ documented and the CI builds the documentation with warnings as errors.
 | `reference` | no | `step`: `PDLIB_W3XYPFSN2` on the CPU in double precision |
 | `cpu` | no | `ktp3` (`W3KTP3`) and `geo_freq` (`PDLIB_W3XYPUG`) on the CPU |
 | `harness` | no | readers of the WW3 source-term harness files and of their parameter files (`Harness`, `Params`) |
+| `ww3grid` | no | `source_params`: the parameter file of the source terms from the namelists and the grid (`ww3_grid`); `Namelists`, `GridSetup` |
 | `sources` | no | the ST4 source terms, DIA, LN1, DB1, BT4 and `W3SRCE` on the CPU in double precision; `SrceTables` (their layout for the GPU), `tabu_tauhf2` (the tail-stress tables and their derivative with respect to `BETAMAX`) |
 | `backend` | no | `Sweeper` (forward and transposed sub-steps), `Scalar`, `Dims` |
 | `kernels` | CubeCL | N-scheme kernels: `fused`, `two_phase`, `two_phase_x4`, forward and transpose |
