@@ -80,7 +80,9 @@ double precision give the first gradients of its scores with respect to the
 wind and four ST4 parameters. Its hand-written tangent agrees with
 double-precision finite differences to $10^{-4}$ at nearly every node where
 the model is smooth, but within hours a change of $10^{-4}$ in the wind
-flips discrete choices of the model at most nodes.
+flips discrete choices of the model at most nodes. Over 48 hours the
+tangent gives the derivatives of the total energy and of the mean $H_s$
+within 0.1 to 4\,\% of finite differences with steps of 1\,\%.
 \end{abstract}
 
 \section{Motivation}
@@ -2085,7 +2087,7 @@ function, friction factor) set the larger values of \texttt{W3SDS4} and
 \label{tab:m2src}
 \end{table}
 
-\paragraph{Milestone M3 (in progress).} M3 differentiates the GPU model in
+\paragraph{Milestone M3 (target met where the model is smooth).} M3 differentiates the GPU model in
 forward mode, for a relative change of the wind speed or of a source
 parameter (\texttt{BETAMAX}, \texttt{SDSC2}, \texttt{NLPROP},
 \texttt{BJGAM}).
@@ -2149,9 +2151,36 @@ The differences themselves do not converge with the step. The tangent is
 the exact derivative of the model where it is smooth. Finite differences
 with a step of 1\,\%, as in M2b, include the mean effect of the jumps,
 which is what a calibration sees.
-\item \emph{Next.} Tangent runs of 48 hours for each direction are being
-compared with the finite differences of M2b (jobs 4163952 to 4163958).
+\item \emph{Over 48 hours.} Tangent runs of the five directions over the
+48 hours of the finite differences of M2b (jobs 4163952 to 4163956,
+compared by job 4163958) take \SI{645}{s} per model day on one A100 in
+double precision, 1.5 times the \SI{433}{s} of a value run: one tangent
+run costs less than the two runs of a central difference. They give the
+derivative of the total energy on 10 January within 0.1 to 3.4\,\% of the
+finite differences, and that of the mean $H_s$ within 0.15 to 3.6\,\%
+(Table~\ref{tab:m3fd}). The agreement is closest for the parameters that
+scale a term smoothly (\texttt{SDSC2}, \texttt{BETAMAX}). It is farthest
+for depth-induced breaking, whose fraction of breaking waves \texttt{QB}
+has thresholds at $H_{rms}/H_m$ = 0.2, 0.5 and 1 and acts at a few shallow
+nodes.
+\item \emph{The gap is not an error of the tangent.} The wind tangent
+stays 1 to 2\,\% above the differences over the whole run, as over three
+hours, while the differences with steps of 1\,\% and 0.1\,\% agree with
+each other to $10^{-3}$. Over three hours, the gap for the wind stays
+about 1.5\,\% for steps from $10^{-3}$ down to $10^{-5}$. It is the mean
+effect of the discrete choices of the model, whose share of a difference
+does not shrink with the step. Node by node after 48 hours, the two
+differences agree to $10^{-3}$ at only 19 to 31\,\% of the nodes, and
+there the tangent differs from them by 0.2\,\% at the median node.
 \end{itemize}
+The target of M3, agreement with double-precision finite differences to
+$10^{-4}$ where the model is smooth, is met for one source step and over
+three hours. Over 48 hours the model is smooth almost nowhere. The tangent
+then gives the derivatives of the aggregates within 0.1 to 4\,\% of finite
+differences with a step of 1\,\%, which include the mean effect of the
+jumps. For a calibration this is a gradient within a few per cent, for less
+than the cost of one central difference. The reverse mode of M4 will see
+the same jumps.
 
 \begin{table}[H]
 \centering\small
@@ -2209,6 +2238,29 @@ of these nodes above the target. \emph{Spectra}: the same relative change
 of all the restart spectra, without the source terms (\emph{no sources})
 or with them. Slurm jobs 4163934 to 4163936.}
 \label{tab:m3loop}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrr}
+\toprule
+ & \multicolumn{2}{c}{total energy} & mean $H_s$ \\
+direction & 9 January 00\,h & 10 January 00\,h & 10 January 00\,h \\
+\midrule
+wind & 2.0 (2.0) & 1.0 (1.05) & 0.92 \\
+\texttt{BETAMAX} & 0.92 (1.2) & 0.20 (0.09) & 0.30 \\
+\texttt{SDSC2} & 0.19 & 0.11 & 0.15 \\
+\texttt{NLPROP} & 3.2 & 1.1 & 1.1 \\
+\texttt{BJGAM} & 4.3 & 3.4 & 3.6 \\
+\bottomrule
+\end{tabular}
+\caption{Milestone M3: tangent of the GPU model over 48 hours on grid v5
+$K=4$ from the restart of 8 January 00\,h, in double precision, against
+the central differences of M2b (Table~\ref{tab:m2grad}). Relative
+difference in percent between the tangent and the difference with a step
+of 1\,\%, and with a step of 0.1\,\% in brackets. Slurm jobs 4163952 to
+4163956 and 4163958.}
+\label{tab:m3fd}
 \end{table}
 
 
@@ -2304,6 +2356,9 @@ figures) is described step by step in the Sphinx documentation,
   with \texttt{HOURS=3} and \texttt{H=1e-4:1e-5} (and \texttt{NOSRC=1}
   for the propagation alone), then \texttt{scripts/m3\_tl\_compare.py}
   (\texttt{docs/reproducing.md}).
+\item Table~\ref{tab:m3fd}: \texttt{scripts/m3\_tl\_run\_hpc.slurm} with
+  \texttt{HOURS=48}, one run per direction, then
+  \texttt{scripts/m3\_tl\_cmp\_hpc.slurm} (\texttt{docs/reproducing.md}).
 \end{itemize}
 
 \end{document}
