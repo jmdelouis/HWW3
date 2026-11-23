@@ -2310,11 +2310,67 @@ altimeter bias goes from \SI{-93}{cm} on 1 January to \SI{-1.6}{cm} on
 5 January, then $+3.7$ to \SI{+6.5}{cm}. The training window, 5 January
 12\,h to 7 January 12\,h, holds 24\,153 altimeter blocks and 255 buoys
 (12\,247 hours of $H_s$, 8\,292 of $T_{m02}$); the validation window,
-7 January 13\,h to 10 January 00\,h, 27\,935 blocks and 257 buoys. With
-the present parameters the cost is 47\,250 on the training window, of
-which 25\,049 from the altimeters and 13\,335 from the buoy $H_s$. The
-four tangent runs at these parameters are under way.
+7 January 13\,h to 10 January 00\,h, 27\,935 blocks and 257 buoys. Buoys whose $T_{m02}$ RMSE exceeds \SI{3}{s} at the
+start (2 in the training window) count in the scores but not in the cost.
+\item \emph{Starting point.} With the present parameters, the training
+window gives \SI{+2.86}{cm} and \SI{25.46}{cm} of bias and RMSE against
+the altimeters, \SI{-4.85}{cm} and \SI{31.30}{cm} against the buoy $H_s$
+and \SI{-0.399}{s} and \SI{1.131}{s} against their $T_{m02}$; the
+validation window \SI{+5.76}{cm} and \SI{26.46}{cm}, \SI{-3.30}{cm} and
+\SI{41.43}{cm}, \SI{-0.393}{s} and \SI{1.148}{s}. The cost is 47\,250 over
+44\,595 residuals: 25\,049 from the altimeters, 13\,335 from the buoy
+$H_s$ and 8\,865 from $T_{m02}$. Its derivatives with respect to
+$\ln p$ come from four tangent runs of 156 hours in double precision
+(Table~\ref{tab:cal0}). The waves are too high offshore and too low at
+the buoys, most of them near the coast, and their periods too short.
+\item \emph{Control against finite differences.} Over the 48 hours of
+M2b, the tangent runs give the derivatives of the cost within 0.4\,\%
+(\texttt{SDSC2}), 4.6\,\% (\texttt{BETAMAX}), 4.9\,\% (\texttt{NLPROP})
+and 7.8\,\% (\texttt{BJGAM}) of the existing finite differences, and those
+of the $H_s$ biases and RMSEs within 0.15 to 5.5\,\%, except the buoy
+$H_s$ RMSE for \texttt{BETAMAX} (44\,\%, where the two finite differences
+differ by 4\,\%). For $T_{m02}$ the bias derivatives differ by 3.5 to
+21\,\% and the RMSE derivatives do not agree. The $T_{m02}$ tangent is
+right node by node: where the differences with steps of 1\,\% and
+0.1\,\% agree (41 to 44\,\% of the nodes), it differs from them by
+$3$ to $6\times10^{-3}$ at the median node and its mean matches
+($-0.0874$ against \SI{-0.0871}{s} for \texttt{BETAMAX}). The aggregate
+gaps come from the jumps of the tail cut-off \texttt{NKH}, which
+$T_{m02}$ weights by $\sigma^2$.
+\item \emph{First Gauss--Newton step.} The posterior correlations are
+0.64 between \texttt{BETAMAX} and \texttt{SDSC2} and 0.74 between
+\texttt{SDSC2} and \texttt{NLPROP}. \texttt{BJGAM} is constrained only by
+a few shallow buoys: the full step would raise its logarithm by 0.75, and
+the limit of 0.3 per step scales the whole step by 0.40. The trial point
+multiplies \texttt{BETAMAX} by 0.990, \texttt{SDSC2} by 1.070,
+\texttt{NLPROP} by 1.095 and \texttt{BJGAM} by 1.35, for a predicted
+decrease of the cost of 0.77\,\%. Its value run (job 4184904) decides
+whether the step is taken. About 12 GPU-hours have been used so far.
 \end{itemize}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrrrrrr}
+\toprule
+ & & \multicolumn{3}{c}{derivative of the bias} & & \\
+$p$ & $\partial J/\partial\ln p$ & altimeters & buoy $H_s$ & buoy $T_{m02}$ & s.d. & step \\
+\midrule
+\texttt{BETAMAX} & 25\,108 & 0.925 & 0.416 & 0.423 & 0.0045 & 0.990 \\
+\texttt{SDSC2} & $-10\,585$ & $-0.435$ & $-0.203$ & $-0.218$ & 0.015 & 1.070 \\
+\texttt{NLPROP} & 5\,913 & 0.344 & 0.129 & 0.412 & 0.014 & 1.095 \\
+\texttt{BJGAM} & $-118$ & 0.000 & 0.001 & 0.001 & 0.110 & 1.350 \\
+\bottomrule
+\end{tabular}
+\caption{Calibration: derivatives at the present parameters over the
+training window (5 January 12\,h to 7 January 12\,h), from tangent runs
+of 156 hours in double precision from the cold start of 1 January on grid
+v5 $K=4$: of the cost $J$ and of the biases (m per unit of $\ln p$, s for
+$T_{m02}$). \emph{S.d.}: posterior standard deviation of $\ln p$ for
+independent errors of the given sigmas, a lower bound since the errors of
+neighbouring altimeter blocks and buoy hours are correlated. \emph{Step}:
+factor of the trial point of the first step. Slurm jobs 4178795 to 4178798.}
+\label{tab:cal0}
+\end{table}
 
 
 \appendix
@@ -2412,6 +2468,12 @@ figures) is described step by step in the Sphinx documentation,
 \item Table~\ref{tab:m3fd}: \texttt{scripts/m3\_tl\_run\_hpc.slurm} with
   \texttt{HOURS=48}, one run per direction, then
   \texttt{scripts/m3\_tl\_cmp\_hpc.slurm} (\texttt{docs/reproducing.md}).
+\item \begin{sloppypar}Table~\ref{tab:cal0}:
+  \texttt{scripts/cal\_run\_hpc.slurm} with \texttt{BETAMAX=1.75},
+  \texttt{HOURS=156} and \texttt{TANGENT} set to each parameter, then
+  \texttt{cal\_obs.py build}, \texttt{cal\_obs.py eval} and
+  \texttt{cal\_gn.py}, each through
+  \texttt{scripts/cal\_py\_hpc.slurm}.\end{sloppypar}
 \end{itemize}
 
 \end{document}
