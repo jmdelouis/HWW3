@@ -33,11 +33,12 @@ documented and the CI builds the documentation with warnings as errors.
 | `grid` | no | HWW3 grid reader (`Grid`, `Spectrum`), lon/lat box cut |
 | `geom` | no | `Geometry`: normals, `PDLIB_SI`, boundary flags, velocities, `ITER` |
 | `spec` | no | `Spec` (spectral grid of `W3GRID`), `wavnu3`, `node_wavenumbers` |
-| `ww3io` | no | `Restart` (`read`, `write`, `calm`), `FieldFile`, `NestFile`, `SeqFile`, `Time` |
+| `ww3io` | no | `Restart` (`read`, `write`, `calm`), `FieldFile`, `FieldWriter`, `NestFile`, `SeqFile`, `Time` |
 | `reference` | no | `step`: `PDLIB_W3XYPFSN2` on the CPU in double precision |
 | `cpu` | no | `ktp3` (`W3KTP3`) and `geo_freq` (`PDLIB_W3XYPUG`) on the CPU |
 | `harness` | no | readers of the WW3 source-term harness files and of their parameter files (`Harness`, `Params`) |
 | `ww3grid` | no | `source_params`: the parameter file of the source terms from the namelists and the grid (`ww3_grid`); `Namelists`, `GridSetup` |
+| `prnc` | no | `SourceGrid::weights`, `Weights::interp`, `Field::process`, `unpack`, `RawInput`: the interpolation of `ww3_prnc` |
 | `sources` | no | the ST4 source terms, DIA, LN1, DB1, BT4 and `W3SRCE` on the CPU in double precision; `SrceTables` (their layout for the GPU), `tabu_tauhf2` (the tail-stress tables and their derivative with respect to `BETAMAX`) |
 | `backend` | no | `Sweeper` (forward and transposed sub-steps), `Scalar`, `Dims` |
 | `kernels` | CubeCL | N-scheme kernels: `fused`, `two_phase`, `two_phase_x4`, forward and transpose |
@@ -97,4 +98,6 @@ other values of the calibrated parameters). The Fortran harness
 | `cal_run_hpc.slurm` | a run of the calibration: value or tangent run with given `BETAMAX` (Rust stress tables), `SDSC2`, `NLPROP`, `BJGAM` |
 | `cal_obs.py`, `cal_py_hpc.slurm` | the observation operators of the calibration (altimeter blocks, buoy hours, as the validation scripts match them), the cost and its gradient from tangent runs |
 | `cal_gn.py` | one Gauss–Newton (Levenberg–Marquardt) step with the posterior covariance |
+| `prnc_nc.py` | a netCDF forcing file read as `ww3_prnc` reads it, for `hww3-pre prnc` |
+| `pre_restart_hpc.slurm` | the start from calm conditions against WW3, and a run continued from a GPU restart against the same run in one piece |
 | `cal_fdcheck.py` | the tangent derivatives of the cost and scores against the M2b finite differences (control only) |

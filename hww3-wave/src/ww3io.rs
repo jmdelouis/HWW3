@@ -447,6 +447,8 @@ pub struct FieldFile {
     pub ny: usize,
     /// Fields per time: 2 for currents, 1 for levels and ice.
     pub nfield: usize,
+    /// Grid type of the header (`GTYPE`, 3 for an unstructured grid).
+    pub gtype: i32,
 }
 
 impl FieldFile {
@@ -460,12 +462,13 @@ impl FieldFile {
         let id = String::from_utf8_lossy(&h[13..16]).to_string();
         let nx = be_i32(&h[16..20]) as usize;
         let ny = be_i32(&h[20..24]) as usize;
+        let gtype = be_i32(&h[24..28]);
         let nfield = match id.as_str() {
             "CUR" | "WND" => 2,
             "LEV" | "ICE" => 1,
             other => bail!("{}: field {other} not handled", p.display()),
         };
-        Ok(FieldFile { f, id, nx, ny, nfield })
+        Ok(FieldFile { f, id, nx, ny, nfield, gtype })
     }
 
     /// Next time and its fields, or `None` at the end of the file.
@@ -484,6 +487,63 @@ impl FieldFile {
             fields.push(be_f32s(&b));
         }
         Ok(Some((time, fields)))
+    }
+}
+
+/// A forcing file as `ww3_prnc` writes it (`W3FLDO`, `W3FLDG`): a header
+/// record (`'WAVEWATCH III'`, `IDFLD`, `NX`, `NY`, `GTYPE`, two filler
+/// words written as zero, `TIDEFLAG` = 0), then per time a record with the
+/// time and one record per field.
+pub struct FieldWriter {
+    w: BufWriter<File>,
+    n: usize,
+    nfield: usize,
+}
+
+fn write_record(w: &mut impl Write, body: &[u8]) -> Result<()> {
+    let n = (body.len() as i32).to_be_bytes();
+    w.write_all(&n)?;
+    w.write_all(body)?;
+    w.write_all(&n)?;
+    Ok(())
+}
+
+impl FieldWriter {
+    /// Create a forcing file of field `id` (`CUR`, `WND`, `LEV`, `ICE`).
+    pub fn create(p: &Path, id: &str, nx: usize, ny: usize, gtype: i32) -> Result<FieldWriter> {
+        let nfield = match id {
+            "CUR" | "WND" => 2,
+            "LEV" | "ICE" => 1,
+            other => bail!("field {other} not handled"),
+        };
+        let mut w = BufWriter::with_capacity(1 << 22, File::create(p).with_context(|| format!("create {}", p.display()))?);
+        let mut h = b"WAVEWATCH III".to_vec();
+        h.extend(id.bytes());
+        for v in [nx as i32, ny as i32, gtype, 0, 0, 0] {
+            h.extend(v.to_be_bytes());
+        }
+        write_record(&mut w, &h)?;
+        Ok(FieldWriter { w, n: nx * ny, nfield })
+    }
+
+    /// Write the fields of one time.
+    pub fn write(&mut self, t: Time, fields: &[Vec<f32>]) -> Result<()> {
+        anyhow::ensure!(fields.len() == self.nfield, "{} fields for {} per time", fields.len(), self.nfield);
+        let mut tb = t.0.to_be_bytes().to_vec();
+        tb.extend(t.1.to_be_bytes());
+        write_record(&mut self.w, &tb)?;
+        for f in fields {
+            anyhow::ensure!(f.len() == self.n, "field of {} values for {}", f.len(), self.n);
+            let b: Vec<u8> = f.iter().flat_map(|v| v.to_be_bytes()).collect();
+            write_record(&mut self.w, &b)?;
+        }
+        Ok(())
+    }
+
+    /// Flush the file.
+    pub fn finish(mut self) -> Result<()> {
+        self.w.flush()?;
+        Ok(())
     }
 }
 
@@ -693,6 +753,23 @@ mod tests {
         assert_eq!(&r.mapsta[2..6], &[1, 2, -1, -2]);
         assert_eq!(&r.mapst2[2..6], &[0, 0, 1, 2]);
         assert_eq!(r.va[2 * nspec + 5], 2005.0);
+    }
+
+    #[test]
+    fn forcing_written_back() {
+        let p = tmp("forcing_rw");
+        let mut w = FieldWriter::create(&p, "CUR", 3, 1, 3).unwrap();
+        w.write(Time(20260101, 0), &[vec![1.0, 2.0, 3.0], vec![-1.0, -2.0, -3.0]]).unwrap();
+        w.write(Time(20260101, 10000), &[vec![4.0, 5.0, 6.0], vec![0.5, 0.25, 0.0]]).unwrap();
+        w.finish().unwrap();
+        let mut f = FieldFile::open(&p).unwrap();
+        assert_eq!((f.id.as_str(), f.nx, f.ny, f.nfield, f.gtype), ("CUR", 3, 1, 2, 3));
+        let (t, v) = f.next().unwrap().unwrap();
+        assert_eq!((t, v[1][2]), (Time(20260101, 0), -3.0));
+        let (t, v) = f.next().unwrap().unwrap();
+        assert_eq!((t, v[0][1], v[1][1]), (Time(20260101, 10000), 5.0, 0.25));
+        assert!(f.next().unwrap().is_none());
+        std::fs::remove_file(&p).unwrap();
     }
 
     #[test]

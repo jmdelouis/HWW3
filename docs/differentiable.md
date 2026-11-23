@@ -857,8 +857,12 @@ Details and the list of what remains are in
   restarts byte for byte. The GPU checks (calm start against WW3, a run
   continued from a GPU restart against the same run in one piece) wait for
   a GPU (job 4191399).
-- Still to port: the interpolation of the forcing (`ww3_prnc`) and the
-  boundary spectra (`ww3_bounc`).
+- **Forcing fields.** The interpolation of `ww3_prnc` is ported
+  (`hww3_wave::prnc`, `hww3-pre prnc`, with `scripts/prnc_nc.py` reading
+  the netCDF files); it reproduces linear and uniform synthetic fields to
+  single-precision round-off. The comparison with WW3's forcing files
+  waits for the netCDF sources, which are on Datarmor.
+- Still to port: the boundary spectra (`ww3_bounc`).
 
 ## 10. Other routes, briefly
 

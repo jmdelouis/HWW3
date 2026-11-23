@@ -43,6 +43,7 @@ pub mod cpu;
 pub mod geom;
 pub mod grid;
 pub mod harness;
+pub mod prnc;
 pub mod reference;
 pub mod sources;
 pub mod spec;

@@ -994,3 +994,31 @@ allocates, of which `INSIN4` fills 17. The file takes 1.8 s to build.
   gives the same $H_s$ and $T_{m02}$ in one piece and in two pieces joined
   by a restart at 00:10. Reading such a restart with WW3 has not been
   tried.
+
+### Forcing fields (`ww3_prnc`)
+
+`hww3_wave::prnc` ports what `ww3_prnc` does on an HWW3 grid
+(`FORCING%GRID%LATLON = T`, an unstructured target): for each node, the cell
+of the regular source grid that holds it, bilinear weights (scaled by the
+factor `EFAC`, which differs from 1 only outside the source grid),
+`INTERP`, which leaves out corners at `_FillValue` and divides by the sum
+of the other weights, and for the vector fields the rescaling of the
+interpolated vector to the interpolated root-mean-square speed for the
+wind (`WNT2`) or mean speed for the currents (`CRT1`), at most by 1.5. The
+arithmetic is in single precision in WW3's order, including
+`MOD(360 + x - X0I, 360)` on the longitudes. The crate has no netCDF reader
+and the hpc cluster has no Rust netCDF crate, so `scripts/prnc_nc.py`
+reads the netCDF file as `ww3_prnc` does (values as stored, `_FillValue`,
+`scale_factor`, `add_offset` and the axes in single precision) and
+`hww3-pre prnc` does the rest and writes the forcing file
+(`ww3io::FieldWriter`, the format of `W3FLDG`). With `--msh` the node
+coordinates are read from the gmsh file, as WW3 reads them; on grid v5
+$K=4$ they agree with the grid's raw arrays to 5e-11 degree.
+
+On synthetic fields on a 0.25-degree grid covering grid v5 $K=4$, a water
+level linear in longitude and latitude comes out within 7.5e-7 m of its
+exact values at the 424,123 nodes, and a uniform wind (10, 5 m/s) within
+1.9e-6 m/s; each file takes 0.2 s. The comparison with the forcing files
+of the WW3 runs needs their netCDF sources (ERA5 wind and ice, Copernicus
+Marine currents and sea level with the FES2014 tide), which are on
+Datarmor.

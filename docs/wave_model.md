@@ -68,7 +68,7 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | `grid` | no | read an HWW3 grid (`raw/*`, `ww3_grid.nml`); cut a lon/lat box |
 | `geom` | no | what WW3 builds for the PDLIB scheme: normals, `PDLIB_SI`, `IOBP`, `IOBPA`, `IOBDP`, `IOBPD`, velocities, `ITER` |
 | `spec` | no | spectral grid of `W3GRID`; `WAVNU3` |
-| `ww3io` | no | big-endian WW3 files: restart (read and write), forcing fields, boundary spectra |
+| `ww3io` | no | big-endian WW3 files: restart (read and write), forcing fields (read and write), boundary spectra |
 | `reference` | no | `PDLIB_W3XYPFSN2` on the CPU in double precision, as WW3 writes it |
 | `cpu` | no | CPU transcriptions of `W3KTP3` and `PDLIB_W3XYPUG` |
 | `harness` | no | reader of the WW3 source-term harness: inputs, outputs and parameters of the source terms |
@@ -82,6 +82,7 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | `srce_tl` | CubeCL | the source kernel with its tangent (forward mode) |
 | `prop_tl` | CubeCL | the tangents of `W3KTP3`, of the geographic node update, of the level remap, of the wind and of the outputs |
 | `ww3grid` | no | the source-term part of `ww3_grid`: the parameter file of the source terms from the namelists and the grid |
+| `prnc` | no | the interpolation of `ww3_prnc`: weights, `INTERP` and the rescaling of vector fields (`WNT2`, `CRT1`) |
 | `model` | CubeCL | the time loop of `W3WAVE`, propagation only or with the source terms |
 | `cuda_c` | CUDA C | the M0 kernels in CUDA C, through `cudarc` and NVRTC |
 
@@ -235,3 +236,18 @@ file depends on these four parameters (the saturation weights,
 memory. `build-params` builds the whole parameter file from the namelists
 of the run and the grid (`ww3grid`, the source-term part of `ww3_grid`),
 and with `--check` compares it record by record with a harness file.
+
+### `hww3-pre` (preprocessing)
+
+```text
+python scripts/prnc_nc.py FILE.nc VAR[+VAR2] DIR [--start T] [--stop T]
+hww3-pre prnc <grid dir> --field wind|current|level|ice --input DIR --out FILE.ww3
+          [--msh FILE.msh] [--start T] [--stop T]
+hww3-pre cmp-fields A.ww3 B.ww3
+```
+
+`prnc` writes the forcing file of `ww3_prnc` from the netCDF fields that
+`scripts/prnc_nc.py` wrote to `DIR` (`prnc`, see above); `--msh` takes the
+node coordinates from the gmsh file as WW3 does. `cmp-fields` compares two
+forcing files time by time (values that differ, largest difference). It
+needs no GPU.
