@@ -1783,8 +1783,33 @@ pub const P_SDSC5: usize = 126;
 pub const P_SDSC21: usize = 127;
 /// `DIKCUMUL`.
 pub const P_DIKCUMUL: usize = 128;
+/// `BETAMAX` depending on the wind (`BETAMAX(U)`): number of knots of the
+/// basis (0: a constant `BETAMAX`). With knots `U_0 < ... < U_{n-1}` and
+/// coefficients `c_k`, `BETAMAX = P_BBETA exp(sum_k c_k phi_k(U))` at each
+/// node and step, `U` the wind speed the source terms see and `phi_k` the
+/// piecewise-linear hat functions of the knots, constant below `U_0` and
+/// above `U_{n-1}`, which add up to 1.
+pub const P_BU_NK: usize = 129;
+/// Largest number of knots of `BETAMAX(U)`.
+pub const BU_MAXK: usize = 10;
+/// Knots of `BETAMAX(U)` (m/s), `BU_MAXK` entries.
+pub const P_BU_KNOT: usize = 130;
+/// Coefficients `c_k` of `BETAMAX(U)` (in `ln BETAMAX`), `BU_MAXK` entries.
+pub const P_BU_COEF: usize = 140;
+/// Tail-stress tables in `BETAMAX`: their number (0 or 1: one table, that
+/// of `P_BBETA`). With `n >= 2` the tail-stress buffer holds the tables at
+/// `BETAMAX = B0 + m DB`, `m = 0 .. n-1`, then their derivatives with respect
+/// to `BETAMAX`, each `STRIDE` values, interpolated in `BETAMAX` by cubic
+/// Hermite polynomials (exact at the grid values).
+pub const P_BT_N: usize = 150;
+/// See [`P_BT_N`]: `B0`.
+pub const P_BT_B0: usize = 151;
+/// See [`P_BT_N`]: `DB`.
+pub const P_BT_DB: usize = 152;
+/// See [`P_BT_N`]: `STRIDE`.
+pub const P_BT_STRIDE: usize = 153;
 /// Number of scalar parameters.
-pub const NPAR: usize = 129;
+pub const NPAR: usize = 154;
 
 /// The parameters and tables of [`SrcePar`] laid out for the GPU source
 /// kernel: scalars at the `P_*` indices, per-frequency factors, the
@@ -1840,6 +1865,126 @@ pub struct SrceTables {
     pub cumw: Vec<f64>,
 }
 
+/// `BETAMAX(U)`: `ln BETAMAX = ln BETAMAX_0 + sum_k c_k phi_k(U)`, with
+/// `phi_k` the hat functions of the knots (wind speeds in m/s, constant
+/// below the first knot and above the last, adding up to 1) and `U` the
+/// 10 m wind speed the source terms see at the node. With `SINTABLE = 1`
+/// the tail-stress tables are computed at `n` values of `BETAMAX` from `b0`
+/// in steps of `db`, with their derivatives, and interpolated in `BETAMAX`
+/// by cubic Hermite polynomials (exact at the grid values).
+#[derive(Clone, Debug)]
+pub struct BetaU {
+    /// Knots (m/s), increasing, at most [`BU_MAXK`].
+    pub knots: Vec<f64>,
+    /// Coefficients `c_k` of `ln BETAMAX`, one per knot.
+    pub coefs: Vec<f64>,
+    /// First `BETAMAX` of the tables.
+    pub b0: f64,
+    /// Step of `BETAMAX` between the tables.
+    pub db: f64,
+    /// Number of tables.
+    pub n: usize,
+}
+
+impl BetaU {
+    /// From `KNOTS:COEFS` (comma-separated lists; `COEFS` may be left empty
+    /// for zeros) and the grid of the tables `B0:DB:N`.
+    pub fn parse(s: &str, grid: &str) -> Result<BetaU> {
+        let list = |x: &str| -> Result<Vec<f64>> { x.split(',').filter(|v| !v.is_empty()).map(|v| Ok(v.trim().parse::<f64>()?)).collect() };
+        let (k, c) = s.split_once(':').unwrap_or((s, ""));
+        let knots = list(k)?;
+        let mut coefs = list(c)?;
+        if coefs.is_empty() {
+            coefs = vec![0.0; knots.len()];
+        }
+        if knots.len() < 2 || knots.len() > BU_MAXK || coefs.len() != knots.len() {
+            bail!("BETAMAX(U): {} knots and {} coefficients (2 to {BU_MAXK} knots, one coefficient each)", knots.len(), coefs.len());
+        }
+        if knots.windows(2).any(|w| w[1] <= w[0]) {
+            bail!("BETAMAX(U): the knots must increase: {knots:?}");
+        }
+        let g: Vec<&str> = grid.split(':').collect();
+        if g.len() != 3 {
+            bail!("BETAMAX(U): the grid of the tables is B0:DB:N, got {grid}");
+        }
+        let (b0, db, n) = (g[0].parse::<f64>()?, g[1].parse::<f64>()?, g[2].parse::<usize>()?);
+        if n < 2 || db <= 0.0 || b0 <= 0.0 {
+            bail!("BETAMAX(U): grid {grid}");
+        }
+        Ok(BetaU { knots, coefs, b0, db, n })
+    }
+
+    /// `ln BETAMAX(U) - ln BETAMAX_0` at the wind speed `u` (as the kernels).
+    pub fn ln(&self, u: f64) -> f64 {
+        let x = &self.knots;
+        let n = x.len();
+        let uc = u.max(x[0]).min(x[n - 1]);
+        (0..n)
+            .map(|k| {
+                let phi = if uc >= x[k] {
+                    if k + 1 < n {
+                        ((x[k + 1] - uc) / (x[k + 1] - x[k])).max(0.0)
+                    } else {
+                        1.0
+                    }
+                } else if k > 0 {
+                    ((uc - x[k - 1]) / (x[k] - x[k - 1])).max(0.0)
+                } else {
+                    1.0
+                };
+                self.coefs[k] * phi
+            })
+            .sum()
+    }
+}
+
+/// Set `BETAMAX(U)` in the tables of the source kernel: the knots and
+/// coefficients, and with `SINTABLE = 1` the tail-stress tables and their
+/// derivatives in `BETAMAX` at the grid of `bu`, laid out as the `n` tables
+/// then the `n` derivatives ([`P_BT_N`] .. [`P_BT_STRIDE`]).
+pub fn betau_tables(q: &SrcePar, t: &mut SrceTables, bu: &BetaU) -> Result<()> {
+    let nk = bu.knots.len();
+    t.par[P_BU_NK] = nk as f64;
+    t.par[P_BU_KNOT..P_BU_KNOT + nk].copy_from_slice(&bu.knots);
+    t.par[P_BU_COEF..P_BU_COEF + nk].copy_from_slice(&bu.coefs);
+    let b = t.par[P_BBETA];
+    let lo = bu.coefs.iter().cloned().fold(f64::MAX, f64::min).min(0.0);
+    let hi = bu.coefs.iter().cloned().fold(f64::MIN, f64::max).max(0.0);
+    let (bmin, bmax) = (b * lo.exp(), b * hi.exp());
+    eprintln!("sources: BETAMAX(U) = {b} exp(sum c_k phi_k(U)), knots {:?} m/s, c {:?}, BETAMAX from {bmin:.4} to {bmax:.4}", bu.knots, bu.coefs);
+    if t.par[P_SINTABLE] <= 0.0 {
+        return Ok(());
+    }
+    let top = bu.b0 + (bu.n - 1) as f64 * bu.db;
+    if bmin < bu.b0 || bmax > top {
+        bail!("BETAMAX(U) from {bmin} to {bmax} outside the tables ({} to {top})", bu.b0);
+    }
+    let p = &q.st;
+    let st = p.tables.as_ref().ok_or_else(|| anyhow::anyhow!("no stress tables"))?;
+    let t0 = std::time::Instant::now();
+    let stride = t.tauhf.len();
+    let mut val = Vec::with_capacity(bu.n * stride);
+    let mut der = Vec::with_capacity(bu.n * stride);
+    for i in 0..bu.n {
+        let bb = bu.b0 + i as f64 * bu.db;
+        let (h1, d1, h2, d2) = tabu_tauhf2(p, st, p.sig[p.nk], bb);
+        let (h, d) = if p.ttauwshelter > 0.0 { (h2, d2) } else { (h1, d1) };
+        if h.len() != stride {
+            bail!("tail-stress table of {} values against {stride}", h.len());
+        }
+        val.extend(h);
+        der.extend(d);
+    }
+    val.extend(der);
+    t.tauhf = val;
+    t.par[P_BT_N] = bu.n as f64;
+    t.par[P_BT_B0] = bu.b0;
+    t.par[P_BT_DB] = bu.db;
+    t.par[P_BT_STRIDE] = stride as f64;
+    eprintln!("sources: {} tail-stress tables in BETAMAX from {} to {top} in {:.1} s", bu.n, bu.b0, t0.elapsed().as_secs_f64());
+    Ok(())
+}
+
 /// Index in [`SrceTables::par`] of a namelist parameter of the source terms:
 /// `BETAMAX`, `SDSC2`, `NLPROP` (`SNLC1` of the DIA), `BJGAM` (`SDBC2`).
 pub fn par_index(name: &str) -> Result<usize> {
@@ -1848,7 +1993,10 @@ pub fn par_index(name: &str) -> Result<usize> {
         "SDSC2" => P_SDSC2,
         "NLPROP" => P_SNLC1,
         "BJGAM" => P_SDBC2,
-        _ => bail!("unknown source parameter {name} (BETAMAX, SDSC2, NLPROP, BJGAM)"),
+        _ => match name.strip_prefix("BETAU").and_then(|k| k.parse::<usize>().ok()) {
+            Some(k) if k < BU_MAXK => P_BU_COEF + k,
+            _ => bail!("unknown source parameter {name} (BETAMAX, SDSC2, NLPROP, BJGAM, BETAU0 .. BETAU{})", BU_MAXK - 1),
+        },
     })
 }
 

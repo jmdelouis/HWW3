@@ -245,8 +245,25 @@ fn spr4_tl<F: Float>(
     sync_cube();
 }
 
+/// Tangent of [`tauhf2`] from the tangents of its weights `ddeli1` and
+/// `ddelj1` (the table itself fixed).
+#[cube]
+#[allow(clippy::too_many_arguments)]
+fn tauhf2_d<F: Float>(tab: &[F], base: usize, ind: usize, j: usize, n1: usize, deli1: F, deli2: F, delj1: F, ddeli1: F, ddelj1: F) -> F {
+    let delj2 = F::new(1.0f32) - delj1;
+    let a00 = tab[ind + j * n1 + base];
+    let a10 = tab[ind + 1 + j * n1 + base];
+    let a01 = tab[ind + (j + 1) * n1 + base];
+    let a11 = tab[ind + 1 + (j + 1) * n1 + base];
+    ((a10 - a00) * delj2 + (a11 - a01) * delj1) * ddeli1 + ((a01 * deli2 + a11 * deli1) - (a00 * deli2 + a10 * deli1)) * ddelj1
+}
+
 /// `W3SIN4` with `SINTABLE = 1` and its tangent; `dbeta` is the derivative
-/// of `BETAMAX` and `dtauhf` that of the tail-stress table.
+/// of `BETAMAX` and `dtauhf` that of the tail-stress table. `beta` is the
+/// `BETAMAX` of the node: with tables in `BETAMAX` ([`P_BT_N`] > 1, for
+/// `BETAMAX(U)`), the tail stress is the cubic Hermite interpolation in
+/// `BETAMAX` of the tables and their derivatives, and its tangent in `BETAMAX`
+/// comes from that interpolation (`dtauhf` is then not used).
 #[cube]
 #[allow(clippy::too_many_arguments, unused_assignments)]
 fn sin4_tl<F: Float>(
@@ -279,6 +296,7 @@ fn sin4_tl<F: Float>(
     dz0: F,
     usdir: F,
     dusdir: F,
+    beta: F,
     dbeta: F,
     scale: F,
     accumulate: bool,
@@ -294,7 +312,7 @@ fn sin4_tl<F: Float>(
     let kappa = par[P_KAPPA];
     let nu_air = par[P_NU_AIR];
     let drat = par[P_DRAT];
-    let const1 = par[P_BBETA] / (kappa * kappa);
+    let const1 = beta / (kappa * kappa);
     let dconst1 = dbeta / (kappa * kappa);
     let const0 = const1 * drat;
     let dconst0 = dconst1 * drat;
@@ -595,7 +613,75 @@ fn sin4_tl<F: Float>(
         let n2 = ial + 1;
         let mut tau1 = zero;
         let mut dtau1 = zero;
-        if par[P_TTAUWSHELTER] > zero {
+        // tables in BETAMAX (BETAMAX(U)): cubic Hermite weights hw of the
+        // tables and their derivatives at the two grid values around BETAMAX,
+        // and the derivatives hd of the weights with respect to BETAMAX
+        // (0 where BETAMAX is clamped to the grid)
+        let nbt = u32::cast_from(par[P_BT_N]);
+        let stride = u32::cast_from(par[P_BT_STRIDE]) as usize;
+        let nb = nbt as usize;
+        let mut m = 0u32;
+        let mut hw = Array::<F>::new(4usize);
+        let mut hd = Array::<F>::new(4usize);
+        let mut hb = Array::<u32>::new(4usize);
+        if nbt > 1u32 {
+            let db = par[P_BT_DB];
+            let xr = (beta - par[P_BT_B0]) / db;
+            let top = F::cast_from(nbt - 1u32);
+            let xb = max(zero, min(top, xr));
+            m = min(u32::cast_from(xb.trunc()), nbt - 2u32);
+            let tt = xb - F::cast_from(m);
+            let t2 = tt * tt;
+            let t3 = t2 * tt;
+            let three = F::new(3.0f32);
+            let six = F::new(6.0f32);
+            hw[0] = two * t3 - three * t2 + one;
+            hw[1] = (t3 - two * t2 + tt) * db;
+            hw[2] = three * t2 - two * t3;
+            hw[3] = (t3 - t2) * db;
+            let inside = xr >= zero && xr <= top;
+            hd[0] = select(inside, (six * t2 - six * tt) / db, zero);
+            hd[1] = select(inside, three * t2 - F::new(4.0f32) * tt + one, zero);
+            hd[2] = select(inside, (six * tt - six * t2) / db, zero);
+            hd[3] = select(inside, three * t2 - two * tt, zero);
+            let mu = m as usize;
+            hb[0] = (mu * stride) as u32;
+            hb[1] = ((nb + mu) * stride) as u32;
+            hb[2] = ((mu + 1) * stride) as u32;
+            hb[3] = ((nb + mu + 1) * stride) as u32;
+        }
+        if nbt > 1u32 {
+            if par[P_TTAUWSHELTER] > zero {
+                let ilv = u32::cast_from(par[P_ILEVTAIL]) as usize;
+                let xk = levtail0 / par[P_DELTAIL];
+                let dxk = dlev / par[P_DELTAIL];
+                let xkf = u32::cast_from(xk.trunc()) as usize;
+                let i = select(xkf < ilv - 1, xkf, ilv - 1);
+                let fk = xk - F::cast_from(i as u32);
+                let delk1 = min(one, fk);
+                let ddelk1 = select(fk < one, dxk, zero);
+                let delk2 = one - delk1;
+                let o0 = i * n1 * n2;
+                let o1 = (i + 1) * n1 * n2;
+                for c in 0..4u32 {
+                    let bc = hb[c as usize] as usize;
+                    let la = tauhf2::<F>(tauhf, bc + o0, ind, j, n1, deli1, deli2, delj1, delj2);
+                    let lb = tauhf2::<F>(tauhf, bc + o1, ind, j, n1, deli1, deli2, delj1, delj2);
+                    let dla = tauhf2_d::<F>(tauhf, bc + o0, ind, j, n1, deli1, deli2, delj1, ddeli1, ddelj1);
+                    let dlb = tauhf2_d::<F>(tauhf, bc + o1, ind, j, n1, deli1, deli2, delj1, ddeli1, ddelj1);
+                    let tc = la * delk2 + lb * delk1;
+                    tau1 += hw[c as usize] * tc;
+                    dtau1 += hw[c as usize] * (dla * delk2 + dlb * delk1 + (lb - la) * ddelk1) + hd[c as usize] * dbeta * tc;
+                }
+            } else {
+                for c in 0..4u32 {
+                    let bc = hb[c as usize] as usize;
+                    let tc = tauhf2::<F>(tauhf, bc, ind, j, n1, deli1, deli2, delj1, delj2);
+                    tau1 += hw[c as usize] * tc;
+                    dtau1 += hw[c as usize] * tauhf2_d::<F>(tauhf, bc, ind, j, n1, deli1, deli2, delj1, ddeli1, ddelj1) + hd[c as usize] * dbeta * tc;
+                }
+            }
+        } else if par[P_TTAUWSHELTER] > zero {
             let ilv = u32::cast_from(par[P_ILEVTAIL]) as usize;
             let xk = levtail0 / par[P_DELTAIL];
             let dxk = dlev / par[P_DELTAIL];
@@ -1529,7 +1615,19 @@ pub fn srce_tl<F: Float>(
             let c = ice[i];
             let sd50 = d50[i];
             let spsic = psic[i];
-            let dbeta = dpar[P_BBETA];
+            // BETAMAX of the node and its tangent: with BETAMAX(U),
+            // d ln beta = d ln P_BBETA + sum_k (dc_k phi_k(U) + c_k phi_k'(U) dU),
+            // so that the direction of coefficient k is the field beta phi_k(U)
+            let beta = par[P_BBETA] * betau_ln::<F>(par, u).exp();
+            let nbk = u32::cast_from(par[P_BU_NK]) as usize;
+            let mut dbeta = dpar[P_BBETA];
+            if nbk > 0 {
+                let mut dln = dpar[P_BBETA] / par[P_BBETA];
+                for k in 0..nbk {
+                    dln += dpar[P_BU_COEF + k] * betau_phi::<F>(par, u, k, nbk) + par[P_BU_COEF + k] * betau_dphi::<F>(par, u, k, nbk) * du;
+                }
+                dbeta = beta * dln;
+            }
             let dsdsc2 = dpar[P_SDSC2];
             let dsnlc1 = dpar[P_SNLC1];
             let dsdbc2 = dpar[P_SDBC2];
@@ -1551,7 +1649,7 @@ pub fn srce_tl<F: Float>(
             let dz00 = sd[S_Z0];
             sin4_tl::<F>(
                 par, tauhf, dtauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &ad, &mut vs, &mut vsd, &mut vd, &mut vdd, &mut ws, &mut kb, &mut kd,
-                &mut sc, &mut sd, &mut dr, &mut drd, ust0, dust0, z00, dz00, udir, dudir, dbeta, one, false, nk, nth,
+                &mut sc, &mut sd, &mut dr, &mut drd, ust0, dust0, z00, dz00, udir, dudir, beta, dbeta, one, false, nk, nth,
             );
             let tauwx = sc[S_TAUWX];
             let tauwy = sc[S_TAUWY];
@@ -1598,7 +1696,7 @@ pub fn srce_tl<F: Float>(
                 sync_cube();
                 sin4_tl::<F>(
                     par, tauhf, dtauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &ad, &mut vs, &mut vsd, &mut vd, &mut vdd, &mut ws, &mut kb,
-                    &mut kd, &mut sc, &mut sd, &mut dr, &mut drd, ustar, dustar, z0, dz0, udir, dudir, dbeta, isc_in, true, nk, nth,
+                    &mut kd, &mut sc, &mut sd, &mut dr, &mut drd, ustar, dustar, z0, dz0, udir, dudir, beta, dbeta, isc_in, true, nk, nth,
                 );
                 let stauwx = sc[S_TAUWX];
                 let stauwy = sc[S_TAUWY];

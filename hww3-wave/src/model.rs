@@ -120,6 +120,9 @@ pub struct Config {
     /// double precision (`TABU_STRESS`, `TABU_TAUHF2`) instead of those of
     /// the parameter file.
     pub betamax: Option<f64>,
+    /// `BETAMAX(U)` ([`crate::sources::BetaU`]): `BETAMAX` depending on the
+    /// wind speed at the node, around the `BETAMAX` of the run.
+    pub betau: Option<crate::sources::BetaU>,
     /// Tangent run: the direction of the tangent, a relative change of the
     /// wind speed (`WIND`), of a source parameter (`BETAMAX`, `SDSC2`,
     /// `NLPROP`, `BJGAM`) or of the spectra of the restart (`INIT`, also
@@ -147,6 +150,7 @@ impl Default for Config {
             wind_factor: 1.0,
             init_factor: 1.0,
             betamax: None,
+            betau: None,
             tangent: None,
         }
     }
@@ -226,11 +230,27 @@ struct Tangent {
 /// [`crate::sources::par_index`]) for a relative change: the parameter
 /// tangents, the tangent of the tail-stress table (`BETAMAX` with the
 /// stress tables, from `TABU_TAUHF2` in double precision) and whether the
-/// wind is perturbed.
+/// wind is perturbed. The coefficients of `BETAMAX(U)` (`BETAU<k>`) are
+/// already logarithms: their tangent is for a change of 1 of `c_k`, and
+/// `BETAU` changes all of them at once (with all the hat functions adding
+/// up to 1, the same as `BETAMAX`). With tables in `BETAMAX`
+/// ([`crate::sources::P_BT_N`] > 1) the kernel interpolates the derivative
+/// of the tables itself.
 fn tangent_seeds(name: &str, q: &SrcePar, t: &SrceTables) -> Result<(Vec<f64>, Vec<f64>, bool)> {
-    use crate::sources::{par_index, tabu_tauhf2, NPAR, P_BBETA, P_SINTABLE};
+    use crate::sources::{par_index, tabu_tauhf2, NPAR, P_BBETA, P_BT_N, P_BU_COEF, P_BU_NK, P_SINTABLE};
     let mut dpar = vec![0.0; NPAR];
     let mut dtab = vec![0.0; t.tauhf.len()];
+    let nbk = t.par[P_BU_NK] as usize;
+    if name == "BETAU" {
+        if nbk == 0 {
+            bail!("tangent BETAU without BETAMAX(U) (--betau)");
+        }
+        for k in 0..nbk {
+            dpar[P_BU_COEF + k] = 1.0;
+        }
+        eprintln!("tangent: change of 1 of the {nbk} coefficients of ln BETAMAX(U)");
+        return Ok((dpar, dtab, false));
+    }
     if name == "WIND" {
         eprintln!("tangent: relative change of the wind speed");
         return Ok((dpar, dtab, true));
@@ -240,8 +260,16 @@ fn tangent_seeds(name: &str, q: &SrcePar, t: &SrceTables) -> Result<(Vec<f64>, V
         return Ok((dpar, dtab, false));
     }
     let i = par_index(name)?;
+    if i >= P_BU_COEF {
+        if i - P_BU_COEF >= nbk {
+            bail!("tangent {name}: BETAMAX(U) has {nbk} knots");
+        }
+        dpar[i] = 1.0;
+        eprintln!("tangent: change of 1 of the coefficient {} of ln BETAMAX(U) ({})", i - P_BU_COEF, t.par[i]);
+        return Ok((dpar, dtab, false));
+    }
     dpar[i] = t.par[i];
-    if i == P_BBETA && t.par[P_SINTABLE] > 0.0 {
+    if i == P_BBETA && t.par[P_SINTABLE] > 0.0 && t.par[P_BT_N] <= 1.0 {
         let st = q.st.tables.as_ref().ok_or_else(|| anyhow!("no stress tables"))?;
         let t0 = std::time::Instant::now();
         let (_, d1, _, d2) = tabu_tauhf2(&q.st, st, q.st.sig[q.st.nk], q.st.bbeta);
@@ -582,6 +610,9 @@ impl<F: Real> Model<F> {
                     }
                     eprintln!("sources: {name} {} -> {}", t.par[i], t.par[i] * f);
                     t.par[i] *= f;
+                }
+                if let Some(bu) = &cfg.betau {
+                    crate::sources::betau_tables(&q, &mut t, bu)?;
                 }
                 eprintln!("sources: {} (BETAMAX {}, {} units per cube)", p.display(), q.st.bbeta, cfg.units);
                 let seeds = match &cfg.tangent {

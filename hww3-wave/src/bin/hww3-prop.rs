@@ -31,7 +31,13 @@
 //!     DIR/summary.json, and of T_m02 in DIR/dt02_YYYYMMDDHH.f32. --out64
 //!     also writes H_s, T_m02 and their tangents in double precision (hs_,
 //!     t02_, dhs_, dt02_YYYYMMDDHH.f64). --betamax B sets BETAMAX with the
-//!     tail-stress tables computed for it in double precision. --restart
+//!     tail-stress tables computed for it in double precision. --betau
+//!     KNOTS:COEFS (comma-separated, m/s and coefficients of ln BETAMAX)
+//!     makes BETAMAX depend on the local wind speed, BETAMAX exp(sum_k c_k
+//!     phi_k(U)) with hat functions phi_k on the knots, the tail-stress
+//!     tables computed at --betau-grid B0:DB:N (0.75:0.25:13) and
+//!     interpolated in BETAMAX; --tangent BETAU<k> is then the tangent for
+//!     c_k, and BETAU for all of them at once. --restart
 //!     calm starts from calm conditions (zero spectra, WW3's start without
 //!     a restart file) at --start; --restart-out writes the state at the
 //!     end as a FULL WW3 restart, from which a run continues with
@@ -80,7 +86,7 @@ fn parse() -> Result<Args> {
     let valued = [
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
         "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent", "--init-factor", "--betamax",
-        "--stop", "--restart-out",
+        "--stop", "--restart-out", "--betau", "--betau-grid",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -335,6 +341,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
                    "host_level": cfg.host_level, "sources": m.has_sources(), "units": cfg.units,
                    "tangent": cfg.tangent, "wind_factor": cfg.wind_factor, "init_factor": cfg.init_factor, "out64": out64,
                    "betamax": cfg.betamax,
+                   "betau": cfg.betau.as_ref().map(|b| json!({"knots": b.knots, "coefs": b.coefs, "grid": [b.b0, b.db, b.n]})),
                    "scale_par": cfg.scale_par.iter().map(|(n, f)| json!([n, f])).collect::<Vec<_>>()},
     });
     std::fs::write(out.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
@@ -439,6 +446,10 @@ fn perturbations(a: &Args, cfg: &mut Config) -> Result<()> {
     }
     if let Some(b) = a.opts.get("--betamax") {
         cfg.betamax = Some(b.parse()?);
+    }
+    if let Some(b) = a.opts.get("--betau") {
+        let grid = a.opts.get("--betau-grid").map(String::as_str).unwrap_or("0.75:0.25:13");
+        cfg.betau = Some(hww3_wave::sources::BetaU::parse(b, grid)?);
     }
     if let Some(f) = a.opts.get("--init-factor") {
         cfg.init_factor = f.parse()?;

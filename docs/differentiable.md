@@ -920,6 +920,36 @@ penalties.
    knots from 0 to 26 m/s, denser between 10 and 20 m/s), from $p_0$ with
    `SDSC2` and `NLPROP`, under the third cost, on the present windows
    before the optimisation (Jean-Marc, 24 November).
+
+   *Implementation* (`hww3-prop --betau KNOTS:COEFS`). Hat functions
+   $\phi_k$ on the knots 2, 5, 8, 11, 14, 17 and 20 m/s, constant below the
+   first knot and above the last, adding up to 1 (99 % of the wind speeds
+   of the two windows are below 15.7 m/s and 99.9 % below 20 m/s; the
+   median is 6.6 m/s). $U$ is the wind speed the source terms see at the
+   node and step, and $\beta = \beta_0 \exp\sum_k c_k\phi_k(U)$ enters
+   `W3SIN4` in place of `BETAMAX`. The tail-stress table (`TAUHFT2`, or
+   `TAUHFT` without sheltering) depends on `BETAMAX`: it is computed with its
+   derivative by the Rust `TABU_TAUHF2` at 13 values of `BETAMAX` from 0.75
+   to 3.75 (`--betau-grid 0.75:0.25:13`) and interpolated in $\beta$ by
+   cubic Hermite polynomials, exact at the grid values (1.75 is one). The
+   tangent kernel gets $d\beta = \beta\,(d\beta_0/\beta_0 + \sum_k dc_k
+   \phi_k(U) + \sum_k c_k \phi_k'(U)\,dU)$ per node, so that the tangent for
+   $c_k$ (`--tangent BETAU<k>`) is the field $\beta\phi_k(U)$, and the
+   derivative of the tail stress in $\beta$ comes from the interpolation.
+   Without `--betau` the kernels take the former path. Checks
+   (`scripts/betau_check_hpc.slurm`): with all $c_k = 0$ the run reproduces
+   the constant `BETAMAX` 1.75; the tangent for all $c_k$ at once
+   (`BETAU`) reproduces the `BETAMAX` tangent; a constant $\beta$ of
+   1.37249382 through the interpolation against the tables computed for it;
+   the tangent for $c_3$ at $c_3 = 0.2$ against central differences.
+
+   *Prior.* $c_k \sim \mathcal N(0, 0.25^2)$ as the logarithms of the other
+   parameters, plus the second differences of consecutive coefficients,
+   $\sum_k ((c_{k-1} - 2c_k + c_{k+1})/0.1)^2$ (`cal_gn.py --smooth 0.1`):
+   a constant or linear $\ln\beta(U)$ pays only the first term, and an
+   alternation of $\pm 0.05$ between neighbouring knots costs about 5. The
+   tangents of `SDSC2` and `NLPROP` at $p_0$ are those of the first step,
+   since $\beta(U)$ with all $c_k = 0$ is the constant model.
 2. Then one or two features of the wind history, computed from the forcing
    only: $dU/dt$, the turning rate of the wind direction and $|\nabla U|$,
    with a few spline coefficients each, using the vector tangent once the

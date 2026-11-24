@@ -40,7 +40,7 @@ documented and the CI builds the documentation with warnings as errors.
 | `ww3grid` | no | `source_params`: the parameter file of the source terms from the namelists and the grid (`ww3_grid`); `Namelists`, `GridSetup` |
 | `prnc` | no | `SourceGrid::weights`, `Weights::interp`, `Field::process`, `unpack`, `RawInput`: the interpolation of `ww3_prnc` |
 | `bounc` | no | `dist_haversine`, `station_weights`, `RawSpectra`, `boundary_nodes`: `ww3_bounc` |
-| `sources` | no | the ST4 source terms, DIA, LN1, DB1, BT4 and `W3SRCE` on the CPU in double precision; `SrceTables` (their layout for the GPU), `tabu_tauhf2` (the tail-stress tables and their derivative with respect to `BETAMAX`) |
+| `sources` | no | the ST4 source terms, DIA, LN1, DB1, BT4 and `W3SRCE` on the CPU in double precision; `SrceTables` (their layout for the GPU), `tabu_tauhf2` (the tail-stress tables and their derivative with respect to `BETAMAX`), `BetaU` and `betau_tables` (`BETAMAX`$(U)$: knots, coefficients and the tail-stress tables at a grid of `BETAMAX`) |
 | `backend` | no | `Sweeper` (forward and transposed sub-steps), `Scalar`, `Dims` |
 | `kernels` | CubeCL | N-scheme kernels: `fused`, `two_phase`, `two_phase_x4`, forward and transpose |
 | `device` | CubeCL | `DeviceGrid`: the CubeCL `Sweeper` |
@@ -96,9 +96,10 @@ other values of the calibrated parameters). The Fortran harness
 | `m3_tl_src_hpc.slurm` | the tangent kernel of the source terms against finite differences on the harness nodes (`hww3-src check-tl`) |
 | `m3_tl_run_hpc.slurm`, `m3_tl_compare.py` | a tangent run of `hww3-prop` and, with one or two steps, the perturbed runs and the comparison of the tangent with their central differences (with two steps, on the nodes where they agree) |
 | `m3_tl_cmp_hpc.slurm` | the 48 h tangent runs against the finite-difference runs of M2b |
-| `cal_run_hpc.slurm` | a run of the calibration: value or tangent run with given `BETAMAX` (Rust stress tables), `SDSC2`, `NLPROP`, `BJGAM` |
+| `cal_run_hpc.slurm` | a run of the calibration: value or tangent run with given `BETAMAX` (Rust stress tables), `SDSC2`, `NLPROP`, `BJGAM`, and `BETAMAX`$(U)$ (`BETAU`, `BETAU_GRID`) |
 | `cal_obs.py`, `cal_py_hpc.slurm` | the observation operators of the calibration (altimeter blocks, buoy hours, as the validation scripts match them), the cost and its gradient from tangent runs |
-| `cal_gn.py` | one Gauss–Newton (Levenberg–Marquardt) step with the posterior covariance |
+| `cal_gn.py` | one Gauss–Newton (Levenberg–Marquardt) step with the posterior covariance; `--smooth` adds the second differences of the `BETAMAX`$(U)$ coefficients to the prior |
+| `betau_check_hpc.slurm`, `betau_check.py` | checks of `BETAMAX`$(U)$: all coefficients 0 against the constant `BETAMAX`, its tangents against the `BETAMAX` tangent, the interpolation in `BETAMAX`, a tangent off the grid against central differences |
 | `prnc_nc.py` | a netCDF forcing file read as `ww3_prnc` reads it, for `hww3-pre prnc` |
 | `bounc_nc.py` | the station spectrum files read as `ww3_bounc` reads them, for `hww3-pre bounc` |
 | `pre_inputs_hpc.slurm` | the forcing and boundary files built in Rust from the netCDF inputs of the January runs, compared with those of `ww3_prnc` and `ww3_bounc` |

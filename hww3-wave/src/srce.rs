@@ -282,6 +282,92 @@ fn spr4<F: Float>(
     sync_cube();
 }
 
+/// Hat function `k` of the `nk` knots of `BETAMAX(U)` ([`P_BU_NK`]) at the
+/// wind speed `u`: piecewise linear, 1 at knot `k`, 0 at the others, constant
+/// below the first knot and above the last, so that the functions add up to 1.
+#[cube]
+pub(crate) fn betau_phi<F: Float>(par: &[F], u: F, k: usize, nk: usize) -> F {
+    let zero = F::new(0.0f32);
+    let one = F::new(1.0f32);
+    let uc = max(par[P_BU_KNOT], min(par[P_BU_KNOT + nk - 1], u));
+    let xk = par[P_BU_KNOT + k];
+    let mut v = one;
+    if uc >= xk {
+        if k + 1 < nk {
+            let xr = par[P_BU_KNOT + k + 1];
+            v = max(zero, (xr - uc) / (xr - xk));
+        }
+    } else if k > 0 {
+        let xl = par[P_BU_KNOT + k - 1];
+        v = max(zero, (uc - xl) / (xk - xl));
+    }
+    v
+}
+
+/// Derivative with respect to `u` of [`betau_phi`] (0 beyond the end knots).
+#[cube]
+pub(crate) fn betau_dphi<F: Float>(par: &[F], u: F, k: usize, nk: usize) -> F {
+    let zero = F::new(0.0f32);
+    let one = F::new(1.0f32);
+    let mut v = zero;
+    if u > par[P_BU_KNOT] && u < par[P_BU_KNOT + nk - 1] {
+        let xk = par[P_BU_KNOT + k];
+        if u >= xk {
+            if k + 1 < nk {
+                let xr = par[P_BU_KNOT + k + 1];
+                v = select(u < xr, -one / (xr - xk), zero);
+            }
+        } else if k > 0 {
+            let xl = par[P_BU_KNOT + k - 1];
+            v = select(u > xl, one / (xk - xl), zero);
+        }
+    }
+    v
+}
+
+/// `ln BETAMAX(U) - ln P_BBETA`: the coefficients of `BETAMAX(U)` times the
+/// hat functions of its knots at the wind speed `u` (0 without knots).
+#[cube]
+pub(crate) fn betau_ln<F: Float>(par: &[F], u: F) -> F {
+    let nk = u32::cast_from(par[P_BU_NK]) as usize;
+    let mut s = F::new(0.0f32);
+    for k in 0..nk {
+        s += par[P_BU_COEF + k] * betau_phi::<F>(par, u, k, nk);
+    }
+    s
+}
+
+/// Trilinear interpolation of a `TAUHFT2` table (sheltering) that starts at
+/// `base` of `tab`, in the order of the arithmetic of `W3SIN4`.
+#[cube]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tauhf3<F: Float>(
+    tab: &[F],
+    base: usize,
+    ind: usize,
+    j: usize,
+    n1: usize,
+    o0: usize,
+    o1: usize,
+    deli1: F,
+    deli2: F,
+    delj1: F,
+    delj2: F,
+    delk1: F,
+    delk2: F,
+) -> F {
+    tauhf2::<F>(tab, base + o0, ind, j, n1, deli1, deli2, delj1, delj2) * delk2 + tauhf2::<F>(tab, base + o1, ind, j, n1, deli1, deli2, delj1, delj2) * delk1
+}
+
+/// Bilinear interpolation of a `TAUHFT` table (no sheltering) that starts at
+/// `base` of `tab`.
+#[cube]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tauhf2<F: Float>(tab: &[F], base: usize, ind: usize, j: usize, n1: usize, deli1: F, deli2: F, delj1: F, delj2: F) -> F {
+    (tab[ind + j * n1 + base] * deli2 + tab[ind + 1 + j * n1 + base] * deli1) * delj2
+        + (tab[ind + (j + 1) * n1 + base] * deli2 + tab[ind + 1 + (j + 1) * n1 + base] * deli1) * delj1
+}
+
 /// `W3SIN4` with `SINTABLE = 0`: wind input with sheltering and swell
 /// damping, the stress of the high-frequency tail integrated in line. Sets
 /// the wind-sea flags `ws` and the wave-supported stress in `sc`; with
@@ -309,6 +395,7 @@ fn sin4<F: Float>(
     ustar: F,
     z0: F,
     usdir: F,
+    beta: F,
     scale: F,
     accumulate: bool,
     #[comptime] nk: usize,
@@ -322,7 +409,8 @@ fn sin4<F: Float>(
     let kappa = par[P_KAPPA];
     let nu_air = par[P_NU_AIR];
     let drat = par[P_DRAT];
-    let const1 = par[P_BBETA] / (kappa * kappa);
+    // BETAMAX of the node: P_BBETA, or BETAMAX(U) (betau_ln)
+    let const1 = beta / (kappa * kappa);
     let const0 = const1 * drat;
     let tsh = par[P_TTAUWSHELTER].abs();
     if t < nk {
@@ -514,6 +602,27 @@ fn sin4<F: Float>(
             let n1 = ius + 1;
             let n2 = ial + 1;
             let mut tau1 = zero;
+            // tables in BETAMAX (BETAMAX(U)): cubic Hermite in BETAMAX of the
+            // tables and their derivatives at the two grid values around it
+            let nbt = u32::cast_from(par[P_BT_N]);
+            let stride = u32::cast_from(par[P_BT_STRIDE]) as usize;
+            let nb = nbt as usize;
+            let mut m = 0u32;
+            let mut hw = Array::<F>::new(4usize);
+            if nbt > 1u32 {
+                let db = par[P_BT_DB];
+                let xb = max(zero, min(F::cast_from(nbt - 1u32), (beta - par[P_BT_B0]) / db));
+                m = min(u32::cast_from(xb.trunc()), nbt - 2u32);
+                let tt = xb - F::cast_from(m);
+                let t2 = tt * tt;
+                let t3 = t2 * tt;
+                let two = F::new(2.0f32);
+                let three = F::new(3.0f32);
+                hw[0] = two * t3 - three * t2 + one;
+                hw[1] = (t3 - two * t2 + tt) * db;
+                hw[2] = three * t2 - two * t3;
+                hw[3] = (t3 - t2) * db;
+            }
             if par[P_TTAUWSHELTER] > zero {
                 let ilv = u32::cast_from(par[P_ILEVTAIL]) as usize;
                 let xk = levtail0 / par[P_DELTAIL];
@@ -523,12 +632,24 @@ fn sin4<F: Float>(
                 let delk2 = one - delk1;
                 let o0 = i * n1 * n2;
                 let o1 = (i + 1) * n1 * n2;
-                tau1 = ((tauhf[ind + j * n1 + o0] * deli2 + tauhf[ind + 1 + j * n1 + o0] * deli1) * delj2
-                    + (tauhf[ind + (j + 1) * n1 + o0] * deli2 + tauhf[ind + 1 + (j + 1) * n1 + o0] * deli1) * delj1)
-                    * delk2
-                    + ((tauhf[ind + j * n1 + o1] * deli2 + tauhf[ind + 1 + j * n1 + o1] * deli1) * delj2
-                        + (tauhf[ind + (j + 1) * n1 + o1] * deli2 + tauhf[ind + 1 + (j + 1) * n1 + o1] * deli1) * delj1)
-                        * delk1;
+                if nbt > 1u32 {
+                    tau1 = hw[0] * tauhf3::<F>(tauhf, (m as usize) * stride, ind, j, n1, o0, o1, deli1, deli2, delj1, delj2, delk1, delk2)
+                        + hw[1] * tauhf3::<F>(tauhf, (nb + m as usize) * stride, ind, j, n1, o0, o1, deli1, deli2, delj1, delj2, delk1, delk2)
+                        + hw[2] * tauhf3::<F>(tauhf, (m as usize + 1) * stride, ind, j, n1, o0, o1, deli1, deli2, delj1, delj2, delk1, delk2)
+                        + hw[3] * tauhf3::<F>(tauhf, (nb + m as usize + 1) * stride, ind, j, n1, o0, o1, deli1, deli2, delj1, delj2, delk1, delk2);
+                } else {
+                    tau1 = ((tauhf[ind + j * n1 + o0] * deli2 + tauhf[ind + 1 + j * n1 + o0] * deli1) * delj2
+                        + (tauhf[ind + (j + 1) * n1 + o0] * deli2 + tauhf[ind + 1 + (j + 1) * n1 + o0] * deli1) * delj1)
+                        * delk2
+                        + ((tauhf[ind + j * n1 + o1] * deli2 + tauhf[ind + 1 + j * n1 + o1] * deli1) * delj2
+                            + (tauhf[ind + (j + 1) * n1 + o1] * deli2 + tauhf[ind + 1 + (j + 1) * n1 + o1] * deli1) * delj1)
+                            * delk1;
+                }
+            } else if nbt > 1u32 {
+                tau1 = hw[0] * tauhf2::<F>(tauhf, (m as usize) * stride, ind, j, n1, deli1, deli2, delj1, delj2)
+                    + hw[1] * tauhf2::<F>(tauhf, (nb + m as usize) * stride, ind, j, n1, deli1, deli2, delj1, delj2)
+                    + hw[2] * tauhf2::<F>(tauhf, (m as usize + 1) * stride, ind, j, n1, deli1, deli2, delj1, delj2)
+                    + hw[3] * tauhf2::<F>(tauhf, (nb + m as usize + 1) * stride, ind, j, n1, deli1, deli2, delj1, delj2);
             } else {
                 tau1 = (tauhf[ind + j * n1] * deli2 + tauhf[ind + 1 + j * n1] * deli1) * delj2
                     + (tauhf[ind + (j + 1) * n1] * deli2 + tauhf[ind + 1 + (j + 1) * n1] * deli1) * delj1;
@@ -1189,6 +1310,8 @@ pub fn srce<F: Float>(
             let c = ice[i];
             let sd50 = d50[i];
             let spsic = psic[i];
+            // BETAMAX of the node (P_BBETA when BETAMAX does not depend on the wind)
+            let beta = par[P_BBETA] * betau_ln::<F>(par, u).exp();
             let mut isc_ln = one;
             let mut isc_in = one;
             let mut isc_nl = one;
@@ -1205,7 +1328,8 @@ pub fn srce<F: Float>(
                 let ust0 = sc[S_USTAR];
                 let z00 = sc[S_Z0];
                 sin4::<F>(
-                    par, tauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &mut vs, &mut vd, &mut ws, &mut kb, &mut sc, &mut dr, ust0, z00, udir, one, false, nk, nth,
+                    par, tauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &mut vs, &mut vd, &mut ws, &mut kb, &mut sc, &mut dr, ust0, z00, udir, beta, one, false, nk,
+                    nth,
                 );
                 let tauwx = sc[S_TAUWX];
                 let tauwy = sc[S_TAUWY];
@@ -1238,8 +1362,8 @@ pub fn srce<F: Float>(
                 sln1::<F>(par, sig, ecos, esin, &kb, &mut vs, fhigh, ustar, udir, isc_ln, nk, nth, nu);
                 sync_cube();
                 sin4::<F>(
-                    par, tauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &mut vs, &mut vd, &mut ws, &mut kb, &mut sc, &mut dr, ustar, z0, udir, isc_in, true, nk,
-                    nth,
+                    par, tauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &mut vs, &mut vd, &mut ws, &mut kb, &mut sc, &mut dr, ustar, z0, udir, beta, isc_in, true,
+                    nk, nth,
                 );
                 let stauwx = sc[S_TAUWX];
                 let stauwy = sc[S_TAUWY];

@@ -10,7 +10,8 @@ and 1.0 s), the depth-aware operator alone (op_<window>_depth) and the
 second cost (op_<window>_cost2, with the representativeness errors) and the
 third (op_<window>_cost3: without the excluded buoys, Huber), it
 gives J and its parts (altimeters, buoy H_s, buoy T_m02), the prior term
-sum (x / 0.25)^2 separately, and the unweighted scores (bias and RMSE of
+sum (x / 0.25)^2 separately (with --smooth S, also the second differences
+of the BETAMAX(U) coefficients over S, as cal_gn.py), and the unweighted scores (bias and RMSE of
 the altimeters, and of the buoy H_s and T_m02 through the nearest node and
 through the depth-aware operator). A window the run does not cover is
 skipped. OUT.json holds everything.
@@ -23,6 +24,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cal_gn  # noqa: E402
 import cal_obs  # noqa: E402
 
 COSTS = (("first", ""), ("depth", "_depth"), ("second", "_cost2"), ("third", "_cost3"))
@@ -36,9 +38,11 @@ def main():
     ap.add_argument("--windows", default="train+valid")
     ap.add_argument("--cal", default="/scratch/jmdeloui/HWW3/cal")
     ap.add_argument("--sigma-p", type=float, default=0.25)
+    ap.add_argument("--smooth", type=float, default=0.0)
     a = ap.parse_args()
-    x = np.zeros(0) if a.x == "none" else np.array(json.load(open(a.x))["x"])
-    prior = float(np.sum((x / a.sigma_p) ** 2))
+    xs = {"names": [], "x": []} if a.x == "none" else json.load(open(a.x))
+    x = np.array(xs["x"], float)
+    prior = float(x @ cal_gn.prior(xs.get("names", ["p%d" % i for i in range(len(x))]), a.sigma_p, a.smooth) @ x) if len(x) else 0.0
     out = {"run": a.run, "x": x.tolist(), "prior": prior, "windows": {}}
     print("%s: prior %.3f" % (a.run, prior))
     for w in a.windows.split("+"):
