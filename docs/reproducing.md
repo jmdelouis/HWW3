@@ -282,7 +282,8 @@ for k in 5 4; do for s in bnd exp; do
   VAL_END=2026-01-07T21:00 python scripts/validate_altimetry.py runs/natl_v5k${k}_jan2026_$s/ww3.202601.nc \
     grids/natl_v5k$k/plot/nodes.npz runs/natl_v5k${k}_jan2026_$s/val/natl_v5k${k}_jan2026_$s
 done; done
-VAL_END=2026-01-07T21:00 python scripts/validate_altimetry.py runs/natl_v4_jan2026_bnd_w7/ww3.202601.nc \n  grids/natl_v4/plot/nodes.npz natl_v4_jan2026_bnd_to21h   # grid v4 on the same window
+VAL_END=2026-01-07T21:00 python scripts/validate_altimetry.py runs/natl_v4_jan2026_bnd_w7/ww3.202601.nc \
+  grids/natl_v4/plot/nodes.npz natl_v4_jan2026_bnd_to21h   # grid v4 on the same window
 VAL_MIN_HOURS=48 python scripts/validate_buoys.py runs/natl_v5k4_jan2026_exp/val/buoys \
   v4imp:runs/natl_v4_jan2026_bnd/ww3.202601.nc:grids/natl_v4 \
   v5k5imp:runs/natl_v5k5_jan2026_bnd/ww3.202601.nc:grids/natl_v5k5 v5k5exp:runs/natl_v5k5_jan2026_exp/ww3.202601.nc:grids/natl_v5k5 \

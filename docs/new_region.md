@@ -16,10 +16,10 @@ python scripts/prep_gebco.py data/gebco/GEBCO_2024.nc data/gebco/biscay -10 0 43
 cargo build --release --manifest-path hww3-grid/Cargo.toml
 
 # 3. build the grid (RAYON_NUM_THREADS sets the number of threads)
-RAYON_NUM_THREADS=8 target/release/hww3-grid configs/biscay.json > grids/biscay_summary.json
+RAYON_NUM_THREADS=8 hww3-grid/target/release/hww3-grid configs/biscay.json > grids/biscay_summary.json
 
 # 4. optional: cell vertices and figures
-target/release/hww3-grid cells grids/biscay
+hww3-grid/target/release/hww3-grid cells grids/biscay
 ```
 
 The paths in the configuration (`bathy`, `output_dir`) are relative to the
