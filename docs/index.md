@@ -16,9 +16,10 @@ schemes, implicit or explicit.
 Alongside, the `hww3-wave` crate rewrites in Rust, for one GPU, the parts
 of WW3 that the explicit configuration runs, towards a **differentiable
 WW3** that returns the gradients of the misfit to altimeters and buoys
-for learning chains. Its propagation-only model runs 48 h of grid
-v5 $K=4$ in 32 s on one A100 and agrees with WW3 to about 1 mm in $H_s$ at the median
-node.
+for learning chains. With the full ST4 physics it runs a week of grid
+v5 $K=4$ in 868 s on one A100 (124 s per model day), agrees with WW3 to
+2.2 µm in $H_s$ at the median node, and its tangent runs drive the
+calibration of the ST4 parameters.
 
 ```{figure} _static/fig/natl_levels.png
 :width: 90%
@@ -29,75 +30,65 @@ North Atlantic grid: 502,690 nodes, HEALPix nside 128 (open ocean) to 2048
 
 The demonstration case is the North Atlantic, from the equator to 80°N,
 with the Mediterranean and the North Sea, forced by ERA5 and Copernicus
-Marine for January 2026 and run on Datarmor (Ifremer).
+Marine for January 2026 and run on Datarmor and on the Ifremer hpc cluster.
 
-::::{grid} 2
-:::{grid-item-card} Build a grid
-[Installation](installation.md), [configuration](configuration.md) and
-[outputs](outputs.md) of the `hww3-grid` generator, and how to build
-[a grid for another region or a finer grid](new_region.md).
+## Where to start
+
+New to HWW3? [Getting started](getting_started.md) explains in plain
+words what each step does and on which machine it runs. Then five short
+tutorials take you through the main tasks, each with its prerequisites,
+its commands, the output to expect and how to check it:
+
+1. [Build a grid](tutorials/build_grid.md) for a region, on a workstation;
+2. [Prepare the inputs and run WW3](tutorials/run_ww3.md) on Datarmor;
+3. [Run the GPU model for 48 h](tutorials/run_gpu.md) on the hpc cluster;
+4. [Validate a run](tutorials/validate_run.md) against altimeters and buoys;
+5. [Take one calibration step](tutorials/calibration_step.md) from tangent runs.
+
+The words of the field (spectrum, $H_s$, forcing, restart, tangent...) are
+explained in the [Glossary](glossary.md).
+
+## The sections of this site
+
+::::{grid} 1 2 2 2
+:::{grid-item-card} Preparing a run
+[The grid](preparing.md) (`hww3-grid`, its configuration, a grid for
+another region, its outputs), the external data (bathymetry, ERA5 wind,
+currents, water levels and tide, sea ice, open-boundary spectra), the WW3
+build and the preprocessing, by WW3 or in Rust.
 :::
-:::{grid-item-card} How it works
-The [algorithm](algorithm.md): refinement, 2:1 balance, bathymetry,
-triangulation from the HEALPix adjacency, triangle quality.
+:::{grid-item-card} Running the model
+[WW3 runs](running.md) on Datarmor (PBS) and on the hpc cluster (Slurm),
+and the GPU model `hww3-prop` on one A100.
 :::
-:::{grid-item-card} Is it right?
-[Validation](validation.md): unit and end-to-end tests, mesh checks,
-statistics of the North Atlantic grid.
+:::{grid-item-card} Learning the parameters
+[The differentiable model](learning.md): tangent runs, observation
+operators, the cost and the Gauss–Newton calibration of the ST4
+parameters.
 :::
-:::{grid-item-card} Redo everything
-[Reproducing](reproducing.md) the grid, the WW3 build, the forcing and the
-runs, step by step, with the job scripts.
+:::{grid-item-card} Analysis tools
+[Scripts](analysis.md) that score a run against altimeters and buoys,
+compare two runs, draw maps and diagnose the observations.
 :::
-:::{grid-item-card} GPU wave model
-The [GPU wave model](wave_model.md) `hww3-wave`: its
-[numerics](wave_numerics.md), its [results](wave_results.md) against WW3,
-and the [design and cost](differentiable.md) of the differentiable WW3.
+:::{grid-item-card} Results
+[What the runs give](results.md): the grids and the WW3 runs against the
+observations, the GPU model against WW3, the calibration steps.
 :::
 :::{grid-item-card} Reference
-The [API and scripts](api.md), the Rust API references of both crates,
-and the [tests and continuous integration](development.md).
+[The API and scripts](reference.md), the Rust API references, the design
+notes (grid algorithm, numerics of the GPU model) and the tests.
 :::
 ::::
 
 ```{toctree}
-:caption: Grids
-:maxdepth: 2
 :hidden:
-
-installation
-configuration
-new_region
-algorithm
-outputs
-validation
-```
-
-```{toctree}
-:caption: WAVEWATCH III runs
 :maxdepth: 2
-:hidden:
 
-ww3
-reproducing
-```
-
-```{toctree}
-:caption: GPU wave model
-:maxdepth: 2
-:hidden:
-
-wave_model
-wave_numerics
-wave_results
-differentiable
-```
-
-```{toctree}
-:caption: Reference
-:maxdepth: 2
-:hidden:
-
-api
-development
+getting_started
+preparing
+running
+learning
+analysis
+results
+reference
 ```
