@@ -127,7 +127,7 @@ def build(op, rdir, start, end, ice_ncs, grid, l3=L3, bdir=BUOYS, min_hours=24):
     t0, t1 = tm[0], tm[-1]
     files = l3_files(t0, t1, l3)
     print(len(files), "L3 files", flush=True)
-    blocks = {"obs": [], "k": [], "n": [], "w": [], "mission": [], "level": [], "lon": [], "lat": [], "t": []}
+    blocks = {"obs": [], "sd": [], "k": [], "n": [], "w": [], "mission": [], "level": [], "lon": [], "lat": [], "t": []}
     for f in files:
         mission = f.split("swh_nrt_")[1].split("-l3")[0]
         with netCDF4.Dataset(f) as a:
@@ -157,6 +157,7 @@ def build(op, rdir, start, end, ice_ncs, grid, l3=L3, bdir=BUOYS, min_hours=24):
         r = lambda x: x[:cut].reshape(nb, BLOCK)  # noqa: E731
         good = (np.diff(r(t), axis=1) < 3.0).all(1)
         blocks["obs"].append(r(h).mean(1)[good])
+        blocks["sd"].append(r(h).std(1, ddof=1)[good])
         blocks["k"].append(r(k)[good])
         blocks["n"].append(r(n)[good])
         blocks["w"].append(r(w)[good])
@@ -203,6 +204,7 @@ def build(op, rdir, start, end, ice_ncs, grid, l3=L3, bdir=BUOYS, min_hours=24):
           % (len(names), len(bh["obs"]), len(bt["obs"]), int((rmse > TM02_RMSE_MAX).sum()), TM02_RMSE_MAX), flush=True)
     np.savez(op, tags=np.array(tags), alt_obs=alt["obs"], alt_k=alt["k"], alt_n=alt["n"], alt_w=alt["w"],
              alt_mission=alt["mission"], alt_level=alt["level"], alt_lon=alt["lon"], alt_lat=alt["lat"], alt_t=alt["t"],
+             alt_sd=alt["sd"],
              bh_k=bh["k"], bh_n=bh["n"], bh_obs=bh["obs"], bh_b=bh["b"],
              bt_k=bt["k"], bt_n=bt["n"], bt_obs=bt["obs"], bt_b=bt["b"], bt_cost=bt["cost"],
              buoys=np.array(names), tm02_rmse0=rmse)

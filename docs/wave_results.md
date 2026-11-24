@@ -1373,3 +1373,85 @@ RMSE of 36.5 cm (nearest node: −6.17 and 36.8 cm) and a $T_{m02}$ RMSE of
 1.00 s (1.12 s) with a correlation of 0.79 (0.72), over the 254 buoys
 that have weights (the weights are built for the buoys of the
 calibration's windows; the others are skipped).
+
+## Observation diagnostics
+
+Why the buoys cannot be fitted with the three parameters, and whether the
+loss should be robust: `scripts/obs_diag.py` (`scripts/obs_diag_hpc.slurm`,
+Slurm job 4326487, CPU only) looks at every observation of the calibration
+from the stored runs, at the start ($p_0$) and at step 3, on both windows,
+the buoys through the depth-aware operator and the nearest node. The
+figures, the per-buoy tables (`buoys_<window>.csv`) and `summary.json` are
+in `$S/diag` on the hpc cluster.
+
+**Altimeters.** The scatter is model error, not instrument noise: the
+spread of the 7 samples of a block is 3.6–3.9 cm at the median, so the
+noise of a block mean is 3.0–3.3 cm, against a residual of 25 cm (the
+operators rebuilt with this spread, `op_<window>_sd.npz`, have the same
+blocks). The RMSE is almost all standard deviation, which three global
+parameters barely change:
+
+| window | bias $p_0$ → step 3 | std | RMSE | 1.4826 MAD | excess kurtosis |
+|---|---|---|---|---|---|
+| training | +2.86 → −1.38 cm | 25.30 → 24.69 cm | 25.46 → 24.73 cm | 20.1 → 19.4 cm | 3.2 → 3.5 |
+| validation | +5.76 → +1.36 cm | 25.83 → 25.63 cm | 26.46 → 25.66 cm | 21.0 → 20.8 cm | 3.7 → 4.3 |
+
+Removing the bias alone would bring the validation RMSE at $p_0$ to
+25.83 cm. The tails are moderately heavy: the largest 1 % of the residuals
+carry 16–18 % of the mean square and the largest 5 % 40–44 % (8.5 % and
+28 % for a Gaussian). The residual depends on the sea state: +5 to +9 cm
+at observed $H_s$ of 1.5–3 m, where most blocks are, and −12 to −28 cm
+above 4 m on validation (−28 to −77 cm above 6 m, a few hundred blocks);
+step 3 lowers every class by 2–20 cm. It is +9 cm beyond 500 km from the
+coast and −4 to +3 cm within 200 km, its standard deviation is larger
+within 100 km of the ice (30–38 cm), and the mission biases spread over
+10 cm (CFOSAT −4.1 cm, HY-2C +6.6 cm on training).
+
+**Buoys.** The residual has heavy tails (1.4826 MAD 20–24 cm against a
+standard deviation of 31–41 cm, excess kurtosis 3.9–4.2), and a few
+buoys dominate it: the 5, 10 and 20 buoys with the largest squared error
+carry 26 %, 37 % and 50 % of it on the training window (18 %, 30 % and
+47 % on validation). Without the 10 worst the RMSE at $p_0$ falls from
+31.25 to 25.30 cm (40.79 to 34.74 cm on validation), but the bias does
+not improve (−6.06 and −4.19 cm) and step 3 still makes it worse (−8.21
+and −7.46 cm): the outliers do not cause the trend of the bias. The worst
+buoys are mostly sites the grid cannot represent: the storm-surge barrier
+of the Maeslantkering (two stations, observed $H_s$ 0.1 m, model about
+1.1 m), the Roompot sluice, the Wadden station of Schiermonnikoog, the
+Bilbao station (40 % land in its cell, −1.0 m), the coastal structure of
+Utö, the Barcelona coastal buoy, and a few offshore buoys with biases of
+±1 m on one window (6201053, IL2-Finnis, 6200079, 6100023) to check for
+data or sheltering (time series in `buoy_series.png`). The platform type
+of the files (73 moorings, 168 moored surface buoys, 6 offshore
+structures, 4 vessels at fixed position, 1 coastal structure) does not
+separate them clearly.
+
+The bias of the buoys depends on the sea state, as that of the
+altimeters: at $p_0$ it is +9 cm for observed $H_s$ below 0.5 m, −1 to
+−3 cm at 0.5–1.5 m, −15 cm at 2–3 m, −23 cm at 3–4 m, −32 cm at 4–6 m and
+−55 cm above 6 m (both windows). Step 3 lowers $H_s$ in every class, so it
+makes the high sea states worse (−21, −32, −45 and −75 cm), and by wind
+speed at the node it leaves the bias at −8 to −2 cm below 12 m/s but takes
+it from −4 to −14 cm at 12–15 m/s and from −8 to −22 cm at 15–20 m/s. The
+mean $H_s$ of the buoys is lower than that of the altimeters, and more of
+their hours are in the low and the high classes, so a constant change of
+the growth that lowers the moderate seas, which the altimeters ask for,
+moves the buoys the wrong way. This is what a `BETAMAX` depending on the
+wind, or a wind correction $g(U)$, should address (plan, section 9.7 of
+the [differentiable WW3 note](differentiable.md)).
+
+**Loss.** With the residuals of the second cost and the Jacobian $A_1$,
+one Gauss–Newton step of a Huber loss (iteratively reweighted, $\delta$ in
+units of the observation error) or of an L1 loss, against the L2 step
+(factors from $p_0$ for `BETAMAX`, `SDSC2`, `NLPROP`):
+
+| point | L2 | Huber $\delta = 1$ | Huber 1.5 | Huber 2 | L1 |
+|---|---|---|---|---|---|
+| from $p_0$ | 0.820, 0.746, 1.167 | 0.876, 0.873, 1.182 (cos 0.94) | 0.862, 0.840, 1.179 (0.97) | 0.849, 0.810, 1.174 (0.99) | 0.943, 0.938, 1.072 (0.96) |
+| from step 3 | 0.721, 0.481, 1.067 | 0.741, 0.565, 1.174 (0.91) | 0.735, 0.537, 1.140 (0.98) | 0.731, 0.519, 1.114 (0.99) | 0.772, 0.635, 1.173 (0.44) |
+
+The robust losses move the same way along the `BETAMAX`–`SDSC2` valley
+(cosines 0.91–0.99 with the L2 step), only less far; L1 nearly stops at
+step 3. A robust loss would limit the weight of the unrepresentative
+sites, but it would not remove the conflict between the sea states, which
+comes from the model and its forcing, not from outliers.

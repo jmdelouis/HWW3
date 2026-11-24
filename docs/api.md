@@ -108,6 +108,7 @@ other values of the calibrated parameters). The Fortran harness
 | `coast_subgrid.py` | the spread of the GEBCO depth and the fraction of land inside the cells of given nodes (run where GEBCO is, with numpy only) |
 | `buoy_op.py`, `buoy_op_hpc.slurm` | the depth-aware buoy operator of the calibration (weights from the mesh and a depth kernel, $T_{m02}$ through the moments), its degenerate check and its scores |
 | `buoy_depth.py` | the GEBCO depth at the buoys (run where GEBCO is, with numpy only) |
+| `obs_diag.py`, `obs_diag_hpc.slurm` | observation diagnostics of the calibration: per-buoy tables and figures, altimeter residuals and noise, Huber and L1 steps against the L2 step |
 | `cal_point.py`, `cal_monitor_hpc.slurm` | one point of the calibration under the three costs on both windows: $J$ and its parts, the prior, the unweighted scores |
 | `buoy_sigma.py`, `cal_cost2_hpc.slurm` | the representativeness errors of the buoys per class, fixed from the start run, and the stored points of the calibration under the first and the second cost |
 | `pre_restart_hpc.slurm` | the start from calm conditions against WW3, and a run continued from a GPU restart against the same run in one piece |

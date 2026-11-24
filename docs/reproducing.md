@@ -603,6 +603,8 @@ python scripts/buoy_depth.py $DATAWORK/HWW3/data/gebco/natl buoys.json > buoy_de
 sbatch scripts/buoy_op_hpc.slurm
 # the second cost of the calibration: representativeness errors per class, then the stored points under both costs
 sbatch scripts/cal_cost2_hpc.slurm
+# observation diagnostics (CPU): figures, per-buoy tables and summary in $R/diag
+sbatch scripts/obs_diag_hpc.slurm
 # buoy scores of a run with the depth-aware weights (the nearest node stays the default)
 $R/pyenv/bin/python scripts/validate_buoys.py OUT LABEL:RUN.nc:$R/grids/natl_v5k4 --match depth --weights $R/coast/weights_valid.json
 # control only: the start-point derivatives against the M2b finite differences of 8-10 January

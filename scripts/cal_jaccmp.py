@@ -18,6 +18,9 @@ import numpy as np
 
 def cols(e, names):
     sa, sb, st = e["sigma"]
+    if "s_bhs" in e:
+        # observation errors per buoy hour (second cost)
+        sb, st = e["s_bhs"], e["s_btm"]
     out = {}
     for n in names:
         out[n] = {"alt": e["d_alt_" + n] / sa, "bhs": e["d_bhs_" + n] / sb, "btm": e["d_btm_" + n] / st}
