@@ -17,8 +17,10 @@
 # precision for a relative change of NAME (dhs_, dt02_ files); with F64=1
 # a value run in double precision. BETAU=KNOTS:COEFS makes BETAMAX depend
 # on the local wind speed (BETAMAX(U), hww3-prop --betau, tables in BETAMAX
-# at BETAU_GRID=B0:DB:N), and TANGENT=BETAU<k> is the tangent for its
+# at BETAU_GRID=B0:DB:N), with / between the values since sbatch --export
+# splits at commas, and TANGENT=BETAU<k> is the tangent for its
 # coefficient k.
+#   sbatch --export=ALL,TAG=bu0_BETAU3,BETAMAX=1.75,BETAU=2/5/8/11/14/17/20:,HOURS=156,TANGENT=BETAU3 scripts/cal_run_hpc.slurm
 #   sbatch --export=ALL,TAG=it0_value,BETAMAX=1.75,HOURS=216 scripts/cal_run_hpc.slurm
 #   sbatch --export=ALL,TAG=it0_SDSC2,BETAMAX=1.75,HOURS=120,TANGENT=SDSC2 scripts/cal_run_hpc.slurm
 S=/scratch/jmdeloui/HWW3
@@ -36,7 +38,7 @@ export RAYON_NUM_THREADS=$SLURM_CPUS_PER_TASK
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
 PAR="${BETAMAX:+--betamax $BETAMAX} --scale-par SDSC2:${FSDSC2:-1}+NLPROP:${FNLPROP:-1}+BJGAM:${FBJGAM:-1}"
 [ -n "$FWIND" ] && PAR="$PAR --wind-factor $FWIND"
-[ -n "$BETAU" ] && PAR="$PAR --betau $BETAU ${BETAU_GRID:+--betau-grid $BETAU_GRID}"
+[ -n "$BETAU" ] && PAR="$PAR --betau $(echo $BETAU | tr / ,) ${BETAU_GRID:+--betau-grid $BETAU_GRID}"
 PREC=""
 if [ -n "$TANGENT" ] || [ -n "$F64" ]; then PREC="--f64"; fi
 mkdir -p $O

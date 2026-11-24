@@ -100,6 +100,7 @@ other values of the calibrated parameters). The Fortran harness
 | `cal_obs.py`, `cal_py_hpc.slurm` | the observation operators of the calibration (altimeter blocks, buoy hours, as the validation scripts match them), the cost and its gradient from tangent runs |
 | `cal_gn.py` | one Gauss–Newton (Levenberg–Marquardt) step with the posterior covariance; `--smooth` adds the second differences of the `BETAMAX`$(U)$ coefficients to the prior |
 | `betau_check_hpc.slurm`, `betau_check.py` | checks of `BETAMAX`$(U)$: all coefficients 0 against the constant `BETAMAX`, its tangents against the `BETAMAX` tangent, the interpolation in `BETAMAX`, a tangent off the grid against central differences |
+| `betau_report.py` | report of the `BETAMAX`$(U)$ test: the curve with its posterior uncertainty, and the bias and RMSE of the buoy and altimeter $H_s$ by observed $H_s$ and by wind speed for several runs, through the operators of the third cost |
 | `prnc_nc.py` | a netCDF forcing file read as `ww3_prnc` reads it, for `hww3-pre prnc` |
 | `bounc_nc.py` | the station spectrum files read as `ww3_bounc` reads them, for `hww3-pre bounc` |
 | `pre_inputs_hpc.slurm` | the forcing and boundary files built in Rust from the netCDF inputs of the January runs, compared with those of `ww3_prnc` and `ww3_bounc` |
