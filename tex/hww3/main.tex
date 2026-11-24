@@ -2533,6 +2533,37 @@ third step (job 4327297). The seven tangent runs at the start (jobs
 the observation, the bias at 20 to \SI{30}{m/s} is \SI{+19}{cm} for the
 altimeters and \SI{-22}{cm} for the buoys at the start, so the test has
 to arbitrate between them.
+\item \emph{Result of the trial.} At the third step (\texttt{BETAMAX}
+1.372, \texttt{SDSC2} $\times0.649$, \texttt{NLPROP} $\times1.137$,
+\texttt{BJGAM} 0.73) the cost falls by 3.1 to 3.7\,\% on the training
+window and by 3.3 to 4.1\,\% on the validation window under the three
+costs. WW3 with these parameters (job 4326007) gives the same cost to
+0.001\,\% and the same scores to \SI{0.01}{cm}. On the validation window
+the altimeter bias and RMSE go from \SI{+5.76}{cm} and \SI{26.46}{cm} to
+\SI{+1.36}{cm} and \SI{25.66}{cm}. The buoy $H_s$ goes from \SI{-3.03}{cm}
+and \SI{40.79}{cm} to \SI{-6.46}{cm} and \SI{40.75}{cm}, and $T_{m02}$
+from \SI{-0.411}{s} and \SI{1.024}{s} to \SI{-0.395}{s} and
+\SI{1.000}{s}. The posterior standard deviations of $\ln p$, from the
+Jacobian of the first step at the residuals of the third, are 0.008, 0.024
+and 0.015, a lower bound; \texttt{BETAMAX} and \texttt{SDSC2} are
+correlated at 0.88. The trial took 33 GPU runs and 16.6 GPU-hours over
+28 hours, plus 8.6 hours of CPU jobs. Its limits are the two-day windows
+of one week, three constant parameters, a frozen Jacobian, a posterior
+that is a lower bound, and a bias that depends on the sea state, which
+constant parameters cannot follow.
+\item \emph{Unstable tangents.} At the parameters of the third step the
+tangents grow without bound at a few nodes. Near the edge of the sea ice
+(Ungava Bay, Labrador, West Greenland, Newfoundland) they reach
+$2\times10^6$\,m per unit of $\ln p$ on 6 January, and 527 of the 24\,153
+training altimeter blocks get derivatives above \SI{10}{m} for
+\texttt{BETAMAX}. After the training window they reach
+$3\times10^{10}$\,m in the Wadden Sea near the Elbe and spread along the
+North Sea coasts. At the start, isolated spikes of the same kind (Gulf of
+Finland, 4 January) reach no observation of the training window, whose
+largest derivative is \SI{7.5}{m}, so the three steps are not affected.
+The tangent of the model is therefore locally unstable at some ice-edge
+and shallow nodes. The tangents of the third step are not used, and the
+cause is to be found before the next calibrations.
 \end{itemize}
 
 \begin{figure}[H]
