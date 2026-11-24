@@ -2361,13 +2361,11 @@ want, and the buoy $H_s$ with it.
 these parameters (job 4269275, 64 ranks, \SI{717}{s} per model day)
 gives a cost of 46\,628.4 on the training window and 68\,856.6 on the
 validation window, against 46\,628.5 and 68\,856.7 for the GPU model.
-\item \emph{Second step.} The tangent runs at the new point (jobs 4269271
-to 4269273) change $A^\mathsf{T}A$ by 4.5\,\% at most, and the
-correlation between \texttt{BETAMAX} and \texttt{SDSC2} rises to 0.89.
-This Jacobian is kept for the following steps, each checked by one value
-run, until a step gains less than 0.2\,\%. The next step lowers
-\texttt{BETAMAX} and \texttt{SDSC2} together along that valley, for a
-predicted further 1.3\,\%. About 18 GPU-hours have been used so far.
+\item \emph{Jacobian of the following steps.} The tangent runs at the
+new point (jobs 4269271 to 4269273) change $A^\mathsf{T}A$ by 4.5\,\% at
+most, and the correlation between \texttt{BETAMAX} and \texttt{SDSC2}
+rises to 0.89. This Jacobian is kept for the following steps, each
+checked by one value run, until a step gains less than 0.2\,\%.
 \item \emph{Coastal buoys.} The buoy bias is not an error of the
 matching. The node depth matches the buoy's (median ratio 1.00, 10--90\,\%
 0.71--1.82), the bias does not grow with the mismatch, and a matching to
@@ -2402,7 +2400,56 @@ of the buoys in cells at least 30\,\% land from \SI{-35.4}{cm} to
 \SI{-17.8}{cm}. The buoys within \SI{5}{km} of the coast barely move
 (about \SI{-9}{cm}). The first step lowers the cost under both
 operators, by 1.31\,\% and 1.18\,\%.
+\item \emph{Second cost.} From the second step on, the buoy terms use
+this interpolation, and each buoy hour has an error
+$\sigma_b=(\sigma_0^2+\sigma_r^2)^{1/2}$, with $\sigma_0$ = \SI{0.30}{m}
+for $H_s$ and \SI{1.0}{s} for $T_{m02}$. The representativeness error
+$\sigma_r$ is set per class of buoys from the residuals of the start run,
+$\sigma_r^2=\max(0,\overline{r^2}-\sigma_0^2)$, and then kept fixed
+(Table~\ref{tab:calsig}). It is zero for $H_s$ at the 135 buoys more than
+\SI{5}{km} from the coast with no land in their cell, and 0.35 to
+\SI{0.57}{m} for the buoys whose cell holds land. Under this cost the
+training cost is 41\,086 at the start and 40\,607 after the first step,
+and the validation cost 59\,449 and 59\,201. WW3 at the first step gives
+40\,606.5 and 59\,201.1.
+\item \emph{Second step.} With the Jacobian of the first step, it brings
+\texttt{BETAMAX} to 1.516 (a factor 0.867 from the start), \texttt{SDSC2}
+to a factor 0.876 and \texttt{NLPROP} to 1.216. It lowers the training
+cost by 1.67\,\%, to 39\,928 (1.78\,\% under the first cost). The
+altimeter bias and RMSE become \SI{+0.16}{cm} and \SI{24.92}{cm}. The
+buoy $H_s$ becomes \SI{-6.50}{cm} and \SI{31.65}{cm}, and $T_{m02}$
+\SI{-0.421}{s} and \SI{0.966}{s}, with the interpolation.
+\item \emph{Along a valley.} The steps lower \texttt{BETAMAX} and
+\texttt{SDSC2} together. The third step would bring them to 1.373 and a
+factor 0.649, for a predicted 0.73\,\%. The prior term (1.2) is
+negligible against the data term (about 40\,000), which treats the
+44\,595 residuals, correlated in space and time, as independent. The
+validation cost is therefore computed at each step from now on, to stop
+if it rises while the training cost falls.
 \end{itemize}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{llrrrrr}
+\toprule
+land in the cell & node to coast & buoys & $H_s$ RMS & $\sigma_r$ & $T_{m02}$ RMS & $\sigma_r$ \\
+\midrule
+none & under \SI{5}{km} & 65 & \SI{0.303}{m} & \SI{0.043}{m} & \SI{0.910}{s} & 0 \\
+none & \SI{5}{km} or more & 135 & \SI{0.245}{m} & 0 & \SI{0.814}{s} & 0 \\
+0.1--10\,\% & under \SI{5}{km} & 15 & \SI{0.237}{m} & 0 & \SI{1.336}{s} & \SI{0.886}{s} \\
+0.1--10\,\% & \SI{5}{km} or more & 6 & \SI{0.644}{m} & \SI{0.570}{m} & \SI{1.770}{s} & \SI{1.461}{s} \\
+10--30\,\% & all & 17 & \SI{0.461}{m} & \SI{0.350}{m} & \SI{0.995}{s} & 0 \\
+30\,\% or more & all & 14 & \SI{0.506}{m} & \SI{0.407}{m} & \SI{0.976}{s} & 0 \\
+\bottomrule
+\end{tabular}
+\caption{Calibration, second cost: representativeness error $\sigma_r$
+of the buoys per class, from the RMS residual of the start run over the
+training window with the depth-aware interpolation, added in quadrature
+to \SI{0.30}{m} for $H_s$ and \SI{1.0}{s} for $T_{m02}$. Land: fraction
+of the node's cell that is land in GEBCO. A land class with fewer than 5
+buoys in a distance class is not split.}
+\label{tab:calsig}
+\end{table}
 
 \begin{table}[H]
 \centering\small
