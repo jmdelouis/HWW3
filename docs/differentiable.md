@@ -851,11 +851,15 @@ Details and the list of what remains are in
   of Jean-Marc: one frozen Jacobian ($A_1$, from the f64 tangents at step
   1) and one value run per step, stop when an accepted step gains less
   than 0.2 % ([GPU model results](wave_results.md)).
-- **Buoy operator.** A depth-aware interpolation of the grid for the buoys
-  (Jean-Marc's request), linear in the fields ($T_{m02}$ through the
-  moments $m_0$, $m_2$), is built and evaluated, with the costs of the
-  points so far under both operators; the cost of the calibration keeps
-  the nearest node until he has seen the results.
+- **Second cost.** From step 2 (Jean-Marc's decision) the buoy terms use a
+  depth-aware interpolation of the grid, linear in the fields ($T_{m02}$
+  through the moments $m_0$, $m_2$), and a representativeness error per
+  class of buoy (land fraction of the cell, distance to the coast), fixed
+  from the residuals of the start run: up to 0.57 m for $H_s$ and 1.46 s
+  for $T_{m02}$ above the 0.30 m and 1.0 s of the others. The costs of all
+  points are given under the first and the second cost. Step 2 is accepted
+  (−1.67 % under the second cost, −1.78 % under the first), step 3 is
+  under way ([GPU model results](wave_results.md)).
 
 ### 9.6 Rest of the port to Rust (from 23 November 2026)
 

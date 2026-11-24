@@ -49,6 +49,9 @@ def main():
     except FileNotFoundError:
         x = np.zeros(len(names))
     sa, sb, st = e["sigma"]
+    if "s_bhs" in e:
+        # observation errors per buoy hour (representativeness)
+        sb, st = e["s_bhs"], e["s_btm"]
     r = np.concatenate([e["r_alt"] / sa, e["r_bhs"] / sb, e["r_btm"] / st])
     A = np.stack([np.concatenate([e["d_alt_" + n] / sa, e["d_bhs_" + n] / sb, e["d_btm_" + n] / st]) for n in names], 1)
     P = np.eye(len(names)) / sp ** 2

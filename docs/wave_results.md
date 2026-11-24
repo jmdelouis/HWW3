@@ -979,6 +979,63 @@ finite differences of the aggregates include and the tangent does not.
   x0.868, `SDSC2` x0.876, `NLPROP` x1.211 from $p_0$, predicted −0.90 %:
   the point of value run 4295934 to 0.005 in the factors, so a switch of
   the cost would not waste that run.
+- **Second cost** (Jean-Marc, 24 November: "Oui les deux"). From step 2 the
+  buoy terms use the depth-aware interpolation, and each buoy hour has the
+  error $\sigma_b = \sqrt{\sigma_0^2 + \sigma_{repr}^2}$, with
+  $\sigma_0$ = 0.30 m for $H_s$ and 1.0 s for $T_{m02}$ and a
+  representativeness error per class of buoy,
+  $\sigma_{repr}^2 = \max(0,\ \overline{r^2} - \sigma_0^2)$ over the
+  residuals of the start run on the training window under the new operator
+  (`scripts/buoy_sigma.py`). The classes are the land fraction of the cell
+  of the buoy's node (GEBCO) and its distance to the coast; a land class
+  with fewer than 5 buoys in one of its distance classes is not split by
+  distance. The errors are fixed from the start run and kept for the rest
+  of the calibration. The altimeter terms are unchanged.
+
+  | class (training window) | buoys | RMS $H_s$ | $\sigma_{repr}$ $H_s$ | RMS $T_{m02}$ | $\sigma_{repr}$ $T_{m02}$ |
+  |---|---|---|---|---|---|
+  | no land in the cell, node under 5 km from the coast | 65 | 0.303 m | 0.043 m | 0.910 s | 0 |
+  | no land, 5 km or more | 135 | 0.245 m | 0 | 0.814 s | 0 |
+  | land 0.1–10 %, under 5 km | 15 | 0.237 m | 0 | 1.336 s | 0.886 s |
+  | land 0.1–10 %, 5 km or more | 6 | 0.644 m | 0.570 m | 1.770 s | 1.461 s |
+  | land 10–30 % | 17 | 0.461 m | 0.350 m | 0.995 s | 0 |
+  | land 30 % or more | 14 | 0.506 m | 0.407 m | 0.976 s | 0 |
+
+  The cost of every stored point under the three costs (data part, then
+  the prior; training window, and validation for the 216 h runs):
+
+  | point | first cost (nearest node) | depth-aware operator | second cost | prior |
+  |---|---|---|---|---|
+  | $p_0$, training | 47,249.7 | 45,265.2 | 41,085.9 | 0 |
+  | step 1, training | 46,628.5 | 44,728.2 | 40,606.6 | 1.29 |
+  | WW3 at step 1, training | 46,628.4 | 44,728.1 | 40,606.5 | 1.29 |
+  | step 2, training | 45,800.1 | 44,037.6 | 39,927.7 | 1.22 |
+  | $p_0$, validation | 69,351.1 | 66,610.9 | 59,449.2 | |
+  | step 1, validation | 68,856.7 | 66,224.7 | 59,201.2 | |
+  | WW3 at step 1, validation | 68,856.6 | 66,224.6 | 59,201.1 | |
+
+  The unweighted scores (bias / RMSE) of the same points, the buoys
+  through the nearest node and through the depth-aware operator:
+
+  | point | altimeters (cm) | buoy $H_s$, nearest (cm) | buoy $H_s$, depth-aware (cm) | $T_{m02}$, nearest (s) | $T_{m02}$, depth-aware (s) |
+  |---|---|---|---|---|---|
+  | $p_0$, training | +2.86 / 25.46 | −4.85 / 31.30 | −4.77 / 31.25 | −0.399 / 1.131 | −0.467 / 0.999 |
+  | step 1, training | +1.04 / 25.27 | −6.38 / 31.64 | −6.32 / 31.61 | −0.352 / 1.100 | −0.416 / 0.969 |
+  | step 2, training | +0.16 / 24.92 | −6.56 / 31.66 | −6.50 / 31.65 | −0.362 / 1.090 | −0.421 / 0.966 |
+  | $p_0$, validation | +5.76 / 26.46 | −3.30 / 41.43 | −3.03 / 40.79 | −0.393 / 1.148 | −0.411 / 1.024 |
+  | step 1, validation | +3.67 / 26.28 | −5.60 / 41.68 | −5.35 / 41.12 | −0.344 / 1.123 | −0.357 / 0.999 |
+
+- **Step 2.** The value run of the step of $A_1$ (job 4295934: `BETAMAX`
+  x0.867, 1.5164, `SDSC2` x0.876, `NLPROP` x1.216 from $p_0$) lowers the
+  second cost from 40,607.8 to 39,928.9 with the prior (−1.67 %; −1.78 %
+  under the first cost and −1.54 % with the depth-aware operator alone),
+  and is accepted. The step of $A_1$ from step 1 under the second cost
+  would have been `BETAMAX` x0.871, `SDSC2` x0.876, `NLPROP` x1.198,
+  predicted −0.99 %.
+- **Step 3.** From step 2, with $A_1$ frozen under the second cost:
+  `BETAMAX` x0.784 (1.3725), `SDSC2` x0.649, `NLPROP` x1.137 from $p_0$
+  (the `SDSC2` component limited to 0.3 again), predicted −0.73 %; value
+  run job 4310651.
 
 ## Preprocessing in Rust (in progress)
 

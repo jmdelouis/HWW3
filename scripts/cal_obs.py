@@ -308,6 +308,9 @@ def evaluate(op, rdir, tans, sigma=SIGMA):
         if not np.isfinite(v).all():
             raise ValueError("%s: %d undefined model values" % (key, int((~np.isfinite(v)).sum())))
     sa, sb, st = sigma
+    if "bh_sigma" in o:
+        # observation errors per buoy hour (representativeness, scripts/buoy_sigma.py)
+        sb, st = o["bh_sigma"], o["bt_sigma"][cost]
     jparts = {"alt": float(np.sum((r["alt"] / sa) ** 2)), "bhs": float(np.sum((r["bhs"] / sb) ** 2)),
               "btm": float(np.sum((r["btm"][cost] / st) ** 2))}
     res = {"run": rdir, "sigma": list(sigma), "J": sum(jparts.values()), "J_parts": jparts,
@@ -320,8 +323,10 @@ def evaluate(op, rdir, tans, sigma=SIGMA):
         jac[name] = (da, dh, dt)
         res.setdefault("d_scores", {})[name] = {"alt": dscores(r["alt"], da), "buoy_hs": dscores(r["bhs"], dh),
                                                  "buoy_tm02": dscores(r["btm"], dt)}
-        res.setdefault("dJ", {})[name] = float(2 * (np.sum(r["alt"] * da) / sa ** 2 + np.sum(r["bhs"] * dh) / sb ** 2
-                                                   + np.sum(r["btm"][cost] * dt[cost]) / st ** 2))
+        res.setdefault("dJ", {})[name] = float(2 * (np.sum(r["alt"] * da) / sa ** 2 + np.sum(r["bhs"] * dh / sb ** 2)
+                                                   + np.sum(r["btm"][cost] * dt[cost] / st ** 2)))
+    if "bh_sigma" in o:
+        res["per_obs_sigma"] = True
     return res, r, jac, cost
 
 
@@ -339,6 +344,8 @@ def main():
     sigma = tuple(float(x) for x in opts["--sigma"].split("+")) if "--sigma" in opts else SIGMA
     tans = [tuple(x.split(":", 1)) for x in a[3:]]
     res, r, jac, cost = evaluate(a[1], a[2], tans, sigma)
+    o = np.load(a[1])
+    extra = {"s_bhs": o["bh_sigma"], "s_btm": o["bt_sigma"][cost]} if "bh_sigma" in o else {}
     print(json.dumps({k: res[k] for k in ("J", "J_parts", "scores")}, indent=1))
     for name in res.get("dJ", {}):
         print(name, "dJ/dln %.6e" % res["dJ"][name], json.dumps(res["d_scores"][name]))
@@ -346,7 +353,7 @@ def main():
         json.dump(res, open(opts["--json"], "w"), indent=1)
     if "--npz" in opts:
         names = [t[0] for t in tans]
-        np.savez(opts["--npz"], names=np.array(names), sigma=np.array(sigma), r_alt=r["alt"], r_bhs=r["bhs"], r_btm=r["btm"][cost],
+        np.savez(opts["--npz"], names=np.array(names), sigma=np.array(sigma), r_alt=r["alt"], r_bhs=r["bhs"], r_btm=r["btm"][cost], **extra,
                  **{"d_%s_%s" % (key, nm): v for nm in names for key, v in zip(("alt", "bhs", "btm"),
                                                                                  (jac[nm][0], jac[nm][1], jac[nm][2][cost]))})
 
