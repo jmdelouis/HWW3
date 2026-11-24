@@ -22,6 +22,9 @@ import sys
 import numpy as np
 
 
+UNDEF = -999.0
+
+
 def tags(d, name):
     return sorted(os.path.basename(p)[len(name) + 1:len(name) + 11] for p in glob.glob(os.path.join(d, name + "_*.f64")))
 
@@ -39,10 +42,12 @@ def same(o, a, b, name):
     rows = []
     for t in tags(os.path.join(o, a), name):
         x, y = field(os.path.join(o, a), name, t), field(os.path.join(o, b), name, t)
-        ok = np.isfinite(x) & np.isfinite(y)
+        # the nodes where both are defined (UNDEF = -999.9 on land, dry and ice nodes)
+        ok = np.isfinite(x) & np.isfinite(y) & (x > UNDEF) & (y > UNDEF)
         dif = np.abs(x[ok] - y[ok])
-        rows.append({"tag": t, "nodes_differ": int(np.sum(dif > 0)), "max_abs": float(dif.max()),
-                     "rms": float(np.sqrt(np.mean(dif ** 2))), "rms_field": float(np.sqrt(np.mean(x[ok] ** 2)))})
+        rows.append({"tag": t, "nodes": int(ok.sum()), "nodes_differ": int(np.sum(dif > 0)), "max_abs": float(dif.max()),
+                     "rms": float(np.sqrt(np.mean(dif ** 2))), "rms_field": float(np.sqrt(np.mean(x[ok] ** 2))),
+                     "p99": float(np.quantile(dif, 0.99)), "nodes_above_1mm": int(np.sum(dif > 1e-3))})
     return rows
 
 
@@ -51,7 +56,7 @@ def rel(o, a, b, name):
     rows = []
     for t in tags(os.path.join(o, b), name):
         x, y = field(os.path.join(o, a), name, t), field(os.path.join(o, b), name, t)
-        ok = np.isfinite(x) & np.isfinite(y)
+        ok = np.isfinite(x) & np.isfinite(y) & (np.abs(x) < -UNDEF) & (np.abs(y) < -UNDEF)
         n = np.linalg.norm(y[ok])
         rows.append({"tag": t, "rel_l2": float(np.linalg.norm(x[ok] - y[ok]) / n) if n > 0 else 0.0,
                      "max_abs": float(np.abs(x[ok] - y[ok]).max()), "norm": float(n)})
@@ -87,8 +92,14 @@ def main():
     if os.path.isdir(os.path.join(o, "v_s3_interp")):
         r = same(o, "v_s3_interp", "v_s3_exact", "hs")
         res["s3_interp"] = r
-        print("BETAMAX 1.37249382 interpolated against exact tables, H_s: max %.3g m, RMS %.3g m (last hour, RMS of H_s %.3f m)" % (
-            max(x["max_abs"] for x in r), r[-1]["rms"], r[-1]["rms_field"]))
+        print("BETAMAX 1.37249382 interpolated against exact tables, H_s: max %.3g m, last hour RMS %.3g m, 99th percentile %.3g m, "
+              "%d of %d nodes above 1 mm (RMS of H_s %.3f m)" % (max(x["max_abs"] for x in r), r[-1]["rms"], r[-1]["p99"],
+                                                              r[-1]["nodes_above_1mm"], r[-1]["nodes"], r[-1]["rms_field"]))
+        if os.path.isdir(os.path.join(o, "v_const")):
+            # the size of the change the interpolation has to follow: step 3 against p0
+            q = same(o, "v_s3_exact", "v_const", "hs")
+            res["s3_vs_p0"] = q
+            print("    for scale, step 3 against p0 (BETAMAX, SDSC2 and NLPROP), H_s: last hour RMS %.3g m, max %.3g m" % (q[-1]["rms"], q[-1]["max_abs"]))
     json.dump(res, open(os.path.join(o, "check.json"), "w"), indent=1)
 
 

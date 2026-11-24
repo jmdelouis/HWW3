@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:a100:1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=48G
-#SBATCH -t 01:10:00
+#SBATCH -t 01:40:00
 #SBATCH -o /scratch/jmdeloui/HWW3/logs/betau_check_%j.log
 #
 # Checks of BETAMAX(U) (hww3-prop --betau, docs/differentiable.md section
@@ -18,6 +18,9 @@
 # (4) the tangent for the coefficient of the 11 m/s knot at c = 0.2 there
 # against central differences of +-0.01 and +-0.02 (BETAMAX off the grid of
 # the tables). Then scripts/betau_check.py and m3_tl_compare.py compare them.
+# A run already finished is skipped, so the job can be submitted again after
+# a time limit (12 h: about 2 min per value run in single precision, 9 min
+# in double precision and 11 min per tangent, the 13 tables taking 2 min).
 #   sbatch scripts/betau_check_hpc.slurm
 S=/scratch/jmdeloui/HWW3
 D=$S/m2/forcing
@@ -37,6 +40,8 @@ run() {
   local tag=$1
   shift
   local t0=$SECONDS
+  # a run that has finished (summary.json written) is not run again
+  [ -f $O/$tag/summary.json ] && { echo "== $tag: done before"; return; }
   mkdir -p $O/$tag
   echo "== $tag: $*"
   $B run $G --restart $R --current $D/current.ww3 --level $D/level.ww3 --ice $D/ice.ww3 --nest $D/nest.ww3 \

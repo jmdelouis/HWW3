@@ -941,7 +941,17 @@ penalties.
    the constant `BETAMAX` 1.75; the tangent for all $c_k$ at once
    (`BETAU`) reproduces the `BETAMAX` tangent; a constant $\beta$ of
    1.37249382 through the interpolation against the tables computed for it;
-   the tangent for $c_3$ at $c_3 = 0.2$ against central differences.
+   the tangent for $c_3$ at $c_3 = 0.2$ against central differences. On
+   12 h (Slurm job 4327297): with all $c_k = 0$ the hourly $H_s$ and
+   $T_{m02}$ are bitwise those of `BETAMAX` 1.75 (no node differs); the
+   tangents `BETAU` and `BETAMAX` with $\beta(U)$ match the `BETAMAX`
+   tangent of the constant run to $4 \times 10^{-16}$ (relative L2 of the
+   tangent of $H_s$, the tangent of the total energy to $1.3 \times
+   10^{-16}$); the interpolation in $\beta$ at 1.37249382 differs from the
+   tables computed for it by $1.3 \times 10^{-6}$ m RMS in $H_s$ at the
+   last hour (no node above 1 mm; 4.5 mm at most over the 12 h), against
+   4.9 cm RMS for the change of step 3. A tangent run with the 13 tables
+   takes about 2 min more (building the tables), 72 min for 156 h.
 
    *Prior.* $c_k \sim \mathcal N(0, 0.25^2)$ as the logarithms of the other
    parameters, plus the second differences of consecutive coefficients,
