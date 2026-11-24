@@ -1034,8 +1034,35 @@ finite differences of the aggregates include and the tangent does not.
   predicted −0.99 %.
 - **Step 3.** From step 2, with $A_1$ frozen under the second cost:
   `BETAMAX` x0.784 (1.3725), `SDSC2` x0.649, `NLPROP` x1.137 from $p_0$
-  (the `SDSC2` component limited to 0.3 again), predicted −0.73 %; value
-  run job 4310651.
+  (the `SDSC2` component limited to 0.3 again), predicted −0.73 %. Its
+  value run (job 4310651) lowers the training cost with the prior from
+  39,928.9 to 39,809.4 (−0.30 %), and is accepted.
+- **Validation monitoring.** Since step 3 every value run covers 216 h,
+  and the step-2 and step-3 points were run again over 216 h (jobs
+  4310674 and 4310675), so that every accepted point has its validation
+  cost (`scripts/cal_point.py`, `scripts/cal_monitor_hpc.slurm`); the
+  calibration pauses if an accepted step lowers the training cost but
+  raises the validation cost. Second cost, data part, with the prior
+  apart:
+
+  | point | training $J$ | altimeters / buoy $H_s$ / buoy $T_{m02}$ | prior | validation $J$ |
+  |---|---|---|---|---|
+  | $p_0$ | 41,085.9 | 25,049.2 / 9,683.7 / 6,353.0 | 0 | 59,449.2 |
+  | step 1 | 40,606.6 | 24,673.9 / 10,002.7 / 5,929.9 | 1.29 | 59,201.2 |
+  | step 2 | 39,927.7 | 24,007.4 / 10,019.7 / 5,900.6 | 1.22 | 58,094.4 |
+  | step 3 | 39,805.2 | 23,630.3 / 10,137.8 / 6,037.1 | 4.19 | 57,475.3 |
+
+  The validation cost falls at every step (−1.07 % at step 3). The
+  unweighted scores on the validation window go from p0 to step 3:
+  altimeters +5.76 / 26.46 → +1.36 / 25.66 cm, buoy $H_s$ through the
+  depth-aware operator −3.03 / 40.79 → −6.46 / 40.75 cm, buoy $T_{m02}$
+  −0.411 / 1.024 → −0.395 / 1.000 s. On the training window the buoy terms
+  rise again at step 3 while the altimeter term falls.
+- **Step 4.** From step 3, with $A_1$ frozen under the second cost:
+  `BETAMAX` x0.721 (1.2619), `SDSC2` x0.481, `NLPROP` x1.067 from $p_0$,
+  predicted −1.25 % (prior about 10.4); value run job 4318533 (216 h). The
+  frozen linearisation is losing accuracy: step 3 gained 0.30 % of the
+  0.73 % predicted.
 
 ## Preprocessing in Rust (in progress)
 

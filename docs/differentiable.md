@@ -857,9 +857,11 @@ Details and the list of what remains are in
   class of buoy (land fraction of the cell, distance to the coast), fixed
   from the residuals of the start run: up to 0.57 m for $H_s$ and 1.46 s
   for $T_{m02}$ above the 0.30 m and 1.0 s of the others. The costs of all
-  points are given under the first and the second cost. Step 2 is accepted
-  (−1.67 % under the second cost, −1.78 % under the first), step 3 is
-  under way ([GPU model results](wave_results.md)).
+  points are given under the first and the second cost. Steps 2 and 3 are
+  accepted (−1.67 % and −0.30 % of the training cost), the validation cost
+  falls at each (59,449 at $p_0$, 57,475 at step 3), and step 4 is under
+  way; every value run now covers both windows
+  ([GPU model results](wave_results.md)).
 
 ### 9.6 Rest of the port to Rust (from 23 November 2026)
 
