@@ -2511,6 +2511,28 @@ a run, counted from the cold start of 1 January, and the scripts refuse
 such a window. The training window starts at 69\,\% of the 156-hour runs
 and at 50\,\% of the 216-hour runs, and the validation window at 73\,\%.
 The daily altimeter bias settles by 5 January.
+\item \emph{\texttt{BETAMAX} as a function of the wind.} The GPU model
+now takes $\ln\beta = \ln 1.75 + \sum_k c_k\,\phi_k(U)$. Here $U$ is the
+wind the source terms see at each node and step, and the $\phi_k$ are hat
+functions on knots at 2, 5, 8, 11, 14, 17 and \SI{20}{m/s}, constant
+beyond the ends and summing to one. The median of $U$ is \SI{6.6}{m/s},
+its 99th percentile 15.7 and its 99.9th percentile \SI{20.0}{m/s}. The
+value and tangent kernels of \texttt{W3SRCE} take $\beta$ per node. The
+tail-stress table \texttt{TAUHFT2} and its derivative are tabulated by the
+Rust port at 13 values of $\beta$ from 0.75 to 3.75 and interpolated by
+cubic Hermite polynomials, exact at these values. Tangent direction $k$ is
+the field $\beta\,\phi_k(U)$. The prior is $c_k\sim N(0,0.25^2)$, plus a
+penalty $\sum_k((c_{k-1}-2c_k+c_{k+1})/0.1)^2$ that a constant or linear
+$\ln\beta(U)$ does not pay. With all $c_k$ zero the model reproduces
+\texttt{BETAMAX} 1.75 bit for bit. The sum of the seven directions
+reproduces the scalar \texttt{BETAMAX} tangent to $4\times10^{-16}$. The
+interpolation in $\beta$ changes $H_s$ by $1.3\times10^{-6}$\,m RMS after
+\SI{12}{h} at $\beta=1.3725$, against \SI{4.9}{cm} for the change of the
+third step (job 4327297). The seven tangent runs at the start (jobs
+4332611 to 4332617) give the Jacobian of the test. Binned by the wind at
+the observation, the bias at 20 to \SI{30}{m/s} is \SI{+19}{cm} for the
+altimeters and \SI{-22}{cm} for the buoys at the start, so the test has
+to arbitrate between them.
 \end{itemize}
 
 \begin{figure}[H]
