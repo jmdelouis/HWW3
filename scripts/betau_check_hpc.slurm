@@ -21,7 +21,11 @@
 # A run already finished is skipped, so the job can be submitted again after
 # a time limit (12 h: about 2 min per value run in single precision, 9 min
 # in double precision and 11 min per tangent, the 13 tables taking 2 min).
+# With PART=tight, only the check of M3 over 3 h: the tangent for c_3 at
+# 0.2 against central differences of steps 1e-4 and 1e-5, on the nodes
+# where the two differences agree to 1e-6 of the node's scale.
 #   sbatch scripts/betau_check_hpc.slurm
+#   sbatch --export=ALL,PART=tight scripts/betau_check_hpc.slurm
 S=/scratch/jmdeloui/HWW3
 D=$S/m2/forcing
 G=$S/grids/natl_v5k4
@@ -49,6 +53,16 @@ run() {
   echo "$tag: $((SECONDS - t0)) s"
 }
 S3="--scale-par SDSC2:0.649237785+NLPROP:1.13718427+BJGAM:1"
+if [ "$PART" = tight ]; then
+  H=3
+  run t_k3_3h --betamax 1.75 --betau $K:0,0,0,0.2,0,0,0 --tangent BETAU3 --f64
+  for c in 0.2001 0.1999 0.20001 0.19999; do
+    run v_k3_$c --betamax 1.75 --betau $K:0,0,0,$c,0,0,0 --f64
+  done
+  cd $S
+  $S/pyenv/bin/python scripts/m3_tl_compare.py $O/t_k3_3h 0.0001:$O/v_k3_0.2001:$O/v_k3_0.1999 0.00001:$O/v_k3_0.20001:$O/v_k3_0.19999     --tol 1e-6 --target 1e-4 --json $O/fd_k3_tight.json
+  exit 0
+fi
 c3=$($S/pyenv/bin/python -c "import math; print(repr(math.log(1.37249382 / 1.75)))")
 C3=$c3,$c3,$c3,$c3,$c3,$c3,$c3
 # (1) values, in single precision as the value runs of the calibration
