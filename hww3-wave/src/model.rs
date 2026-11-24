@@ -1036,8 +1036,15 @@ impl<F: Real> Model<F> {
                 self.wind_coefficients();
             }
         }
-        // levels and ice: read while the last record read is not after t0
+        // levels and ice: read while the last record read is not after t0;
+        // not at the first step, whose read is the first call of W3FLDG done
+        // when the files were opened (it keeps a record at the start time,
+        // which an ice or level field after a cold or calm start is)
+        let first_step = self.itstep == self.cfg.itstep0;
         for which in 0..2 {
+            if first_step {
+                break;
+            }
             let f = if which == 0 { self.lev.as_mut() } else { self.ice.as_mut() };
             if let Some(f) = f {
                 while !f.eof && f.tnext().map_or(true, |t| t <= t0) {

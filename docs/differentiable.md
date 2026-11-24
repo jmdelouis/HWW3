@@ -865,13 +865,11 @@ Details and the list of what remains are in
   identical and the others at WW3's single-precision round-off (1.5e-6 at
   most), in 1.8 s ([GPU model results](wave_results.md)).
 - **Initial state.** `hww3-prop` starts from calm conditions as WW3 does
-  without a restart file (`--restart calm`) and writes its state as a
-  `FULL` WW3 restart (`--restart-out`); the writer gives back WW3's own
-  restarts byte for byte. The GPU checks (calm start against WW3, a run
-  continued from a GPU restart against the same run in one piece) are
-  queued as job 4191399, after the calibration trial 4189550, which waits on
-  priority: the account's fairshare is low after the GPU use of the last
-  days.
+  without a restart file (`--restart calm`, with the first level and ice
+  fields applied at the first step), within 1.7 mm of WW3's first step,
+  and writes its state as a `FULL` WW3 restart (`--restart-out`); the
+  writer gives back WW3's own restarts byte for byte, and a run continued
+  from a GPU restart gives the run in one piece to 2.4e-7 m.
 - **Forcing fields.** The interpolation of `ww3_prnc` is ported
   (`hww3_wave::prnc`, `hww3-pre prnc`, with `scripts/prnc_nc.py` reading
   the netCDF files). From the netCDF inputs of the January runs, copied
@@ -881,8 +879,9 @@ Details and the list of what remains are in
   `hww3-pre bounc`, with `scripts/bounc_nc.py`); from the 318 station
   files the boundary file is identical to the bit to that of `ww3_bounc`.
 - **A run with Rust inputs only** (calm start, `build-params`, the files
-  above) is queued with its comparison against the calibration's start run
-  (jobs 4203334 and 4203335).
+  above) gives the calibration's start run to a median of 1e-6 m and the
+  same cost and scores on both windows: no WW3 tool is needed for a GPU
+  run.
 
 ### 9.7 Plan after the calibration (23 November 2026)
 

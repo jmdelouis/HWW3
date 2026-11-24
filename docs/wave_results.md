@@ -1018,11 +1018,19 @@ allocates, of which `INSIN4` fills 17. The file takes 1.8 s to build.
   `LN1` switch starts from calm conditions (`W3IORS`: `TYPE = 'CALM'`;
   `W3INIT`: zero spectra; levels and ice zero until the first fields are
   read). `hww3-prop run --restart calm --start T` does the same
-  (`Restart::calm`). Its check against the WW3 restart written after the
-  first step of the cold start of 1 January (`runs/m2_week_start_full`,
-  00:10) is queued (`scripts/pre_restart_hpc.slurm`, Slurm job 4191399,
-  after the calibration trial 4189550, which waits on priority because the
-  account's fairshare is low after the GPU use of the last days).
+  (`Restart::calm`). After a cold or calm start `W3IORS` leaves
+  `TLEV(1) = TICE(1) = -1`, and the first step of `W3WAVE` then applies the
+  first level and ice fields whatever their time (action 'I'); the first
+  call of `W3FLDG` keeps a field at the start time. Two fixes made
+  `hww3-prop` do the same: its times of the level and ice fields start
+  unset, and its first step does not read the level and ice files again
+  (without them the ice of 1 January 00 h was never applied, and the first
+  step gave up to 1.02 m of $H_s$ under the ice of Hudson Bay, Slurm jobs
+  4191399 and 4269338). Against the WW3 restart written after the first
+  step of the cold start of 1 January (`runs/m2_week_start_full`, 00:10,
+  `scripts/pre_restart_hpc.slurm`, job 4295937) the $H_s$ of the first step
+  differs by at most 1.7 mm (one of 370,000 nodes above 1 mm, 0.7 mm at
+  most at the coast).
 - **Restarts.** `Restart::write` writes a `FULL` restart in the layout of
   `W3IORS`: header, time, one record per spectrum, the times of the
   fields (`TLEV`, `TICE`, `TRHO`, `TIC1`, `TIC5`), then `WLV`, `ICE`,
@@ -1037,10 +1045,12 @@ allocates, of which `INSIN4` fills 17. The file takes 1.8 s to build.
   `ASF` as one, since the GPU model recomputes u* at each source call and
   does not keep the others. A run continues from such a restart with
   `--itstep0` set to the `ITSTEP` the first run prints (its parity sets the
-  order of `W3KTP3`). The same job checks that a run from calm to 01 h
-  gives the same $H_s$ and $T_{m02}$ in one piece and in two pieces joined
-  by a restart at 00:10. Reading such a restart with WW3 has not been
-  tried.
+  order of `W3KTP3`). A run from calm to 01 h in two pieces joined by a
+  restart at 00:10 gives the $H_s$ and $T_{m02}$ of the run in one piece
+  to 2.4e-7 m and 9.5e-7 s (at 288 nodes, identical elsewhere): the run in
+  one piece keeps the wavenumbers of the level update on the device at the
+  first step, and the restarted run computes them on the host. Reading
+  such a restart with WW3 has not been tried.
 
 ### Forcing fields (`ww3_prnc`)
 
@@ -1119,8 +1129,14 @@ forcing and boundary files above, so with no WW3 tool, and
 calibration (`cal/it0_value`, from WW3's restart after the first step with
 the parameter file of the harness): hourly $H_s$ node by node
 (`scripts/pre_hs_cmp.py`) and the cost and scores of the calibration on its
-training and validation windows. Both are queued (Slurm jobs 4203334 and
-4203335) after the restart check 4191399.
+training and validation windows (Slurm jobs 4269339 and 4269340, 19 min
+for the run). Over the 216 hours the median $|\Delta H_s|$ is at most
+9.5e-7 m and its 99th percentile at most 3.8e-5 m; the largest difference,
+0.30 m at node 238271 in Ungava Bay on 5 January, is the amplification of
+round-off seen there before. The cost and all the scores are identical to
+the digits printed on both windows (training $J$ 47,249.7, validation
+69,351.1). A GPU run therefore needs no WW3 tool: the parameter file, the
+forcing, the boundary spectra and the initial state all come from Rust.
 
 ## Coastal diagnostics of the buoy scores
 
