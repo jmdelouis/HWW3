@@ -1,0 +1,9 @@
+name,platform_name,lon,lat,obs_over_model,site,reason
+NO_TS_MO_Roompotsluis,Roompotsluis,3.682,51.620,0.06,barrier,inside the Roompot sluice of the Oosterschelde storm-surge barrier; median observed H_s 0.04 m
+NO_TS_MO_MaeslantkeringZeezijdeZuidMeetpaal,Maeslantkering Zeezijde Zuid,4.155,51.958,0.10,barrier,at the Maeslantkering storm-surge barrier in the Nieuwe Waterweg; median observed H_s 0.10 m
+NO_TS_MO_MaeslantkeringZeezijdeNoordMeetpaal,Maeslantkering Zeezijde Noord,4.159,51.961,0.14,barrier,at the Maeslantkering storm-surge barrier in the Nieuwe Waterweg; median observed H_s 0.14 m
+NO_TS_MO_Uithuizerwad2,Uithuizerwad2,6.758,53.467,0.10,inner Wadden,on the Uithuizerwad tidal flats behind the Wadden islands; median observed H_s 0.02 m
+NO_TS_MO_SchiermonnikoogWaggen,Schiermonnikoog Waggen,6.203,53.470,0.10,inner Wadden,in the Wadden Sea behind Schiermonnikoog; median observed H_s 0.08 m
+NO_TS_MO_ZeebruggeZandopvangkadeBuoy,Zeebrugge Zandopvangkade - Buoy,3.193,51.356,0.31,harbour,at the sand-catch quay inside the port of Zeebrugge; median observed H_s 0.25 m
+BO_TS_MO_Uto,Uto,21.355,59.780,0.43,archipelago,coastal structure on Uto island at the outer edge of the Archipelago Sea; median observed H_s 0.58 m against 1.49 m at its node
+NO_TS_MO_6201053,St Marys Sound wave buoy,-6.312,49.892,0.41,archipelago,in St Mary's Sound inside the Isles of Scilly; median observed H_s 0.98 m against 2.48 m at its node

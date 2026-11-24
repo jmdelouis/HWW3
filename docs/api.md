@@ -110,6 +110,8 @@ other values of the calibrated parameters). The Fortran harness
 | `buoy_depth.py` | the GEBCO depth at the buoys (run where GEBCO is, with numpy only) |
 | `obs_diag.py`, `obs_diag_hpc.slurm` | observation diagnostics of the calibration: per-buoy tables and figures, altimeter residuals and noise, Huber and L1 steps against the L2 step |
 | `cal_point.py`, `cal_monitor_hpc.slurm` | one point of the calibration under the three costs on both windows: $J$ and its parts, the prior, the unweighted scores |
+| `buoy_exclude.py` | candidates for the list of buoys the mesh cannot represent (median observed / model $H_s$), the list itself being `configs/buoy_exclude.csv` |
+| `cal_cost3_hpc.slurm` | the third cost (excluded buoys, representativeness errors fitted again, Huber loss) and the start run and step 3 under the four costs |
 | `buoy_sigma.py`, `cal_cost2_hpc.slurm` | the representativeness errors of the buoys per class, fixed from the start run, and the stored points of the calibration under the first and the second cost |
 | `pre_restart_hpc.slurm` | the start from calm conditions against WW3, and a run continued from a GPU restart against the same run in one piece |
 | `cal_fdcheck.py` | the tangent derivatives of the cost and scores against the M2b finite differences (control only) |

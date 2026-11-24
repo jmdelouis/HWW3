@@ -1374,6 +1374,66 @@ RMSE of 36.5 cm (nearest node: −6.17 and 36.8 cm) and a $T_{m02}$ RMSE of
 that have weights (the weights are built for the buoys of the
 calibration's windows; the others are skipped).
 
+## Third cost and the spin-up rule
+
+Jean-Marc's decisions after the observation diagnostics: leave out the
+buoys the mesh cannot represent, by a fixed list; use a Huber loss; and
+never use the first part of a run.
+
+**Excluded buoys** (`configs/buoy_exclude.csv`). The criterion is the median
+over both windows of observed / model $H_s$ at the start run (through the
+depth-aware operator, `scripts/buoy_exclude.py`) below 0.45, and a site
+confirmed by hand on the map and in the metadata as a harbour, a barrier,
+the inner Wadden or an archipelago. A buoy is not left out because the
+model is wrong there.
+
+| buoy | site | observed / model |
+|---|---|---|
+| Roompotsluis | sluice of the Oosterschelde storm-surge barrier | 0.06 |
+| Maeslantkering Zeezijde Zuid | storm-surge barrier, Nieuwe Waterweg | 0.10 |
+| Maeslantkering Zeezijde Noord | storm-surge barrier, Nieuwe Waterweg | 0.14 |
+| Uithuizerwad2 | tidal flats of the inner Wadden | 0.10 |
+| Schiermonnikoog Waggen | Wadden Sea behind Schiermonnikoog | 0.10 |
+| Zeebrugge Zandopvangkade buoy | inside the port of Zeebrugge | 0.31 |
+| Utö | coastal structure, outer Archipelago Sea | 0.43 |
+| St Mary's Sound (6201053) | inside the Isles of Scilly | 0.41 |
+
+Checked and kept: IL2-Finnis (0.53) and Penzance (0.51), partly sheltered
+by islands or a bay but not inside them; the Sevenstones lightship (0.75);
+the exposed buoys of Biscay and Bonifacio where the model misses the storms
+(Bilbao station 1.54, Saint-Jean-de-Luz 1.40, Bonifacio 1.54); and
+Wielingen Noord, Morecambe Bay, Weymouth and Folkestone, where the model is
+2.7–3.4 times too low (open coastal waters, a model error).
+
+**Third cost.** The depth-aware operator without these 8 buoys,
+representativeness errors per class fitted again from the start run
+without them (a land class with fewer than 5 buoys in one distance class
+is not split by distance; $\sigma_{repr}$ 0.425 m for $H_s$ in cells with
+30 % land or more and 1.10 s for $T_{m02}$ in cells with 0.1–10 % land, 0
+elsewhere), and the Huber loss $\rho(z) = z^2$ for $|z| \le 1.5$ and
+$3|z| - 2.25$ beyond, $z$ the residual over its observation error, for the
+altimeters and the buoys; the Gauss–Newton steps use the iteratively
+reweighted form (`cal_gn.py`). Cost (data part, prior apart) and the
+unweighted buoy scores without the excluded buoys (`scripts/cal_cost3_hpc.slurm`,
+job 4327059):
+
+| point | third cost, training | validation | second cost, training | validation | buoy $H_s$ without / with the 8 (training, cm) |
+|---|---|---|---|---|---|
+| $p_0$ | 35,543.4 | 50,242.2 | 41,085.9 | 59,449.2 | −7.48 / 27.68 against −4.77 / 31.25 |
+| step 3 | 34,432.2 (prior 4.19) | 48,173.9 | 39,805.2 | 57,475.3 | −9.60 / 28.52 against −6.88 / 31.81 |
+
+Without the 8 buoys the buoy $H_s$ RMSE at $p_0$ falls from 31.25 to
+27.68 cm (training) and from 40.79 to 38.44 cm (validation), and the bias
+becomes more negative (−7.48 and −5.45 cm against −4.77 and −3.03 cm):
+these sites were where the model was much too high.
+
+**Spin-up rule.** A window must start after at least 30 % of its run,
+counted from the cold start of the chain of restarts (1 January 00 h):
+`cal_obs.py` refuses an operator built, or a run evaluated, on a window
+that starts earlier (`check_spinup`). The windows of the calibration
+satisfy it: training starts 108 h into the 156 h trial runs (69 %) and
+the 216 h value runs (50 %), validation 157 h into the 216 h runs (73 %).
+
 ## Observation diagnostics
 
 Why the buoys cannot be fitted with the three parameters, and whether the

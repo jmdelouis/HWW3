@@ -603,6 +603,9 @@ python scripts/buoy_depth.py $DATAWORK/HWW3/data/gebco/natl buoys.json > buoy_de
 sbatch scripts/buoy_op_hpc.slurm
 # the second cost of the calibration: representativeness errors per class, then the stored points under both costs
 sbatch scripts/cal_cost2_hpc.slurm
+# the third cost: candidates for the excluded buoys, then the cost (configs/buoy_exclude.csv, Huber delta 1.5)
+$R/pyenv/bin/python scripts/buoy_exclude.py $R/cal/it0_value
+sbatch scripts/cal_cost3_hpc.slurm
 # observation diagnostics (CPU): figures, per-buoy tables and summary in $R/diag
 sbatch scripts/obs_diag_hpc.slurm
 # buoy scores of a run with the depth-aware weights (the nearest node stays the default)

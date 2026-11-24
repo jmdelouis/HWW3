@@ -101,6 +101,7 @@ def l3_files(t0, t1, root):
 def build(op, rdir, start, end, ice_ncs, grid, l3=L3, bdir=BUOYS, min_hours=24):
     times = hours_of(start, end)
     tags = [t.strftime("%Y%m%d%H") for t in times]
+    check_spinup(rdir, tags)
     tm = np.array([(t - EPOCH).total_seconds() for t in times])
     nodes = np.load(os.path.join(grid, "plot", "nodes.npz"))
     lon, lat, level = nodes["lon"].astype(float), nodes["lat"].astype(float), nodes["level"]
@@ -210,6 +211,36 @@ def build(op, rdir, start, end, ice_ncs, grid, l3=L3, bdir=BUOYS, min_hours=24):
              buoys=np.array(names), tm02_rmse0=rmse)
 
 
+# The spin-up rule (Jean-Marc): never use the first part of a run, while the
+# simulation settles; a window must start after at least SPINUP_FRAC of the
+# run, counted from the cold start of the chain of restarts it belongs to.
+COLD_START = datetime.datetime.strptime(os.environ.get("CAL_COLD_START", "2026010100"), "%Y%m%d%H")
+SPINUP_FRAC = 0.3
+
+
+def run_end(d):
+    """Last hour of a run: its last hourly H_s file, or the last time of a WW3 netCDF file."""
+    if d.endswith(".nc"):
+        with netCDF4.Dataset(d) as nc:
+            t = nc["time"]
+            return netCDF4.num2date(t[-1], t.units, only_use_cftime_datetimes=False)
+    tags = sorted(os.path.basename(p)[3:13] for p in glob.glob(os.path.join(d, "hs_*.f*")))
+    if not tags:
+        raise FileNotFoundError("%s: no hourly H_s" % d)
+    return datetime.datetime.strptime(tags[-1], "%Y%m%d%H")
+
+
+def check_spinup(d, tags):
+    """Refuse a window (TAGS, YYYYMMDDHH) that starts before SPINUP_FRAC of run D."""
+    t0 = datetime.datetime.strptime(str(tags[0]), "%Y%m%d%H")
+    t1 = run_end(d)
+    frac = (t0 - COLD_START).total_seconds() / max((t1 - COLD_START).total_seconds(), 1.0)
+    if frac < SPINUP_FRAC:
+        raise ValueError("spin-up rule: the window starting %s is at %.0f %% of run %s (cold start %s, last hour %s), "
+                         "before %.0f %%" % (t0, 100 * frac, d, COLD_START, t1, 100 * SPINUP_FRAC))
+    return frac
+
+
 def model_points(d, tags, name, k, n):
     """Values of the hourly fields NAME of run D at (hour k, node n)."""
     out = np.full(len(k), np.nan)
@@ -301,8 +332,15 @@ def dscores(r, dr):
     return {"bias": float(np.mean(dr)), "rmse": float(np.mean(r * dr) / rm)}
 
 
+def rho(z, delta):
+    """The Huber loss of the third cost: z^2 for |z| <= delta, 2 delta |z| - delta^2 beyond."""
+    az = np.abs(z)
+    return np.where(az <= delta, z * z, 2 * delta * az - delta * delta)
+
+
 def evaluate(op, rdir, tans, sigma=SIGMA):
     o = np.load(op)
+    frac = check_spinup(rdir, list(o["tags"]))
     alt, bh, bt = apply(o, rdir)
     r = {"alt": alt - o["alt_obs"], "bhs": bh - o["bh_obs"], "btm": bt - o["bt_obs"]}
     cost = o["bt_cost"]
@@ -313,9 +351,12 @@ def evaluate(op, rdir, tans, sigma=SIGMA):
     if "bh_sigma" in o:
         # observation errors per buoy hour (representativeness, scripts/buoy_sigma.py)
         sb, st = o["bh_sigma"], o["bt_sigma"][cost]
-    jparts = {"alt": float(np.sum((r["alt"] / sa) ** 2)), "bhs": float(np.sum((r["bhs"] / sb) ** 2)),
-              "btm": float(np.sum((r["btm"][cost] / st) ** 2))}
-    res = {"run": rdir, "sigma": list(sigma), "J": sum(jparts.values()), "J_parts": jparts,
+    delta = float(o["huber_delta"]) if "huber_delta" in o else 0.0
+    z = {"alt": r["alt"] / sa, "bhs": r["bhs"] / sb, "btm": r["btm"][cost] / st}
+    jl2 = {k: float(np.sum(v ** 2)) for k, v in z.items()}
+    jparts = {k: float(np.sum(rho(v, delta))) for k, v in z.items()} if delta > 0 else jl2
+    res = {"run": rdir, "sigma": list(sigma), "J": sum(jparts.values()), "J_parts": jparts, "spinup_fraction": frac,
+           "huber_delta": delta, "J_l2": sum(jl2.values()), "J_parts_l2": jl2,
            "scores": {"alt": scores(r["alt"]), "buoy_hs": scores(r["bhs"]), "buoy_tm02": scores(r["btm"]),
                       "buoy_tm02_cost": scores(r["btm"][cost])},
            "n_buoys": int(len(o["buoys"]))}
@@ -325,8 +366,10 @@ def evaluate(op, rdir, tans, sigma=SIGMA):
         jac[name] = (da, dh, dt)
         res.setdefault("d_scores", {})[name] = {"alt": dscores(r["alt"], da), "buoy_hs": dscores(r["bhs"], dh),
                                                  "buoy_tm02": dscores(r["btm"], dt)}
-        res.setdefault("dJ", {})[name] = float(2 * (np.sum(r["alt"] * da) / sa ** 2 + np.sum(r["bhs"] * dh / sb ** 2)
-                                                   + np.sum(r["btm"][cost] * dt[cost] / st ** 2)))
+        # dJ = 2 sum psi(z) dz with psi(z) = z, or clipped at +-delta for the Huber cost
+        ps = {k: (np.clip(v, -delta, delta) if delta > 0 else v) for k, v in z.items()}
+        res.setdefault("dJ", {})[name] = float(2 * (np.sum(ps["alt"] * da / sa) + np.sum(ps["bhs"] * dh / sb)
+                                                   + np.sum(ps["btm"] * dt[cost] / st)))
     if "bh_sigma" in o:
         res["per_obs_sigma"] = True
     return res, r, jac, cost
@@ -348,6 +391,8 @@ def main():
     res, r, jac, cost = evaluate(a[1], a[2], tans, sigma)
     o = np.load(a[1])
     extra = {"s_bhs": o["bh_sigma"], "s_btm": o["bt_sigma"][cost]} if "bh_sigma" in o else {}
+    if "huber_delta" in o:
+        extra["huber"] = float(o["huber_delta"])
     print(json.dumps({k: res[k] for k in ("J", "J_parts", "scores")}, indent=1))
     for name in res.get("dJ", {}):
         print(name, "dJ/dln %.6e" % res["dJ"][name], json.dumps(res["d_scores"][name]))

@@ -7,7 +7,8 @@ RUN is a value run (hourly H_s and T_m02), X.json its control vector
 each window (the operators op_<window>.npz of cal_obs.py in DIR, default
 $S/cal) and each cost: the first (op_<window>, nearest node, sigma 0.30 m
 and 1.0 s), the depth-aware operator alone (op_<window>_depth) and the
-second cost (op_<window>_cost2, with the representativeness errors), it
+second cost (op_<window>_cost2, with the representativeness errors) and the
+third (op_<window>_cost3: without the excluded buoys, Huber), it
 gives J and its parts (altimeters, buoy H_s, buoy T_m02), the prior term
 sum (x / 0.25)^2 separately, and the unweighted scores (bias and RMSE of
 the altimeters, and of the buoy H_s and T_m02 through the nearest node and
@@ -24,7 +25,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cal_obs  # noqa: E402
 
-COSTS = (("first", ""), ("depth", "_depth"), ("second", "_cost2"))
+COSTS = (("first", ""), ("depth", "_depth"), ("second", "_cost2"), ("third", "_cost3"))
 
 
 def main():
@@ -44,16 +45,25 @@ def main():
         res = {}
         try:
             for name, suf in COSTS:
-                r, _, _, _ = cal_obs.evaluate(os.path.join(a.cal, "op_%s%s.npz" % (w, suf)), a.run, [])
-                res[name] = {"J": r["J"], "J_parts": r["J_parts"], "scores": r["scores"]}
+                opf = os.path.join(a.cal, "op_%s%s.npz" % (w, suf))
+                if not os.path.exists(opf):
+                    continue
+                r, _, _, _ = cal_obs.evaluate(opf, a.run, [])
+                res[name] = {"J": r["J"], "J_parts": r["J_parts"], "scores": r["scores"], "J_l2": r["J_l2"]}
         except (FileNotFoundError, KeyError, ValueError, TypeError) as e:
             print("  %s: skipped (%s)" % (w, e))
             continue
         out["windows"][w] = res
         for name, _ in COSTS:
+            if name not in res:
+                continue
             q = res[name]
             print("  %-5s %-6s J %10.3f (alt %9.3f, buoy H_s %9.3f, buoy T_m02 %9.3f) + prior %.3f = %10.3f"
                   % (w, name, q["J"], q["J_parts"]["alt"], q["J_parts"]["bhs"], q["J_parts"]["btm"], prior, q["J"] + prior))
+        if "third" in res:
+            s3 = res["third"]["scores"]
+            print("  %-5s third-cost scores (without the excluded buoys): buoy H_s %+.2f/%.2f cm, T_m02 %+.3f/%.3f s"
+                  % (w, 100 * s3["buoy_hs"]["bias"], 100 * s3["buoy_hs"]["rmse"], s3["buoy_tm02"]["bias"], s3["buoy_tm02"]["rmse"]))
         s1, s2 = res["first"]["scores"], res["depth"]["scores"]
         print("  %-5s scores: alt %+.2f/%.2f cm; buoy H_s %+.2f/%.2f cm (nearest), %+.2f/%.2f cm (depth-aware); "
               "T_m02 %+.3f/%.3f s (nearest), %+.3f/%.3f s (depth-aware)"

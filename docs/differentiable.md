@@ -862,6 +862,17 @@ Details and the list of what remains are in
   falls at each (59,449 at $p_0$, 57,475 at step 3), and step 4 is under
   way; every value run now covers both windows
   ([GPU model results](wave_results.md)).
+- **Third cost.** After the observation diagnostics (Jean-Marc): 8 buoys
+  at sites the mesh cannot represent (barriers, harbour, inner Wadden,
+  archipelagos) are left out by a fixed list (`configs/buoy_exclude.csv`),
+  the representativeness errors are fitted again without them, and the
+  cost uses a Huber loss with $\delta = 1.5$ observation errors. It is
+  the cost of the `BETAMAX`$(U)$ test.
+- **Spin-up rule.** Never use the first part of a run while the
+  simulation settles: a window starts after at least 30 % of its run,
+  counted from the cold start of the chain, and `cal_obs.py` refuses
+  others. The month-long calibration will start from a spun-up restart or
+  drop at least the first 30 % of each run.
 
 ### 9.6 Rest of the port to Rust (from 23 November 2026)
 
@@ -905,8 +916,10 @@ $\ln\beta = \ln\beta_0 + \sum_k c_k\,\phi_k(\text{features})$ with
 smooth bases, a prior centred on the calibrated constant and smoothness
 penalties.
 
-1. First $\beta(U)$ in the local ERA5 $U_{10}$ (B-splines with knots every
-   5 m/s), as briefed.
+1. First $\beta(U)$ in the local ERA5 $U_{10}$ (a smooth basis of about 7
+   knots from 0 to 26 m/s, denser between 10 and 20 m/s), from $p_0$ with
+   `SDSC2` and `NLPROP`, under the third cost, on the present windows
+   before the optimisation (Jean-Marc, 24 November).
 2. Then one or two features of the wind history, computed from the forcing
    only: $dU/dt$, the turning rate of the wind direction and $|\nabla U|$,
    with a few spline coefficients each, using the vector tangent once the

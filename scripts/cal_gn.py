@@ -10,7 +10,12 @@ g = A^T r + x / SIGMA_P^2, A the derivatives of r / sigma; each component
 of dx is limited to MAX_STEP. H^-1 is the posterior covariance of ln p for
 Gaussian independent errors of the given sigmas; since the errors of
 neighbouring altimeter blocks and buoy hours are correlated, it is also
-given scaled by the reduced chi-square J_data / (N - n).
+given scaled by the reduced chi-square J_data / (N - n). If EVAL.npz holds a
+Huber threshold (third cost, cal_obs.py), the data term is
+sum rho(r / sigma) with rho(z) = z^2 for |z| <= delta and 2 delta |z| -
+delta^2 beyond, and the step is that of iteratively reweighted least
+squares: H = A^T W A + I / SIGMA_P^2, g = A^T W r + x / SIGMA_P^2 with the
+weights W = min(1, delta / |r / sigma|) at the current residuals.
 
 usage:
     python scripts/cal_gn.py EVAL.npz X.json OUT.json [--lambda L] [--sigma-p S] [--max-step M] [--names A+B+C]
@@ -55,27 +60,39 @@ def main():
     r = np.concatenate([e["r_alt"] / sa, e["r_bhs"] / sb, e["r_btm"] / st])
     A = np.stack([np.concatenate([e["d_alt_" + n] / sa, e["d_bhs_" + n] / sb, e["d_btm_" + n] / st]) for n in names], 1)
     P = np.eye(len(names)) / sp ** 2
-    H = A.T @ A + P
-    g = A.T @ r + P @ x
-    jd, jp = float(r @ r), float(x @ P @ x)
+    delta = float(e["huber"]) if "huber" in e else 0.0
+    if delta > 0:
+        def rho(z):
+            az = np.abs(z)
+            return np.where(az <= delta, z * z, 2 * delta * az - delta * delta)
+        wt = np.minimum(1.0, delta / np.maximum(np.abs(r), 1e-12))
+    else:
+        def rho(z):
+            return z * z
+        wt = np.ones(len(r))
+    H = A.T @ (wt[:, None] * A) + P
+    g = A.T @ (wt * r) + P @ x
+    jd, jp = float(np.sum(rho(r))), float(x @ P @ x)
     dx = -np.linalg.solve(H + lam * np.diag(np.diag(H)), g)
     scale = min(1.0, mx / np.abs(dx).max()) if np.abs(dx).max() > 0 else 1.0
     dx *= scale
     xn = x + dx
     rp = r + A @ dx
-    jpred = float(rp @ rp + xn @ P @ xn)
+    jpred = float(np.sum(rho(rp)) + xn @ P @ xn)
     C = np.linalg.inv(H)
     n = len(r)
     chi = jd / max(n - len(names), 1)
     sd = np.sqrt(np.diag(C))
     corr = C / np.outer(sd, sd)
     out = {"names": names, "x": x.tolist(), "J": jd + jp, "J_data": jd, "J_prior": jp, "n_obs": n,
-           "lambda": lam, "sigma_p": sp, "max_step": mx, "step_scale": scale,
+           "lambda": lam, "sigma_p": sp, "max_step": mx, "step_scale": scale, "huber": delta,
+           "share_beyond_huber": float(np.mean(np.abs(r) > delta)) if delta > 0 else 0.0,
            "dx": dx.tolist(), "x_new": xn.tolist(), "factor_new": np.exp(xn).tolist(), "J_pred": jpred,
            "gradient": g.tolist(), "H": H.tolist(), "cov": C.tolist(), "sd_ln": sd.tolist(),
            "reduced_chi2": chi, "sd_ln_scaled": (sd * np.sqrt(chi)).tolist(), "corr": corr.tolist()}
     json.dump(out, open(a[2], "w"), indent=1)
-    print("J %.6e (data %.6e, prior %.3e) over %d residuals" % (jd + jp, jd, jp, n))
+    print("J %.6e (data %.6e, prior %.3e) over %d residuals%s" % (jd + jp, jd, jp, n,
+          ", Huber delta %.2f (%.1f %% beyond)" % (delta, 100 * np.mean(np.abs(r) > delta)) if delta > 0 else ""))
     for i, nm in enumerate(names):
         print("%-8s x %+.5f  grad %+.4e  dx %+.5f  -> factor %.5f  (sd %.4f, scaled %.4f)"
               % (nm, x[i], g[i], dx[i], np.exp(xn[i]), sd[i], sd[i] * np.sqrt(chi)))
