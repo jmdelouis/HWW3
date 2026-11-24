@@ -2429,6 +2429,42 @@ four parameters). \emph{Step}: factor of the accepted first step, with
 \label{tab:cal0}
 \end{table}
 
+\paragraph{Preprocessing in Rust (done).} A run of the GPU model no
+longer needs any WW3 tool; WW3 now only makes the references.
+\begin{itemize}
+\item \emph{Parameter file.} The source-term part of \texttt{ww3\_grid}
+is ported. The parameter file it builds in \SI{1.8}{s} has 121 of its 137
+records identical to the one WW3 writes, and the rest at single-precision
+round-off.
+\item \emph{Forcing and boundaries.} The ports of \texttt{ww3\_prnc}
+(wind, ice, currents, water level) and \texttt{ww3\_bounc} write, from
+the netCDF inputs of January 2026, files identical bit for bit to those of
+WW3: 0 differing values in $2\times93.3$ million for the wind and the
+currents, and none in the level, the ice and the boundary spectra. The
+order of evaluation of \texttt{MIN(1., MAX(0., x))} by gfortran, which
+writes $-0$ for 25 zero weights at \SI{45}{\degree E}, is reproduced. On
+the hpc cluster they take 2.4, 11.0, 3.4 and 0.1\,s for 240 hours of
+wind, currents, level and ice, and \SI{0.9}{s} for the boundary spectra.
+On Datarmor, \texttt{ww3\_prnc} took 25, 95, 38 and \SI{1}{s} for the
+744 hours of January and \texttt{ww3\_bounc} \SI{9}{s} for the same
+spectra.
+\item \emph{Initial state and restarts.} The calm start of WW3 is
+ported. After the first step its $H_s$ differs from WW3's by at most
+\SI{1.7}{mm}, above \SI{1}{mm} at one node of about 370\,000 (job
+4295937), once the level and ice records of the start time are applied
+at the first step, as \texttt{W3FLDG} does. The restart writer matches
+WW3 byte for byte. A run continued from a GPU restart differs from the
+same run in one piece by at most $2.4\times10^{-7}$\,m at 288 nodes.
+\item \emph{A run with Rust inputs only.} A 216-hour run from a calm
+start, with the parameter file, forcing and boundary spectra all made in
+Rust (job 4269339), agrees with the calibration's start run on the WW3
+inputs (job 4269340) to $9.5\times10^{-7}$\,m at the median node and
+$3.8\times10^{-5}$\,m at the 99th percentile of $H_s$. The largest
+difference, \SI{0.30}{m}, is at the mouth of Ungava Bay on 5 January,
+where round-off is amplified as described for M2b. The cost and all the
+scores are identical on both windows.
+\end{itemize}
+
 
 \appendix
 \section{Reproducing}
