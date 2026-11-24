@@ -2482,6 +2482,35 @@ an L1 loss gives a step in the same direction as the squared loss
 (cosine 0.94 to 0.99 from the start), only shorter. It would limit the
 weight of the unrepresentable sites, but not the conflict between sea
 states.
+\item \emph{Third cost.} For the next calibrations, eight buoys at
+sites the mesh cannot represent are left out (\texttt{configs/buoy\_exclude.csv}).
+They were selected because their median ratio of observed to model $H_s$
+at the start is below 0.45, and each was then confirmed by hand. They are
+the Roompot sluice of the Oosterschelde barrier, the two stations of the
+Maeslantkering barrier, two tidal-flat stations of the Wadden Sea, the
+harbour of Zeebrugge, Ut\"o, and St Mary's Sound inside the Isles of
+Scilly. Partly sheltered or exposed buoys where the model is wrong stay
+in. These include the Biscay buoys whose storms the model misses, and
+four open coastal sites of the Channel and the Irish Sea (Wielingen,
+Morecambe Bay, Weymouth, Folkestone) where the model is 2.7 to 3.4 times
+too low. Without the eight sites, the buoy $H_s$ RMSE at the start goes
+from 31.25 to \SI{27.68}{cm} on the training window and from 40.79 to
+\SI{38.44}{cm} on the validation window. The bias goes from $-4.77$ to
+\SI{-7.48}{cm} and from $-3.03$ to \SI{-5.45}{cm}, since the model was
+far too high at those sites. The representativeness errors are fitted
+again without them and frozen: \SI{0.425}{m} for $H_s$ in cells at least
+30\,\% land, \SI{1.10}{s} for $T_{m02}$ in cells with 0.1 to 10\,\% land,
+zero elsewhere. The loss becomes a Huber loss,
+$\rho(z)=z^2$ for $|z|\le1.5$ and $3|z|-2.25$ beyond, on normalised
+residuals of the altimeters and the buoys, minimised by reweighted
+Gauss--Newton steps. Under this cost the training cost is 35\,543 at the
+start and 34\,432 at the third step, and the validation cost 50\,242 and
+48\,174.
+\item \emph{Spin-up.} No part of a window may lie in the first 30\,\% of
+a run, counted from the cold start of 1 January, and the scripts refuse
+such a window. The training window starts at 69\,\% of the 156-hour runs
+and at 50\,\% of the 216-hour runs, and the validation window at 73\,\%.
+The daily altimeter bias settles by 5 January.
 \end{itemize}
 
 \begin{figure}[H]
