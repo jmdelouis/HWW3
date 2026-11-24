@@ -76,7 +76,9 @@ def field(d, name, tag, idx=None):
         p = os.path.join(d, "%s_%s%s" % (name, tag, ext))
         if os.path.exists(p):
             v = np.fromfile(p, dt).astype(np.float64)
-            v[v < -900] = np.nan
+            # the undefined value of hww3-prop (UNDEF = -999.9, land, dry and
+            # ice nodes) only: a tangent may legitimately be below -900
+            v[np.abs(v + 999.9) < 1e-3] = np.nan
             return v if idx is None else v[idx]
     raise FileNotFoundError(os.path.join(d, "%s_%s" % (name, tag)))
 

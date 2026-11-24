@@ -1064,6 +1064,94 @@ finite differences of the aggregates include and the tangent does not.
   frozen linearisation is losing accuracy: step 3 gained 0.30 % of the
   0.73 % predicted.
 
+### Result of the calibration (finalised at step 3)
+
+Jean-Marc finalised the calibration at step 3. The final parameters are
+`BETAMAX` 1.37249382 (x0.784), `SDSC2` x0.649237785 and `NLPROP`
+x1.13718427 from $p_0$, with `BJGAM` 0.73. The final runs are:
+
+- the f64 tangents over 216 h (Slurm jobs 4326004–4326006);
+- the WW3 run at step 3 (job 4326007, `$S/runs/m2_week_cal3`);
+- the evaluation (job 4326008, `scripts/cal_final2_hpc.slurm`).
+
+Cost (data part, with the prior apart: 0 at $p_0$, 4.19 at step 3) on both
+windows. The step-3 column is the GPU run, with the WW3 run in brackets:
+
+| cost | window | $p_0$ | step 3 (WW3) | change |
+|---|---|---|---|---|
+| first (nearest node, 0.30 m and 1.0 s) | training | 47,249.7 | 45,526.0 (45,525.4) | −3.65 % |
+| | validation | 69,351.1 | 66,680.1 (66,679.8) | −3.85 % |
+| second (depth-aware, representativeness) | training | 41,085.9 | 39,805.2 (39,804.9) | −3.12 % |
+| | validation | 59,449.2 | 57,475.3 (57,474.9) | −3.32 % |
+| third (8 buoys left out, Huber) | training | 35,543.4 | 34,432.2 (34,431.9) | −3.13 % |
+| | validation | 50,242.2 | 48,173.9 (48,173.6) | −4.12 % |
+
+Unweighted scores, bias / RMSE. The buoys use the depth-aware operator,
+with all buoys and without the 8 excluded ones; $T_{m02}$ is through the
+moments. The scores of the WW3 run at step 3 are the same to 0.01 cm and
+0.001 s:
+
+| | training $p_0$ | training step 3 | validation $p_0$ | validation step 3 |
+|---|---|---|---|---|
+| altimeter $H_s$ (cm) | +2.86 / 25.46 | −1.38 / 24.73 | +5.76 / 26.46 | +1.36 / 25.66 |
+| buoy $H_s$, all (cm) | −4.77 / 31.25 | −6.88 / 31.81 | −3.03 / 40.79 | −6.46 / 40.75 |
+| buoy $H_s$, without the 8 (cm) | −7.48 / 27.68 | −9.60 / 28.52 | −5.45 / 38.44 | −8.89 / 38.67 |
+| buoy $T_{m02}$, all (s) | −0.467 / 0.999 | −0.438 / 0.975 | −0.411 / 1.024 | −0.395 / 1.000 |
+
+The calibration lowers the altimeter bias and RMSE on both windows and the
+$T_{m02}$ error a little. It makes the buoy $H_s$ bias more negative: the
+RMSE rises 0.6–0.8 cm on the training window and changes by −0.04 to
++0.23 cm on the validation window. The history of the steps under the
+second cost is the table above. Step 4, run for information only, would
+give 39,907.6 + 10.35 (training) and 57,232.0 (validation): its training
+cost rises while its validation cost falls.
+
+**Posterior.** The posterior comes from $A_1$ (the tangents at $p_0$)
+applied to the residuals at step 3 under the second cost (`gn3.json`). It
+is a lower bound, since the Jacobian is not refreshed and the errors are
+correlated:
+
+| | `BETAMAX` | `SDSC2` | `NLPROP` |
+|---|---|---|---|
+| standard deviation of $\ln p$ | 0.0083 | 0.0243 | 0.0149 |
+| scaled by the reduced $\chi^2$ (0.897) | 0.0078 | 0.0230 | 0.0142 |
+
+The correlations are `BETAMAX`–`SDSC2` +0.88, `SDSC2`–`NLPROP` +0.63 and
+`BETAMAX`–`NLPROP` +0.20.
+
+**Tangents at step 3.** The step-3 tangents are not used:
+
+- **Buoy blocks.** They agree with $A_1$, with cosines of 0.84 (`BETAMAX`),
+  0.997 (`SDSC2`) and 0.88 (`NLPROP`) for $H_s$, and 0.30, 0.82 and 0.85
+  for $T_{m02}$.
+- **Altimeter blocks.** They are corrupted by a tangent that grows without
+  bound at a few nodes near the sea-ice edge in the training window
+  (`scripts/tl_diag.py`):
+  - The growth appears first at single nodes of Ungava Bay, Labrador, West
+    Greenland and Newfoundland, up to $2 \times 10^6$ m per unit of $\ln p$
+    on 6 January 16 h for `BETAMAX`.
+  - It reaches the altimeter passes of 7 January 00 h and 08 h: 527 (32
+    not finite), 87 and 221 of the 24,153 blocks above 10 m per unit for
+    `BETAMAX`, `SDSC2` and `NLPROP`, the largest 917, 73 and 306 m.
+    `cal_obs.py` turned tangent values below −900 into NaN along with the
+    undefined value; it now removes only the undefined value −999.9.
+  - After the training window, the growth starts again in the Wadden Sea
+    near the Elbe on 7 January 13–17 h, up to $3 \times 10^{10}$ m on
+    7 January 19 h, and spreads along the North Sea coasts in the
+    validation window.
+- **At $p_0$.** The tangents of $A_1$ have isolated spikes at single nodes
+  (Gulf of Finland, $4 \times 10^7$ m on 4 January 01 h), but none reaches
+  an observation of the training window: the largest derivative is 7.5 m
+  per unit for `BETAMAX`, 2.2 m and 1.4 m for the others.
+
+Steps 1–3 are therefore not affected. The local instability of the tangent
+at these parameters is listed among the limits
+([Differentiable WW3 study](differentiable.md), section 9.5).
+
+**Cost of the calibration.** 33 GPU runs took 16.6 GPU-hours on the A100s
+from 23 November 07:27 to 24 November 11:47 (28 h). The CPU jobs took
+8.6 h: operators, evaluations and the WW3 runs.
+
 ## Preprocessing in Rust (in progress)
 
 The aim is a GPU run that needs no WW3 tool; WW3 then only makes the

@@ -859,8 +859,8 @@ Details and the list of what remains are in
   for $T_{m02}$ above the 0.30 m and 1.0 s of the others. The costs of all
   points are given under the first and the second cost. Steps 2 and 3 are
   accepted (−1.67 % and −0.30 % of the training cost), the validation cost
-  falls at each (59,449 at $p_0$, 57,475 at step 3), and step 4 is under
-  way; every value run now covers both windows
+  falls at each (59,449 at $p_0$, 57,475 at step 3), and step 4 was run
+  for information only; every value run now covers both windows
   ([GPU model results](wave_results.md)).
 - **Third cost.** After the observation diagnostics (Jean-Marc): 8 buoys
   at sites the mesh cannot represent (barriers, harbour, inner Wadden,
@@ -873,6 +873,39 @@ Details and the list of what remains are in
   counted from the cold start of the chain, and `cal_obs.py` refuses
   others. The month-long calibration will start from a spun-up restart or
   drop at least the first 30 % of each run.
+- **Result: finalised at step 3 (Jean-Marc, 24 November).** The final
+  parameters are `BETAMAX` 1.3725 (x0.784), `SDSC2` x0.649 and `NLPROP`
+  x1.137, with `BJGAM` 0.73. From $p_0$ to step 3 the cost falls on both
+  windows under every cost, and more on the validation window under the
+  third cost: training −3.12 % and validation −3.32 % under the second cost,
+  −3.13 % and −4.12 % under the third. A WW3 run at step 3 gives the GPU's
+  cost to 0.001 %. The table, the history and the posterior are in
+  [GPU model results](wave_results.md). The run took 33 GPU runs and
+  16.6 GPU-hours on the A100s, from 23 November 07:27 to 24 November 11:47,
+  plus 8.6 h of CPU jobs.
+- **Limits of the trial.**
+  - One week of January, one region, two short windows (48 h training,
+    59 h validation), and three parameters (`BJGAM` frozen after step 1).
+  - One Jacobian ($A_1$, at $p_0$) for steps 2–3 (options A and C):
+    step 3 gained 0.30 % of the 0.73 % predicted.
+  - The posterior standard deviations (0.008–0.024 on $\ln p$, from $A_1$
+    at the step-3 residuals) are a lower bound: the Jacobian is not
+    refreshed, and the errors of neighbouring blocks and hours are
+    correlated.
+  - Constant parameters cannot follow a bias that depends on the sea state:
+    step 3 fits the moderate seas the altimeters see and worsens the
+    storms (buoy bias −75 cm above 6 m). This is what `BETAMAX`$(U)$ now
+    tests.
+  - The f64 tangents at step 3 grow without bound at a few nodes near the
+    sea-ice edge (Newfoundland–Labrador, West Greenland, Ungava Bay) in the
+    training window. After it they also grow in the Wadden Sea of the
+    German Bight, up to $3 \times 10^{10}$ m per unit of $\ln p$ on 7
+    January 19 h, spreading along the North Sea coasts. They reach 87–527 of
+    the 24,153 altimeter blocks above 10 m per unit, against none at $p_0$
+    (largest 7.5 m), so the step-3 Jacobian is not used. The tangent of the
+    nonlinear model is locally unstable at these parameters, possibly at a
+    switch of the ice scaling or of the shallow-water terms. Finding where
+    is work for the optimisation or M4 (`scripts/tl_diag.py`).
 
 ### 9.6 Rest of the port to Rust (from 23 November 2026)
 
