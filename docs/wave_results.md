@@ -1563,6 +1563,79 @@ the digits printed on both windows (training $J$ 47,249.7, validation
 69,351.1). A GPU run therefore needs no WW3 tool: the parameter file, the
 forcing, the boundary spectra and the initial state all come from Rust.
 
+## Optimisation (from 25 November)
+
+### Profile of the present build
+
+The profile uses `scripts/opt_profile_hpc.slurm`, on one A100 of hpc,
+from the restart of 1 January 00:10 with the full ST4 on grid v5 $K=4$.
+- Nsight Systems ran on 6 h in f32 and on 3 h in f64 and for the
+  `BETAMAX` tangent (job 4415688), with the same runs under `--profile`.
+- The units per cube of the source kernel were scanned (job 4416363).
+- Nsight Compute cannot read the counters on hpc: `ERR_NVGPUCTRPERM`
+  (job 4416360). The performance counters are reserved to the
+  administrators.
+
+**Host.** After the start the GPU is busy 98.0 % (f32), 97.3 % (f64) and
+99.9 % (tangent) of the time:
+- The gaps are the compilation of a kernel at its first launch: 1.0 s in
+  f32, 4.2 s in f64, and 13 s for the tangent kernel.
+- The 657 launches per step take 2.7 ms of the host.
+- The copies of the forcing take 0.2 s per 6 h, and the hourly outputs
+  take nothing measurable.
+
+The timers `iter` and `outputs` of a run without `--profile` measure the
+wait for the GPU at the download of the sub-cycling count and of the
+outputs, not work of their own. Overlapping the outputs with the steps can
+therefore gain less than 1 %.
+
+**Kernels.** In the 6 h runs (the first hours are the most expensive, 1.66
+s per step for the source kernel in f32 against about 0.6 s on average
+over 216 h):
+
+| Kernel | f32 | f64 | f64 tangent |
+|---|---|---|---|
+| source terms (`srce`, `srce_tl`) | 88.7 % (1.66 s per step) | 95.6 % (8.75 s) | 95.1 % (14.0 s) |
+| geographic sweeps (`geo_tri_x4`, `geo_node_x4`) | 8.5 % (0.56 ms per sweep) | 3.3 % (1.05 ms) | 3.8 % (1.94 ms) |
+| `W3KTP3` (`ktp3_k`, `ktp3_theta`) | 1.7 % | 0.7 % | 0.8 % |
+| the rest | 1.1 % | 0.4 % | 0.3 % |
+
+With 287 sweeps per step, the propagation costs about 0.21 s per step in
+f32, 0.40 s in f64 and 0.72 s for the tangent. Over the 216 h runs, the
+source kernel is therefore about 73 % of a value run in f32
+(0.81 s per step), 87 % in f64 and 83 % of a tangent run.
+
+**Source kernel.** One cube of 128 units per node holds the spectrum and
+its work arrays in shared memory:
+
+| Kernel | Registers per unit | Shared memory per node | Nodes per SM | Warps per SM (of 64) |
+|---|---|---|---|---|
+| `srce` f32 | 128 | 41,840 B | 3 (shared memory) | 12 |
+| `srce` f64 | 254 | 83,680 B | 1 (shared memory) | 4 |
+| `srce_tl` f64 | 255 | 156,832 B | 1 (shared memory) | 4 |
+
+The results are identical to the bit for 64, 128, 256 and 512 units:
+
+| Units | f32, 2 h (s per model day) | f64, 1 h (s per model day) |
+|---|---|---|
+| 64 | 525 | 2026 |
+| 128 | 448 | 1690 |
+| 256 | 969 | 1748 |
+| 512 | 903 | 1858 |
+
+More units per cube do not help:
+- In f32 with 256 units, the registers allow only 2 nodes per SM instead
+  of 3, and the run is 2.2 times slower.
+- In f64, with one node per SM in every case, it changes little.
+- With 64 units the parallel loops take twice as long, yet the run is only
+  17 % (f32) to 20 % (f64) slower. About 80 % of the kernel's time is
+  therefore spent in parts that more units do not shorten: the scalar parts
+  on unit 0 (mean parameters, $u_*$ by Newton iterations, the tail stress,
+  the dynamic step) and the loops over 32 frequencies or 36 directions.
+
+The kernel's speed follows the number of nodes an SM holds at once, set by
+the shared memory.
+
 ## Coastal diagnostics of the buoy scores
 
 At the start of the calibration the buoy $H_s$ is too low (bias −4.85 cm on

@@ -1071,6 +1071,50 @@ the wind and of the dissipation and is specific to ERA5, as the present
 1.75 is; priors and smoothness penalties; physical constraints ($\beta > 0$,
 smooth); an independent validation month.
 
+### 9.8 Optimisation (from 25 November 2026)
+
+Jean-Marc started the optimisation on 25 November ("Oui, lancer"). A
+factor of 10 over WW3 is too little for him. The rule is that results
+stay unchanged to round-off; anything else goes behind an option, off
+by default.
+
+**Profile** (Nsight Systems on hpc; Nsight Compute has no access to the
+counters there; [GPU model results](wave_results.md)):
+- The GPU is busy 97–99.9 % of a run, so the host and the outputs have
+  nothing to gain.
+- The source kernel takes about 73 % of a value run in f32, 87 % in f64
+  and 83 % of a tangent run. The geographic sweeps take most of the rest.
+- In the source kernel, each node keeps its spectrum and work arrays in
+  shared memory (42 KB in f32, 84 KB in f64, 157 KB in the tangent). An
+  SM therefore runs 3, 1 and 1 nodes at once.
+- About 80 % of the kernel's time is in scalar or narrow parts that more
+  units per node do not shorten. Its speed follows the number of nodes
+  per SM.
+
+**Plan, in order** (expected gain on the seconds per model day):
+1. Hold the 0/1 wind-sea flags of the source kernel in bytes instead of
+   floats (identical to the bit). This gives 4 nodes per SM in f32 and 2 in
+   f64: about −15–20 % in f32 and −35–45 % in f64.
+2. More shared memory saved in the source kernel by aliasing arrays that
+   are not alive at the same time (identical to the bit): +1 node per SM
+   in f32 for each 5.8 KB saved.
+3. The scalar parts that do not depend on the order of the operations
+   (the minimum of the dynamic step, the maxima, the flags) done by all
+   units of the cube: a few per cent each.
+4. The tangent kernel down to 83 KB (2 nodes per SM): about −40 % on
+   the tangent runs.
+5. A vector tangent: one value path for several directions. For the nine
+   directions of `BETAMAX`$(U)$ it would cost about 2.2 times less than
+   nine runs.
+6. An f32 tangent, behind an option until it passes the checks of M3 in
+   double precision: about 4 times faster.
+7. The sums of the scalar parts as parallel reductions. This changes the
+   order of the sums (round-off), so it goes behind an option and is
+   checked over 48 h and the week. Up to −40 % of the source kernel.
+8. Geographic sweeps: the triangle and node kernels fused, without the
+   triangle array in global memory. About −5 % in f32.
+9. Asynchronous outputs: under 1 %, done last if at all.
+
 ## 10. Other routes, briefly
 
 | route | effort | why not the main route |
