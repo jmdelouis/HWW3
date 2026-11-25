@@ -2772,6 +2772,66 @@ where round-off is amplified as described for M2b. The cost and all the
 scores are identical on both windows.
 \end{itemize}
 
+\paragraph{Optimisation (in progress).} The GPU model is profiled with
+Nsight Systems on one A100 of the hpc cluster, from the restart of
+1 January 00:10 on grid v5 $K=4$ with the full ST4 (job 4415688), before
+anything is changed.
+\begin{itemize}
+\item \emph{Host.} After start-up the GPU is busy 98.0\,\% of the time in
+single precision, 97.3\,\% in double precision and 99.9\,\% for the
+tangent. The only gaps are the compilation of the kernels at their first
+launch (1.0, 4.2 and \SI{13}{s}). The 657 launches of a step cost
+\SI{2.7}{ms} of host time, the forcing copies \SI{0.2}{s} per 6 hours,
+and the hourly outputs nothing measurable: the time attributed to the
+outputs in the runs is a wait for the GPU. Asynchronous outputs would
+gain less than 1\,\%.
+\item \emph{Kernels.} The source kernel takes 88.7\,\% of the GPU time
+in single precision (\SI{1.66}{s} per step over the first six hours,
+which cost about 2.7 times the average), 95.6\,\% in double precision
+(\SI{8.75}{s}) and 95.1\,\% for the tangent (\SI{14.0}{s}). The
+geographic sweeps take 8.5, 3.3 and 3.8\,\% (0.56, 1.05 and
+\SI{1.94}{ms} per sweep, 287 sweeps per step). Over 216 hours the source
+kernel is about 73\,\% of a single-precision run, 87\,\% of a
+double-precision run and 83\,\% of a tangent run.
+\item \emph{What limits the source kernel.} It runs one cube of 128 units
+per node, with the spectrum and the work arrays in shared memory: 41\,840
+bytes per node in single precision (3 nodes per multiprocessor), 83\,680
+in double precision (1 node, 736 bytes above the limit for 2) and
+156\,832 for the tangent (1 node). With 64 to 512 units per cube the
+results are identical bit for bit, and 128 units are the fastest (448
+and \SI{1690}{s} per model day in single and double precision over the
+first hours). About 80\,\% of the kernel time is in parts that more units
+do not shorten: the scalar work of one unit (mean parameters, the Newton
+iteration for $u_*$, the tail stress, the dynamic step) and loops over
+the 32 frequencies or the 36 directions. The throughput thus follows the
+number of nodes that fit in the shared memory of a multiprocessor.
+\item \emph{Plan.} In order, with the expected gain:
+\begin{itemize}
+\item the wind-sea flags stored as bytes, bit for bit identical: 4 nodes
+per multiprocessor in single precision and 2 in double precision,
+about 15 to 20\,\% and 35 to 45\,\% less time;
+\item arrays not alive at the same time sharing memory, bit for bit
+identical: one more node per multiprocessor in single precision for
+each \SI{5.8}{KB} saved;
+\item order-independent scalar parts done by all units, a few per cent
+each;
+\item the tangent kernel brought under \SI{83}{KB} (2 nodes), about
+40\,\% less time;
+\item a vector tangent carrying several directions on one value path,
+about 2.2 times cheaper than 9 runs for the directions of
+\texttt{BETAMAX}$(U)$;
+\item a single-precision tangent, behind an option until it passes the
+checks of M3 against double precision, about 4 times faster;
+\item parallel reductions of the scalar sums, which change the order of
+the sums of WW3 and so the round-off, behind an option, up to 40\,\% of
+the source kernel;
+\item fused geographic sweeps, about 5\,\%;
+\item asynchronous outputs, last if at all.
+\end{itemize}
+Nsight Compute cannot run on the hpc cluster: the performance counters
+of the GPUs are reserved to the administrators (job 4416360).
+\end{itemize}
+
 
 \appendix
 \section{Reproducing}
