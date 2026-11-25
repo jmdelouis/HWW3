@@ -902,10 +902,25 @@ Details and the list of what remains are in
     German Bight, up to $3 \times 10^{10}$ m per unit of $\ln p$ on 7
     January 19 h, spreading along the North Sea coasts. They reach 87–527 of
     the 24,153 altimeter blocks above 10 m per unit, against none at $p_0$
-    (largest 7.5 m), so the step-3 Jacobian is not used. The tangent of the
-    nonlinear model is locally unstable at these parameters, possibly at a
-    switch of the ice scaling or of the shallow-water terms. Finding where
-    is work for the optimisation or M4 (`scripts/tl_diag.py`).
+    (largest 7.5 m), so the step-3 Jacobian is not used.
+  - The blocks come from a young wind sea at the ice edge on the coast of
+    northern Labrador (ice 0.44, 16 m/s, $H_s$ 3–4 m). There the source
+    step multiplies the tangent by 3 to 4.3 per step on 8 of 108 steps,
+    and central differences of the step give the same factor. The model
+    itself amplifies small perturbations there: the DIA couples the bins
+    of the wind sea, and together with the wind input this outweighs the
+    damping of the dissipation.
+  - Leaving the DIA's tangent out where its own diagonal is large
+    (`--tl-nlcut`, `--tl-nlnode`) removes the blow-up at a cut of 0.25:
+    no training block above 10 m. But the tangent of one source step then
+    departs from the differences by up to 100 % on about 3 % of the
+    harness nodes at $p_0$, so the cut is not used.
+  - The tangents at $p_0$, on which the `BETAMAX`$(U)$ test relies, reach
+    no observation above 10 m. A Jacobian refreshed away from $p_0$ needs
+    either a tangent that follows the path of the values through such
+    nodes (M4 will meet the same growth) or observations kept away from
+    their wake ([GPU model results](wave_results.md),
+    `scripts/tl_probe_hpc.slurm`).
 
 ### 9.6 Rest of the port to Rust (from 23 November 2026)
 

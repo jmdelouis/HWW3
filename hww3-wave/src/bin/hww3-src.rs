@@ -5,7 +5,7 @@
 //! ```text
 //! hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
 //! hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R]
-//! hww3-src check-tl HARNESS [--units N] [--h H]
+//! hww3-src check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]
 //! hww3-src tables BASE.params [OTHER.params ...]
 //! hww3-src params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+NAME:F]
 //! ```
@@ -374,7 +374,7 @@ fn check_gpu<F: hww3_wave::device::Real>(path: PathBuf, nu: usize, replicate: us
 /// the largest spectral density of the node are below what the differences
 /// resolve and count as zero.
 #[cfg(feature = "cubecl")]
-fn check_tl(path: PathBuf, nu: usize, h1: f64) -> Result<()> {
+fn check_tl(path: PathBuf, nu: usize, h1: f64, nlcut: f64, nlnode: bool) -> Result<()> {
     use burn::tensor::Device;
     use cubecl::prelude::CubeElement;
     use hww3_wave::sources::{par_index, tabu_tauhf2, SrceTables, NPAR, P_BBETA};
@@ -402,6 +402,9 @@ fn check_tl(path: PathBuf, nu: usize, h1: f64) -> Result<()> {
     let (tauhf0, dtauhf0) = table(bb);
     let mut base = SrceTables::new(&q)?;
     base.tauhf = tauhf0;
+    // the stiff interactions of the tangent (tangent kernel only)
+    base.par[hww3_wave::sources::P_TLNLCUT] = nlcut;
+    base.par[hww3_wave::sources::P_TLNLNODE] = if nlnode { 1.0 } else { 0.0 };
     println!(
         "harness {}: {} nodes, NK {nk}, NTH {nth}; tail-stress table in f64 for BETAMAX {bb} in {:.1} s",
         path.display(),
@@ -812,10 +815,11 @@ fn main() -> Result<()> {
         (Some("check-tl"), Some(f)) => {
             let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
             let h: f64 = opt("--h").map(|s| s.parse()).transpose()?.unwrap_or(1e-4);
-            check_tl(PathBuf::from(f), nu, h)
+            let cut: f64 = opt("--tl-nlcut").map(|s| s.parse()).transpose()?.unwrap_or(0.0);
+            check_tl(PathBuf::from(f), nu, h, cut, a.iter().any(|x| x == "--tl-nlnode"))
         }
         _ => bail!(
-            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml F] [--check BASE.params] | check-gpu HARNESS [--f64] [--units N] [--replicate R] | check-tl HARNESS [--units N] [--h H]"
+            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml F] [--check BASE.params] | check-gpu HARNESS [--f64] [--units N] [--replicate R] | check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]"
         ),
     }
 }

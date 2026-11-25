@@ -1669,6 +1669,18 @@ pub fn srce_tl<F: Float>(
                 sc[S_DONE] = zero;
             }
             sync_cube();
+            // diagnostic mask of tangent contributions left out (P_TLFREEZE, 0 in runs)
+            let fz = u32::cast_from(par[P_TLFREEZE]);
+            let mut s1 = Array::<F>::new((nk * nth + nu - 1) / nu);
+            let mut s2 = Array::<F>::new((nk * nth + nu - 1) / nu);
+            // the DIA's own contributions per bin (value, diagonal and their
+            // tangents), for the stiff interactions (P_TLNLCUT)
+            let nlcut = par[P_TLNLCUT];
+            let nlnode = par[P_TLNLNODE];
+            let mut n_s = Array::<F>::new((nk * nth + nu - 1) / nu);
+            let mut n_d = Array::<F>::new((nk * nth + nu - 1) / nu);
+            let mut n_sd = Array::<F>::new((nk * nth + nu - 1) / nu);
+            let mut n_dd = Array::<F>::new((nk * nth + nu - 1) / nu);
             loop {
                 let ustar = sc[S_USTAR];
                 let z0 = sc[S_Z0];
@@ -1692,31 +1704,171 @@ pub fn srce_tl<F: Float>(
                     }
                 }
                 sync_cube();
+                if fz != 0u32 {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            s1[r] = vsd[is];
+                            s2[r] = vdd[is];
+                        }
+                    }
+                    sync_cube();
+                }
                 sln1_tl::<F>(par, sig, ecos, esin, &kb, &mut vs, &mut vsd, fhigh, dfhigh, ustar, dustar, udir, dudir, isc_ln, nk, nth, nu);
                 sync_cube();
+                if (fz & 1u32) != 0u32 {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            vsd[is] = s1[r];
+                            vdd[is] = s2[r];
+                        }
+                    }
+                    sync_cube();
+                }
+                if fz != 0u32 {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            s1[r] = vsd[is];
+                            s2[r] = vdd[is];
+                        }
+                    }
+                    sync_cube();
+                }
                 sin4_tl::<F>(
                     par, tauhf, dtauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &ad, &mut vs, &mut vsd, &mut vd, &mut vdd, &mut ws, &mut kb,
                     &mut kd, &mut sc, &mut sd, &mut dr, &mut drd, ustar, dustar, z0, dz0, udir, dudir, beta, dbeta, isc_in, true, nk, nth,
                 );
+                if (fz & 2u32) != 0u32 {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            vsd[is] = s1[r];
+                            vdd[is] = s2[r];
+                        }
+                    }
+                    sync_cube();
+                }
                 let stauwx = sc[S_TAUWX];
                 let stauwy = sc[S_TAUWY];
                 let dstauwx = sd[S_TAUWX];
                 let dstauwy = sd[S_TAUWY];
+                if fz != 0u32 {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            s1[r] = vsd[is];
+                            s2[r] = vdd[is];
+                        }
+                    }
+                    sync_cube();
+                }
+                if nlcut.abs() > zero {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            n_s[r] = vs[is];
+                            n_d[r] = vd[is];
+                            n_sd[r] = vsd[is];
+                            n_dd[r] = vdd[is];
+                        }
+                    }
+                    sync_cube();
+                }
                 snl1_tl::<F>(
                     par, sig, dia_ip, dia_ic, af11, &a, &ad, &kb, &mut ue, &mut ued, &mut b1, &mut b1d, &mut b2, &mut b2d, &mut dn, &mut dnd, &mut vs,
                     &mut vsd, &mut vd, &mut vdd, wnmean * depth, dwnmean * depth, dsnlc1, isc_nl, nk, nth, nspecx, nspecy, nu,
                 );
+                if nlcut.abs() > zero {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            n_s[r] = vs[is] - n_s[r];
+                            n_d[r] = vd[is] - n_d[r];
+                            n_sd[r] = vsd[is] - n_sd[r];
+                            n_dd[r] = vdd[is] - n_dd[r];
+                        }
+                    }
+                    sync_cube();
+                }
+                if (fz & 4u32) != 0u32 {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            vsd[is] = s1[r];
+                            vdd[is] = s2[r];
+                        }
+                    }
+                    sync_cube();
+                }
+                if fz != 0u32 {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            s1[r] = vsd[is];
+                            s2[r] = vdd[is];
+                        }
+                    }
+                    sync_cube();
+                }
                 sds4_tl::<F>(
                     par, sig, ecos, esin, satw, sati, cumw, &a, &ad, &mut kb, &mut kd, &mut b1, &mut b1d, &mut dn, &mut dnd, &mut vs, &mut vsd, &mut vd,
                     &mut vdd, depth, ustar, dustar, udir, dudir, dsdsc2, isc_ds, nk, nth, nsat, nu,
                 );
+                if (fz & 8u32) != 0u32 {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            vsd[is] = s1[r];
+                            vdd[is] = s2[r];
+                        }
+                    }
+                    sync_cube();
+                }
                 if t == 0 {
                     sdb1_tl::<F>(par, &mut sc, &mut sd, emean, demean, fmean, dfmean, wnmean, dwnmean, depth, dsdbc2);
+                    if (fz & 128u32) != 0u32 {
+                        sd[S_SCALE + 1] = zero;
+                    }
+                }
+                if fz != 0u32 {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            s1[r] = vsd[is];
+                            s2[r] = vdd[is];
+                        }
+                    }
+                    sync_cube();
                 }
                 sbt4_tl::<F>(
                     par, sig, dden, fwtab, erftab, &a, &ad, &mut kb, &mut kd, &mut sc, &mut sd, &mut vs, &mut vsd, &mut vd, &mut vdd, depth, sd50,
                     spsic, nk, nth, nu,
                 );
+                if (fz & 16u32) != 0u32 {
+                    sync_cube();
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspec {
+                            vsd[is] = s1[r];
+                            vdd[is] = s2[r];
+                        }
+                    }
+                    sync_cube();
+                }
+
                 let dbd = sc[S_SCALE + 1];
                 let ddbd = sd[S_SCALE + 1];
                 // dynamic step: NKH from the FHIGH of the previous step
@@ -1760,17 +1912,49 @@ pub fn srce_tl<F: Float>(
                 let dt = sc[S_DT];
                 let shave = sc[S_SHAVE] > zero;
                 let hdt = dt;
+                // with P_TLNLNODE, the criterion in any bin of the node cuts every bin
+                let mut cut_all = zero;
+                if nlcut.abs() > zero && nlnode > zero {
+                    let mut gm = zero;
+                    for r in 0..(nspec + nu - 1) / nu {
+                        let is = r * nu + t;
+                        if is < nspech {
+                            gm = max(gm, select(nlcut > zero, n_d[r], n_d[r].abs()) * dtg);
+                        }
+                    }
+                    red[t] = gm;
+                    sync_cube();
+                    let mut g = red[0];
+                    for j in 1..nu {
+                        g = max(g, red[j]);
+                    }
+                    cut_all = select(g > nlcut.abs(), one, zero);
+                    sync_cube();
+                }
                 for r in 0..(nspec + nu - 1) / nu {
                     let is = r * nu + t;
                     if is < nspech {
                         let ik = is / nth;
                         let aold = a[is];
                         let daold = ad[is];
+                        let mut vsd_e = vsd[is];
+                        let mut vdd_e = vdd[is];
+                        if nlcut.abs() > zero {
+                            let g = select(nlcut > zero, n_d[r], n_d[r].abs()) * dtg;
+                            if g > nlcut.abs() || cut_all > zero {
+                                // the DIA amplifies this bin over the global step: its tangent
+                                // with respect to the spectrum left out, its proportional
+                                // derivative in NLPROP kept
+                                let rel = dsnlc1 / par[P_SNLC1];
+                                vsd_e = vsd_e - n_sd[r] + n_s[r] * rel;
+                                vdd_e = vdd_e - n_dd[r] + n_d[r] * rel;
+                            }
+                        }
                         let denv = one - hdt * vd[is];
                         let den = max(one, denv);
-                        let dden_ = select(denv > one, -hdt * vdd[is], zero);
+                        let dden_ = select(denv > one && (fz & 64u32) == 0u32, -hdt * vdd_e, zero);
                         let mut inc = vs[is] * dt / den;
-                        let mut dinc = dt * (vsd[is] * den - vs[is] * dden_) / (den * den);
+                        let mut dinc = dt * (vsd_e * den - vs[is] * dden_) / (den * den);
                         if shave {
                             let dam = kb[K_DAM * nk + ik];
                             let clamped = inc.abs() > dam;
@@ -1783,7 +1967,7 @@ pub fn srce_tl<F: Float>(
                         let da1 = select(s1 > zero, daold + dinc, zero);
                         let den2v = one - hdt * dbd;
                         let den2 = max(one, den2v);
-                        let dden2 = select(den2v > one, -hdt * ddbd, zero);
+                        let dden2 = select(den2v > one && (fz & 64u32) == 0u32, -hdt * ddbd, zero);
                         let incdb = (dbd * aold) * dt / den2;
                         let dincdb = dt * ((ddbd * aold + dbd * daold) * den2 - dbd * aold * dden2) / (den2 * den2);
                         let s2 = a1 + incdb;
@@ -1793,6 +1977,13 @@ pub fn srce_tl<F: Float>(
                 }
                 sync_cube();
                 spr4_tl::<F>(par, taut, sig, dden, &a, &ad, &ws, &mut kb, &mut kd, &mut sc, &mut sd, u, du, stauwx, dstauwx, stauwy, dstauwy, nk, nth);
+                if (fz & 32u32) != 0u32 {
+                    if t == 0 {
+                        sd[S_USTAR] = zero;
+                        sd[S_Z0] = zero;
+                    }
+                    sync_cube();
+                }
                 if t == 0 {
                     let g = par[P_GRAV];
                     let arg = F::new(0.3f32) * u * sc[S_FMEANWS] * tpi::<F>() / g;

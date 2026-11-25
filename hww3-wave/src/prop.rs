@@ -1164,6 +1164,22 @@ pub fn zero_nodes<F: Float>(va: &mut [F], nodes: &[u32], np: usize, nlist: usize
 // Outputs (W3OUTG): H_s and T_m02 with the tail
 // ---------------------------------------------------------------------------
 
+/// Copy the spectra of the `nn` nodes `nodes` from `va`
+/// (`[(ik np + i) nth + ith]`) to `out[(j nk + ik) nth + ith]`, for the
+/// probes of [`crate::model::Model::probe`].
+#[cube(launch_unchecked)]
+pub fn gather_nodes<F: Float>(va: &[F], nodes: &[u32], out: &mut [F], nn: usize, np: usize, #[comptime] nk: usize, #[comptime] nth: usize) {
+    let g = ABSOLUTE_POS;
+    if g < nn * nk * nth {
+        let j = g / (nk * nth);
+        let r = g - j * nk * nth;
+        let ik = r / nth;
+        let th = r - ik * nth;
+        let i = nodes[j] as usize;
+        out[g] = va[(ik * np + i) * nth + th];
+    }
+}
+
 /// `W3OUTG`: H_s, T_m02 and the energy of every node, with the
 /// high-frequency tail; `UNDEF` where `MAPSTA <= 0`.
 #[cube(launch_unchecked)]

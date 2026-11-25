@@ -23,9 +23,13 @@
 # in double precision and 11 min per tangent, the 13 tables taking 2 min).
 # With PART=tight, only the check of M3 over 3 h: the tangent for c_3 at
 # 0.2 against central differences of steps 1e-4 and 1e-5, on the nodes
-# where the two differences agree to 1e-6 of the node's scale.
+# where the two differences agree to 1e-6 of the node's scale. With
+# PART=cut, check (2) again with the unstable interactions of the DIA left
+# out of the tangents (--tl-nlcut CUT, docs/differentiable.md section 9.5,
+# BIN of target_wave_tl), in $S/cal/betau_check_cutCUT.
 #   sbatch scripts/betau_check_hpc.slurm
 #   sbatch --export=ALL,PART=tight scripts/betau_check_hpc.slurm
+#   sbatch --export=ALL,PART=cut,CUT=1,BIN=.../target_wave_tl/release/hww3-prop scripts/betau_check_hpc.slurm
 S=/scratch/jmdeloui/HWW3
 D=$S/m2/forcing
 G=$S/grids/natl_v5k4
@@ -53,6 +57,15 @@ run() {
   echo "$tag: $((SECONDS - t0)) s"
 }
 S3="--scale-par SDSC2:0.649237785+NLPROP:1.13718427+BJGAM:1"
+if [ "$PART" = cut ]; then
+  O=$S/cal/betau_check_cut$CUT
+  run t_const --betamax 1.75 --tangent BETAMAX --f64 --tl-nlcut $CUT
+  run t_c0_all --betamax 1.75 --betau $K: --tangent BETAU --f64 --tl-nlcut $CUT
+  run t_c0_beta --betamax 1.75 --betau $K: --tangent BETAMAX --f64 --tl-nlcut $CUT
+  cd $S
+  $S/pyenv/bin/python scripts/betau_check.py $O
+  exit 0
+fi
 if [ "$PART" = tight ]; then
   H=3
   run t_k3_3h --betamax 1.75 --betau $K:0,0,0,0.2,0,0,0 --tangent BETAU3 --f64

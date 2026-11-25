@@ -86,7 +86,7 @@ fn parse() -> Result<Args> {
     let valued = [
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
         "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent", "--init-factor", "--betamax",
-        "--stop", "--restart-out", "--betau", "--betau-grid",
+        "--stop", "--restart-out", "--betau", "--betau-grid", "--probe", "--probe-check", "--tl-nlcut",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -251,8 +251,130 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     let t1 = Instant::now();
     let mut steps = 0u64;
     let mut iters = vec![];
+    // --probe N1,N2,..: the spectra and tangents of these nodes after each
+    // part of every step (probe_spec.f64, rows of probe.csv) and the node
+    // scalars after the source terms
+    let probe: Vec<u32> = match a.opts.get("--probe") {
+        Some(s) => s.split(',').map(|x| x.parse::<u32>()).collect::<Result<_, _>>()?,
+        None => vec![],
+    };
+    let mut probe_csv = None;
+    let mut probe_bin = None;
+    // --probe-check H: before each source call, the tangent of that step at
+    // the probed nodes against central differences with relative steps H
+    // and H / 10 (probe_check.csv, probe_check.f64)
+    let check: Option<f64> = a.opts.get("--probe-check").map(|h| h.parse()).transpose()?;
+    let mut check_csv = None;
+    let mut check_bin = None;
+    if !probe.is_empty() {
+        use std::io::Write;
+        let mut f = std::io::BufWriter::new(std::fs::File::create(out.join("probe.csv"))?);
+        writeln!(f, "time,phase,node,row,sum_va,max_va,sum_abs_vad,l2_vad,max_abs_vad,ik_max,ith_max,dw,u10,u10d,ust,dtdyn,ice,mapsta")?;
+        probe_csv = Some(f);
+        probe_bin = Some(std::io::BufWriter::new(std::fs::File::create(out.join("probe_spec.f64"))?));
+        if check.is_some() {
+            let mut f = std::io::BufWriter::new(std::fs::File::create(out.join("probe_check.csv"))?);
+            writeln!(
+                f,
+                "time,node,row,l2_in,l2_tl,l2_fd1,l2_fd2,amp_tl,amp_fd,err_tl_fd2,rough_fd1_fd2,ik_err,ith_err,amp_no_sln,amp_no_sin,amp_no_snl,amp_no_sds,amp_no_sbt,amp_no_ust,amp_no_den,amp_no_sdb,amp_no_sin_ust,amp_no_snl_sds,amp_nlcut8,amp_nlcut4,amp_nlcut2,amp_nlcut1,amp_nlcut0.5,amp_nlabs2,amp_nlabs1,amp_nlcut0.25,amp_node1,amp_node0.5,amp_node0.25"
+            )?;
+            check_csv = Some(f);
+            check_bin = Some(std::io::BufWriter::new(std::fs::File::create(out.join("probe_check.f64"))?));
+        }
+    }
+    let mut check_row = 0u64;
+    let mut probe_row = 0u64;
     while m.time < stop {
-        m.step()?;
+        if probe.is_empty() {
+            m.step()?;
+        } else {
+            use std::io::Write;
+            let (parts, checks) = m.step_probed(&probe, check)?;
+            if let (Some(cs), Some(f), Some(b)) = (&checks, check_csv.as_mut(), check_bin.as_mut()) {
+                let l2 = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+                let mx = |v: &[f64]| v.iter().fold(0f64, |m, x| m.max(x.abs()));
+                for (j, c) in cs.iter().enumerate() {
+                    let [_, din, tl, f1, f2, amps] = c;
+                    let fm = mx(f2).max(1e-300);
+                    let (mut qe, mut de) = (0usize, 0f64);
+                    for q in 0..tl.len() {
+                        if (tl[q] - f2[q]).abs() > de {
+                            de = (tl[q] - f2[q]).abs();
+                            qe = q;
+                        }
+                    }
+                    let rough = f1.iter().zip(f2).fold(0f64, |m, (x, y)| m.max((x - y).abs())) / fm;
+                    writeln!(
+                        f,
+                        "{},{},{},{:.6e},{:.6e},{:.6e},{:.6e},{:.6e},{:.6e},{:.6e},{:.6e},{},{},{}",
+                        m.time,
+                        probe[j],
+                        check_row,
+                        l2(din),
+                        l2(tl),
+                        l2(f1),
+                        l2(f2),
+                        l2(tl) / l2(din).max(1e-300),
+                        l2(f2) / l2(din).max(1e-300),
+                        de / fm,
+                        rough,
+                        qe / m.nth,
+                        qe % m.nth,
+                        amps.iter().map(|x| format!("{x:.6e}")).collect::<Vec<_>>().join(",")
+                    )?;
+                    for v in c[..5].iter() {
+                        for x in v {
+                            b.write_all(&x.to_le_bytes())?;
+                        }
+                    }
+                    check_row += 1;
+                }
+            }
+            let sc = m.node_scalars(&probe);
+            let nspec = m.nk * m.nth;
+            let (f, b) = (probe_csv.as_mut().unwrap(), probe_bin.as_mut().unwrap());
+            for (phase, va, vad) in &parts {
+                for (j, &node) in probe.iter().enumerate() {
+                    let v = &va[j * nspec..(j + 1) * nspec];
+                    let zero = vec![0.0; nspec];
+                    let d = vad.as_ref().map(|x| &x[j * nspec..(j + 1) * nspec]).unwrap_or(&zero);
+                    let (mut im, mut dm) = (0usize, 0f64);
+                    for (q, x) in d.iter().enumerate() {
+                        if x.abs() > dm {
+                            dm = x.abs();
+                            im = q;
+                        }
+                    }
+                    let s = sc[j];
+                    writeln!(
+                        f,
+                        "{},{},{},{},{:.9e},{:.9e},{:.9e},{:.9e},{:.9e},{},{},{:.6},{:.4},{:.5},{:.6},{:.3},{:.4},{}",
+                        m.time,
+                        phase,
+                        node,
+                        probe_row,
+                        v.iter().sum::<f64>(),
+                        v.iter().cloned().fold(0.0, f64::max),
+                        d.iter().map(|x| x.abs()).sum::<f64>(),
+                        d.iter().map(|x| x * x).sum::<f64>().sqrt(),
+                        dm,
+                        im / m.nth,
+                        im % m.nth,
+                        s[0],
+                        s[1],
+                        s[2],
+                        s[3],
+                        s[4],
+                        s[5],
+                        s[6]
+                    )?;
+                    for x in v.iter().chain(d.iter()) {
+                        b.write_all(&x.to_le_bytes())?;
+                    }
+                    probe_row += 1;
+                }
+            }
+        }
         steps += 1;
         if steps == 1 || m.time.secs() % 21600 == 0 {
             let s: u32 = (0..m.nk).map(|ik| m.max_iter(ik)).sum();
@@ -292,6 +414,16 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         }
     }
     m.sync();
+    if let (Some(mut f), Some(mut b)) = (probe_csv, probe_bin) {
+        use std::io::Write;
+        f.flush()?;
+        b.flush()?;
+    }
+    if let (Some(mut f), Some(mut b)) = (check_csv, check_bin) {
+        use std::io::Write;
+        f.flush()?;
+        b.flush()?;
+    }
     let wall = t1.elapsed().as_secs_f64();
     if m.time.secs() % 21600 != 0 {
         // energy at the end of a run that does not stop at a 6-hour mark
@@ -341,6 +473,8 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
                    "host_level": cfg.host_level, "sources": m.has_sources(), "units": cfg.units,
                    "tangent": cfg.tangent, "wind_factor": cfg.wind_factor, "init_factor": cfg.init_factor, "out64": out64,
                    "betamax": cfg.betamax,
+                   "tl_nlcut": cfg.tl_nlcut,
+                   "tl_nlnode": cfg.tl_nlnode,
                    "betau": cfg.betau.as_ref().map(|b| json!({"knots": b.knots, "coefs": b.coefs, "grid": [b.b0, b.db, b.n]})),
                    "scale_par": cfg.scale_par.iter().map(|(n, f)| json!([n, f])).collect::<Vec<_>>()},
     });
@@ -447,6 +581,10 @@ fn perturbations(a: &Args, cfg: &mut Config) -> Result<()> {
     if let Some(b) = a.opts.get("--betamax") {
         cfg.betamax = Some(b.parse()?);
     }
+    if let Some(c) = a.opts.get("--tl-nlcut") {
+        cfg.tl_nlcut = c.parse()?;
+    }
+    cfg.tl_nlnode = a.flags.contains("--tl-nlnode");
     if let Some(b) = a.opts.get("--betau") {
         let grid = a.opts.get("--betau-grid").map(String::as_str).unwrap_or("0.75:0.25:13");
         cfg.betau = Some(hww3_wave::sources::BetaU::parse(b, grid)?);

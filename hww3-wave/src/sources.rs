@@ -1808,8 +1808,31 @@ pub const P_BT_B0: usize = 151;
 pub const P_BT_DB: usize = 152;
 /// See [`P_BT_N`]: `STRIDE`.
 pub const P_BT_STRIDE: usize = 153;
+/// Diagnostic only, read by the tangent kernel (0 in every run): a mask of
+/// the tangent contributions to leave out, to find which part of `W3SRCE`
+/// makes a tangent grow (`hww3-prop run --probe-check`): 1 `W3SLN1`, 2
+/// `W3SIN4`, 4 `W3SNL1`, 8 `W3SDS4`, 16 `W3SBT4`, 32 the tangent of u* and
+/// z0, 64 the derivative of the denominators of the implicit update, 128
+/// `W3SDB1`.
+pub const P_TLFREEZE: usize = 154;
+/// The unstable interactions of the tangent (0: off): with `c > 0`, in a
+/// frequency-direction bin where the global step `DTG` times the DIA's own
+/// diagonal `D_nl` exceeds `c` (with `c < 0`, `DTG |D_nl|` exceeds `-c`),
+/// the explicit DIA amplifies a perturbation of the bin over the substeps,
+/// and its tangent with respect to the spectrum, which grows without bound
+/// there in young wind seas, is left out; its proportional derivative in
+/// `NLPROP` stays. The choice is taken from the values, as the dynamic steps
+/// and the limiter are (`hww3-prop run --tl-nlcut`).
+pub const P_TLNLCUT: usize = 155;
+/// With [`P_TLNLCUT`], the choice taken for the whole spectrum of a node (0:
+/// per bin): where the criterion holds in one bin, the DIA's tangent with
+/// respect to the spectrum is left out in every bin of the node, since the
+/// DIA couples the bins and a perturbation can grow through bins that do
+/// not meet the criterion themselves (young wind seas at the ice edge,
+/// `hww3-prop run --tl-nlnode`).
+pub const P_TLNLNODE: usize = 156;
 /// Number of scalar parameters.
-pub const NPAR: usize = 154;
+pub const NPAR: usize = 157;
 
 /// The parameters and tables of [`SrcePar`] laid out for the GPU source
 /// kernel: scalars at the `P_*` indices, per-frequency factors, the

@@ -156,6 +156,8 @@ hww3-prop run <grid dir> --restart FILE|calm [--current FILE] [--level FILE] [--
           [--f64] [--block B] [--units U] [--itstep0 N]
           [--no-cx] [--no-cth] [--no-ck]
           [--host-level] [--no-bccfl] [--profile]
+          [--betamax B] [--scale-par NAME:F+...] [--betau KNOTS:COEFS [--betau-grid B0:DB:N]]
+          [--tangent NAME [--out64] [--tl-nlcut C [--tl-nlnode]]] [--probe N1,N2,... [--probe-check H]]
 hww3-prop restart-hs <grid dir> --restart FILE --out FILE.f32
 hww3-prop restart-copy RESTART --out FILE
 hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
@@ -183,6 +185,11 @@ hww3-prop check-steps <grid dir> --restart FILE [forcing as for run]
 | `--betamax B` | `BETAMAX` with the stress tables `TAUT`, `TAUHFT`, `TAUHFT2` computed for it by the Rust port instead of those of the parameter file |
 | `--tangent NAME` | the tangent of the model for a relative change of `WIND`, `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM` or `INIT` (the restart spectra): `dhs_` and `dt02_` files and the tangent of the total energy (milestone M3) |
 | `--out64` | also write $H_s$, $T_{m02}$ and their tangents in double precision (`.f64`) |
+| `--betau KNOTS:COEFS`, `--betau-grid B0:DB:N` | `BETAMAX`$(U)$: $\ln\beta = \ln$ `BETAMAX` $+ \sum_k c_k\phi_k(U)$ with hat functions on the knots (m/s, separated by commas) and the coefficients $c_k$ (empty: all 0), the tail-stress tables computed at `N` values of `BETAMAX` from `B0` in steps of `DB` (default `0.75:0.25:13`) and interpolated; tangents `BETAU<k>` and `BETAU` ([differentiable route](differentiable.md), section 9.7) |
+| `--tl-nlcut C` | in the tangent, leave out the derivative of the DIA with respect to the spectrum in the bins where the global step times the DIA's own diagonal exceeds `C` (with `C < 0`, its absolute value exceeds `-C`), keeping its derivative with respect to `NLPROP`: the unstable interactions of young wind seas ([differentiable route](differentiable.md), section 9.5); 0 (default) keeps the whole tangent |
+| `--tl-nlnode` | with `--tl-nlcut`, where one bin of a node meets the criterion, leave out the DIA's derivative with respect to the spectrum in every bin of that node |
+| `--probe N1,N2,...` | with a tangent, after each part of every step (`prepare`, `ktp3a`, `geo`, `ktp3b`, `srce`) the sum and largest value of the spectrum and of its tangent at these nodes, with the node's depth, wind, $u_*$, dynamic step, ice and `MAPSTA` (`probe.csv`), and the spectra (`probe_spec.f64`); `scripts/tl_probe.py` splits the growth of the tangent by part of the step |
+| `--probe-check H` | with `--probe`, the source step at these nodes: its tangent along the incoming tangent spectrum against central differences of steps `H` and `H/10` relative to the spectrum, and the growth of the tangent with each term of the tangent left out and at several values of `--tl-nlcut`, per bin and per node (`probe_check.csv`) |
 
 `run` writes hourly $H_s$ and $T_{m02}$ to `DIR/hs_YYYYMMDDHH.f32` and
 `DIR/t02_YYYYMMDDHH.f32` (little-endian `f32`, one value per node, −999.9
@@ -205,7 +212,7 @@ writes the depth and currents of those steps. The job scripts are
 ```text
 hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
 hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R]
-hww3-src check-tl HARNESS [--units N] [--h H]
+hww3-src check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]
 hww3-src tables BASE.params [OTHER.params ...]
 hww3-src params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...]
 hww3-src build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml WW3_GRID.nml] [--check BASE.params]
@@ -222,7 +229,8 @@ GPU. `check-gpu` runs the GPU source kernel (`srce`) on the same nodes
 and compares the spectra after the step with WW3 and with the CPU
 transcription; `--replicate R` repeats every node `R` times for the
 timing (`scripts/m2_src_gpu_hpc.slurm`). `check-tl` compares the tangent
-kernel `srce_tl` with central differences of `srce` (milestone M3).
+kernel `srce_tl` with central differences of `srce` (milestone M3);
+`--tl-nlcut` as for `hww3-prop run`.
 
 `tables` computes the stress tables of `INSIN4` for the `BETAMAX` of each
 parameter file and compares them with those WW3 wrote there: `TAUT`

@@ -123,6 +123,12 @@ pub struct Config {
     /// `BETAMAX(U)` ([`crate::sources::BetaU`]): `BETAMAX` depending on the
     /// wind speed at the node, around the `BETAMAX` of the run.
     pub betau: Option<crate::sources::BetaU>,
+    /// The unstable interactions of the tangent
+    /// ([`crate::sources::P_TLNLCUT`]; 0: off).
+    pub tl_nlcut: f64,
+    /// With `tl_nlcut`, the choice taken for the whole spectrum of a node
+    /// ([`crate::sources::P_TLNLNODE`]).
+    pub tl_nlnode: bool,
     /// Tangent run: the direction of the tangent, a relative change of the
     /// wind speed (`WIND`), of a source parameter (`BETAMAX`, `SDSC2`,
     /// `NLPROP`, `BJGAM`) or of the spectra of the restart (`INIT`, also
@@ -151,6 +157,8 @@ impl Default for Config {
             init_factor: 1.0,
             betamax: None,
             betau: None,
+            tl_nlcut: 0.0,
+            tl_nlnode: false,
             tangent: None,
         }
     }
@@ -284,6 +292,11 @@ fn tangent_seeds(name: &str, q: &SrcePar, t: &SrceTables) -> Result<(Vec<f64>, V
     Ok((dpar, dtab, false))
 }
 
+/// The probes of one step ([`Model::step_probed`]): per part of the step,
+/// its name, the spectra of the probed nodes and their tangents; and the
+/// one-step checks of the source tangent ([`Model::check_srce_step`]).
+pub type StepProbe = (Vec<(&'static str, Vec<f64>, Option<Vec<f64>>)>, Option<Vec<[Vec<f64>; 6]>>);
+
 /// The propagation-only model on the GPU: grid, spectral grid, forcing
 /// readers and device state.
 pub struct Model<F: Real> {
@@ -353,6 +366,11 @@ pub struct Model<F: Real> {
     /// Ice concentration per node (`ICE`).
     pub ice_c: Vec<f32>,
     src: Option<SourceKernel<F>>,
+    /// Length of the tail-stress table of the source kernel.
+    src_ntab: usize,
+    /// The tables of the source kernel on the host (for the diagnostic
+    /// kernels of [`Model::check_srce_step`]).
+    src_tables: Option<SrceTables>,
     nest: Option<NestFile>,
     /// `VERINI`, `GNAME` and `TRHO`, `TIC1`, `TIC5` of the restart the run
     /// started from, for [`Model::restart_state`].
@@ -614,18 +632,26 @@ impl<F: Real> Model<F> {
                 if let Some(bu) = &cfg.betau {
                     crate::sources::betau_tables(&q, &mut t, bu)?;
                 }
+                if cfg.tl_nlcut != 0.0 {
+                    let (w, c) = if cfg.tl_nlcut > 0.0 { ("DTG D_nl", cfg.tl_nlcut) } else { ("DTG |D_nl|", -cfg.tl_nlcut) };
+                    let at = if cfg.tl_nlnode { "in every bin of a node where one bin has" } else { "where" };
+                    eprintln!("sources: tangent of the DIA left out {at} {w} > {c}");
+                    t.par[crate::sources::P_TLNLCUT] = cfg.tl_nlcut;
+                    t.par[crate::sources::P_TLNLNODE] = if cfg.tl_nlnode { 1.0 } else { 0.0 };
+                }
                 eprintln!("sources: {} (BETAMAX {}, {} units per cube)", p.display(), q.st.bbeta, cfg.units);
                 let seeds = match &cfg.tangent {
                     Some(name) => Some(tangent_seeds(name, &q, &t)?),
                     None => None,
                 };
-                Some((SourceKernel::<F>::new(&client, &t, cfg.units), d50, psic, seeds))
+                let ntab = t.tauhf.len();
+                Some((SourceKernel::<F>::new(&client, &t, cfg.units), d50, psic, seeds, ntab, t))
             }
             None => None,
         };
-        let (src, d_d50, d_psic, seeds) = match src {
-            Some((k, d, s, sd)) => (Some(k), upf(&d), upf(&s), sd),
-            None => (None, upf(&[0.0]), upf(&[0.0]), None),
+        let (src, d_d50, d_psic, seeds, src_ntab, src_tables) = match src {
+            Some((k, d, s, sd, nt, t)) => (Some(k), upf(&d), upf(&s), sd, nt, Some(t)),
+            None => (None, upf(&[0.0]), upf(&[0.0]), None, 1, None),
         };
         let seeds = match (seeds, cfg.tangent.as_deref()) {
             (None, Some("INIT")) => Some((vec![0.0; crate::sources::NPAR], vec![0.0], false)),
@@ -688,6 +714,8 @@ impl<F: Real> Model<F> {
             wnx: (vec![0.0; np], vec![0.0; np]),
             ice_c: rs.ice.clone(),
             src,
+            src_ntab,
+            src_tables,
             nest,
             rst_meta: (rs.version.clone(), rs.gname.clone(), rs.tother),
             tbpi0: None,
@@ -2175,6 +2203,276 @@ impl<F: Real> Model<F> {
         self.propagate(ntloc, itloch, facth, fack);
         self.sources();
         Ok(())
+    }
+
+    /// The spectra of the nodes `nodes` (`[(j nk + ik) nth + ith]`, in
+    /// double precision) and, in a tangent run, their tangents.
+    pub fn probe(&self, nodes: &[u32]) -> (Vec<f64>, Option<Vec<f64>>) {
+        let (np, nk, nth) = (self.np, self.nk, self.nth);
+        let nn = nodes.len();
+        let n = nn * nk * nth;
+        let d_nodes = self.client.create_from_slice(u32::as_bytes(nodes));
+        let gather = |src: &Handle| -> Vec<f64> {
+            let out = self.client.empty(n * std::mem::size_of::<F>());
+            let (c, d) = self.dims(n);
+            unsafe {
+                prop::gather_nodes::launch_unchecked::<F>(&self.client, c, d, bf(src, nk * np * nth), bf(&d_nodes, nn), bf(&out, n), nn, np, nk, nth);
+            }
+            self.download_f64(&out)
+        };
+        let va = gather(&self.d_va);
+        let vad = self.tl.as_ref().map(|tl| gather(&tl.d_vad));
+        (va, vad)
+    }
+
+    /// One global step as [`Model::step`], with the probes of
+    /// [`Model::probe`] after each part: the forcing, ice and level updates
+    /// (`prepare`), the `W3KTP3` calls before the geographic step
+    /// (`ktp3a`), the geographic step (`geo`), the `W3KTP3` calls after it
+    /// (`ktp3b`) and `W3SRCE` (`srce`).
+    pub fn step_probed(&mut self, nodes: &[u32], check: Option<f64>) -> Result<StepProbe> {
+        let mut out = vec![];
+        let (ntloc, itloch, facth, fack) = self.prepare()?;
+        let (v, d) = self.probe(nodes);
+        out.push(("prepare", v, d));
+        for _ in 0..itloch {
+            self.ktp3(facth, fack);
+        }
+        let (v, d) = self.probe(nodes);
+        out.push(("ktp3a", v, d));
+        if self.cfg.flcx {
+            for ik in 0..self.nk {
+                self.geographic(ik);
+            }
+        }
+        let (v, d) = self.probe(nodes);
+        out.push(("geo", v, d));
+        for _ in itloch..ntloc {
+            self.ktp3(facth, fack);
+        }
+        let (v, d) = self.probe(nodes);
+        out.push(("ktp3b", v, d));
+        let checks = check.and_then(|h| self.check_srce_step(nodes, h));
+        self.sources();
+        let (v, d) = self.probe(nodes);
+        out.push(("srce", v, d));
+        Ok((out, checks))
+    }
+
+    /// One-step check of the tangent of `W3SRCE` at the nodes `nodes`, on the
+    /// state before the source call (after the propagation): the source
+    /// kernels on the inputs of these nodes alone, the tangent of the step
+    /// for the incoming tangent spectrum (the parameters and the wind fixed:
+    /// the homogeneous part of the tangent), and the central differences of
+    /// the value kernel along that spectrum with steps of `h` and `h / 10`
+    /// relative to the norm of the spectrum. Per node, in the layout of
+    /// [`Model::probe`]: the spectrum, its tangent, the tangent after the
+    /// step, the two differences, and the growth factor of the tangent over
+    /// the step with each diagnostic mask of `P_TLFREEZE` (1, 2, 4, 8, 16, 32,
+    /// 64, 128, 2 | 32, 4 | 8) and with the unstable interactions left out at
+    /// `P_TLNLCUT` 8, 4, 2, 1, 0.5, -2, -1 and 0.25, then per node
+    /// (`P_TLNLNODE`) at 1, 0.5 and 0.25. `None` without the source terms or
+    /// the tangent.
+    pub fn check_srce_step(&self, nodes: &[u32], h: f64) -> Option<Vec<[Vec<f64>; 6]>> {
+        let k = self.src.as_ref()?;
+        self.tl.as_ref()?;
+        let (np, nk, nth) = (self.np, self.nk, self.nth);
+        let nspec = nk * nth;
+        let n = nodes.len();
+        let (va, vad) = self.probe(nodes);
+        let vad = vad?;
+        // the node layout of the probes [(j nk + ik) nth + th] and that of the kernels [(ik n + j) nth + th]
+        let to_k = |v: &[f64]| -> Vec<f64> {
+            let mut o = vec![0.0; nspec * n];
+            for j in 0..n {
+                for ik in 0..nk {
+                    for th in 0..nth {
+                        o[(ik * n + j) * nth + th] = v[(j * nk + ik) * nth + th];
+                    }
+                }
+            }
+            o
+        };
+        let to_n = |v: &[f64]| -> Vec<f64> {
+            let mut o = vec![0.0; nspec * n];
+            for j in 0..n {
+                for ik in 0..nk {
+                    for th in 0..nth {
+                        o[(j * nk + ik) * nth + th] = v[(ik * n + j) * nth + th];
+                    }
+                }
+            }
+            o
+        };
+        let idx: Vec<usize> = nodes.iter().map(|&x| x as usize).collect();
+        let sel = |hd: &Handle| -> Vec<f64> {
+            let v = self.download_f64(hd);
+            idx.iter().map(|&i| v[i]).collect()
+        };
+        let sel_k = |hd: &Handle| -> Vec<f64> {
+            // [(ik) np + i] for ik = 0 .. NK + 1
+            let v = self.download_f64(hd);
+            let mut o = vec![0.0; (nk + 2) * n];
+            for ik in 0..nk + 2 {
+                for (j, &i) in idx.iter().enumerate() {
+                    o[ik * n + j] = v[ik * np + i];
+                }
+            }
+            o
+        };
+        let nflag_all = u32::from_bytes(&self.client.read_one(self.d_nflag.clone()).expect("device read")).to_vec();
+        let nflag: Vec<u32> = idx.iter().map(|&i| nflag_all[i]).collect();
+        let (wn, cg) = (sel_k(&self.d_wn), sel_k(&self.d_cg));
+        let (dw, u10, u10d, ice) = (sel(&self.d_dw), sel(&self.d_u10), sel(&self.d_u10d), sel(&self.d_ice));
+        let (d50, psic) = (sel(&self.d_d50), sel(&self.d_psic));
+        let zeros = vec![0.0; n];
+        let (d_wn, d_cg, d_dw, d_u10, d_u10d, d_ice, d_d50, d_psic) =
+            (self.upd(&wn), self.upd(&cg), self.upd(&dw), self.upd(&u10), self.upd(&u10d), self.upd(&ice), self.upd(&d50), self.upd(&psic));
+        let d_nflag = self.client.create_from_slice(u32::as_bytes(&nflag));
+        let run = |v: &[f64], dv: Option<&[f64]>| -> (Vec<f64>, Option<Vec<f64>>) {
+            let (d_va, d_ust, d_dt) = (self.upd(&to_k(v)), self.upd(&zeros), self.upd(&zeros));
+            let args = SrceArgs {
+                va: &d_va,
+                wn: &d_wn,
+                cg: &d_cg,
+                dw: &d_dw,
+                u10: &d_u10,
+                u10d: &d_u10d,
+                ice: &d_ice,
+                d50: &d_d50,
+                psic: &d_psic,
+                nflag: &d_nflag,
+                ust: &d_ust,
+                dtdyn: &d_dt,
+            };
+            match dv {
+                None => {
+                    k.launch(&self.client, &args, self.cfg.dtg, false, n, nk, nth);
+                    (to_n(&self.download_f64(&d_va)), None)
+                }
+                Some(dv) => {
+                    let d_vad = self.upd(&to_k(dv));
+                    let (d_du, d_dud) = (self.upd(&zeros), self.upd(&zeros));
+                    let d_dpar = self.upd(&vec![0.0; crate::sources::NPAR]);
+                    let d_dtab = self.upd(&vec![0.0; self.src_ntab]);
+                    let targs = TangentArgs { vad: &d_vad, du10: &d_du, du10d: &d_dud, dpar: &d_dpar, dtauhf: &d_dtab };
+                    k.launch_tl(&self.client, &args, &targs, self.cfg.dtg, n, nk, nth);
+                    (to_n(&self.download_f64(&d_va)), Some(to_n(&self.download_f64(&d_vad))))
+                }
+            }
+        };
+        let (_, tlo) = run(&va, Some(&vad));
+        let tlo = tlo?;
+        // the growth of the tangent with the contributions of P_TLFREEZE left out, one mask at a time
+        let masks: [(u32, f64, f64); 21] = [
+            (1, 0.0, 0.0),
+            (2, 0.0, 0.0),
+            (4, 0.0, 0.0),
+            (8, 0.0, 0.0),
+            (16, 0.0, 0.0),
+            (32, 0.0, 0.0),
+            (64, 0.0, 0.0),
+            (128, 0.0, 0.0),
+            (2 | 32, 0.0, 0.0),
+            (4 | 8, 0.0, 0.0),
+            (0, 8.0, 0.0),
+            (0, 4.0, 0.0),
+            (0, 2.0, 0.0),
+            (0, 1.0, 0.0),
+            (0, 0.5, 0.0),
+            (0, -2.0, 0.0),
+            (0, -1.0, 0.0),
+            (0, 0.25, 0.0),
+            (0, 1.0, 1.0),
+            (0, 0.5, 1.0),
+            (0, 0.25, 1.0),
+        ];
+        let mut amps = vec![vec![0.0; masks.len()]; n];
+        if let Some(tb) = &self.src_tables {
+            for (q, &(mk, cut, node)) in masks.iter().enumerate() {
+                let mut t2 = tb.clone();
+                t2.par[crate::sources::P_TLFREEZE] = mk as f64;
+                t2.par[crate::sources::P_TLNLCUT] = cut;
+                t2.par[crate::sources::P_TLNLNODE] = node;
+                let k2 = SourceKernel::<F>::new(&self.client, &t2, self.cfg.units);
+                let (d_va, d_ust, d_dt) = (self.upd(&to_k(&va)), self.upd(&zeros), self.upd(&zeros));
+                let args = SrceArgs {
+                    va: &d_va,
+                    wn: &d_wn,
+                    cg: &d_cg,
+                    dw: &d_dw,
+                    u10: &d_u10,
+                    u10d: &d_u10d,
+                    ice: &d_ice,
+                    d50: &d_d50,
+                    psic: &d_psic,
+                    nflag: &d_nflag,
+                    ust: &d_ust,
+                    dtdyn: &d_dt,
+                };
+                let d_vad = self.upd(&to_k(&vad));
+                let (d_du, d_dud) = (self.upd(&zeros), self.upd(&zeros));
+                let d_dpar = self.upd(&vec![0.0; crate::sources::NPAR]);
+                let d_dtab = self.upd(&vec![0.0; self.src_ntab]);
+                let targs = TangentArgs { vad: &d_vad, du10: &d_du, du10d: &d_dud, dpar: &d_dpar, dtauhf: &d_dtab };
+                k2.launch_tl(&self.client, &args, &targs, self.cfg.dtg, n, nk, nth);
+                let o = to_n(&self.download_f64(&d_vad));
+                for (j, amp) in amps.iter_mut().enumerate() {
+                    let num: f64 = o[j * nspec..(j + 1) * nspec].iter().map(|x| x * x).sum::<f64>().sqrt();
+                    let den: f64 = vad[j * nspec..(j + 1) * nspec].iter().map(|x| x * x).sum::<f64>().sqrt();
+                    amp[q] = num / den.max(1e-300);
+                }
+            }
+        }
+        let norm = |v: &[f64], j: usize| -> f64 { v[j * nspec..(j + 1) * nspec].iter().map(|x| x * x).sum::<f64>().sqrt() };
+        let eps: Vec<f64> = (0..n).map(|j| norm(&va, j) / norm(&vad, j).max(1e-300)).collect();
+        let fd = |hh: f64| -> Vec<f64> {
+            let shift = |sgn: f64| -> Vec<f64> {
+                let mut v = va.clone();
+                for j in 0..n {
+                    for q in 0..nspec {
+                        v[j * nspec + q] += sgn * hh * eps[j] * vad[j * nspec + q];
+                    }
+                }
+                run(&v, None).0
+            };
+            let (p, m) = (shift(1.0), shift(-1.0));
+            let mut o = vec![0.0; nspec * n];
+            for j in 0..n {
+                for q in 0..nspec {
+                    o[j * nspec + q] = (p[j * nspec + q] - m[j * nspec + q]) / (2.0 * hh * eps[j]);
+                }
+            }
+            o
+        };
+        let (f1, f2) = (fd(h), fd(h / 10.0));
+        Some(
+            (0..n)
+                .map(|j| {
+                    let s = |v: &[f64]| v[j * nspec..(j + 1) * nspec].to_vec();
+                    [s(&va), s(&vad), s(&tlo), s(&f1), s(&f2), amps[j].clone()]
+                })
+                .collect(),
+        )
+    }
+
+    /// Per node of `nodes`: water depth, wind speed and direction, u* and
+    /// mean dynamic step of the last source call, ice concentration and
+    /// `MAPSTA`.
+    pub fn node_scalars(&self, nodes: &[u32]) -> Vec<[f64; 7]> {
+        let dw = self.download_f64(&self.d_dw);
+        let u = self.download_f64(&self.d_u10);
+        let ud = self.download_f64(&self.d_u10d);
+        let ust = self.download_f64(&self.d_ust);
+        let dt = self.download_f64(&self.d_dtdyn);
+        let ice = self.download_f64(&self.d_ice);
+        nodes
+            .iter()
+            .map(|&n| {
+                let i = n as usize;
+                [dw[i], u[i], ud[i], ust[i], dt[i], ice.get(i).copied().unwrap_or(0.0), self.mapsta[i] as f64]
+            })
+            .collect()
     }
 
     /// Geographic step of frequency `ik` on the GPU against the CPU

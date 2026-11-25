@@ -1148,6 +1148,100 @@ Steps 1–3 are therefore not affected. The local instability of the tangent
 at these parameters is listed among the limits
 ([Differentiable WW3 study](differentiable.md), section 9.5).
 
+**Where the step-3 tangent grows** (24–25 November, `scripts/tl_probe_hpc.slurm`,
+`tl_fix_check_hpc.slurm`, runs under `cal/tlfix`).
+
+- **Source of the blocks.** Tracking the field back hour by hour, the
+  derivatives of the 7 January 08 h pass off Newfoundland (−10 to +73 m per
+  unit, buoy 44078 −11 to −14 m) come from nodes 238059 and 238060 on the
+  coast of northern Labrador (63.9°W 59.74°N):
+  - ice 0.44, depth 32 m, $U_{10}$ 16 m/s, $H_s$ 3–4 m;
+  - the tangent goes from 5 m on 4 January 19 h to $1.3 \times 10^6$ m at
+    22 h;
+  - the field then drifts south along Labrador and decays to about
+    $10^3$ m off Newfoundland.
+
+  Smaller events start at 221168 south of Greenland (no ice, 194 m) and in
+  Ungava Bay.
+- **A growth of the model, not an error of the tangent.** A double-precision
+  tangent from a restart of 4 January 06 h, probed after each part of every
+  step (`hww3-prop run --probe --probe-check`, job 4388139), puts the growth
+  in the source step:
+  - at 238059 the source step multiplies the tangent by 3 to 4.3 per 600 s
+    step on 8 of 108 steps, in the young wind-sea bins (0.25–0.3 Hz,
+    downwind) under a swell peak at 0.1 Hz;
+  - central differences of the source step along the same tangent
+    spectrum (relative step $10^{-4}$) give the same factor where the two
+    steps agree: 3.4–4.6 against 3.2–4.3;
+  - the two step sizes disagree on 67 of the 108 steps, at discrete
+    choices inside the step.
+
+  Leaving parts out of the tangent on these steps gives:
+
+  | Part left out | Factor at 238059 |
+  |---|---|
+  | none | 3.4 |
+  | the DIA | 1.2–1.75 |
+  | the wind input | 1.5–2.4 |
+  | dissipation | 4–6 |
+
+  The amplification comes from the DIA coupling the bins of a young wind
+  sea together with the wind input; dissipation damps it.
+- **Leaving out the DIA's tangent** (`--tl-nlcut C`: in the bins where the
+  global step times the DIA's own diagonal exceeds $C$). The step-3
+  `BETAMAX` tangent over 216 h gives:
+
+  | Cut $C$ | Job | Altimeter blocks above 10 m (training) | Largest | Buoy hours above 10 m | At 238059 | Wadden Sea |
+  |---|---|---|---|---|---|---|
+  | none | 4326004 | 527 | 3,030 m | 5 | $1.3 \times 10^6$ m | $3.6 \times 10^{10}$ m |
+  | 1 | 4374294 | 540 | 3,430 m | 6 | $1.4 \times 10^6$ m | 1–3 m |
+  | 0.5 | 4374295 (156 h) | 78 | 67 m | 0 | $3.7 \times 10^4$ m | |
+  | 0.25 | 4392466 | 0 | 7.2 m | 0 | 307 m | under 3.1 m |
+
+  With cut 0.25:
+  - The validation window is also clean: 0 of 27,935 altimeter blocks
+    above 10 m (1,903 without the cut) and one buoy hour (Keeten,
+    21.5 m) against 2,260.
+  - The cut creates a new spike at one node of the Colombian coast
+    ($H_s$ 0.19 m, $3.6 \times 10^6$ m on 8 January 13 h, gone by 18 h).
+  - It moves the step-3 derivatives at the training altimeter blocks
+    east of 40°W by a relative L2 of 0.66 from the tangent without the
+    cut, which has spikes of its own there (0.10 for cut 1).
+
+  The DIA's diagonal misses most of the amplification: at 238059 cut 1
+  does not change the factor (3.4), cut 0.5 gives 3.3 and cut 0.25 gives
+  2.6. Leaving the DIA's tangent out over the whole spectrum of a node
+  where one bin meets the criterion (`--tl-nlnode`) gives 2.8 at 0.5 and
+  1.7 at 0.25 (job 4392595).
+- **The checks of M3 with cut 0.25** (job 4393681, at $p_0$). On the
+  harness nodes of 8 January, the tangent of one source step departs from
+  the central differences:
+  - by more than $10^{-4}$ on 41–54 of the 1,586–1,854 nodes where the
+    model is smooth, up to 100 %, for the spectrum, the wind and the
+    parameters; without the cut none departs by more than 9.5e-5;
+  - so the cut also triggers at $p_0$, on about 3 % of the nodes.
+
+  Through the time loop, the tangent of $H_s$ departs from the differences
+  by more than $10^{-4}$ at many more smooth nodes:
+
+  | Direction | After 1 h, cut 0.25 | After 1 h, no cut | After 3 h, cut 0.25 | After 3 h, no cut |
+  |---|---|---|---|---|
+  | `WIND` | 1,310 | 18 | 91 | 28 |
+  | `INIT` | 5,715 | 7 | 1,436 | 14 |
+
+  The aggregates do not move:
+  - Over 3 h the total energy is within 1.5 % (`WIND`) and 0.25 %
+    (`INIT`) of the differences, as without the cut.
+  - Over 48 h against the differences of M2b, the energy on 10 January is
+    within 0.12 % (0.009 % for step 0.1 %) for `BETAMAX` and 1.0 % for
+    `NLPROP`, against 0.20 % (0.09 %) and 1.1 % without the cut.
+  - The mean $H_s$ is within 0.07 % and 0.9 %, against 0.30 % and 1.1 %.
+
+The cut removes the blow-up but changes the tangent node by node where the
+model is smooth, also at $p_0$, so no cut is adopted. The tangents at
+$p_0$, which the `BETAMAX`$(U)$ test uses, reach no observation above
+10 m per unit (largest 5.0 m for the seven coefficients).
+
 **Cost of the calibration.** 33 GPU runs took 16.6 GPU-hours on the A100s
 from 23 November 07:27 to 24 November 11:47 (28 h). The CPU jobs took
 8.6 h: operators, evaluations and the WW3 runs.
