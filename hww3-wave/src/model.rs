@@ -639,6 +639,12 @@ impl<F: Real> Model<F> {
                     t.par[crate::sources::P_TLNLCUT] = cfg.tl_nlcut;
                     t.par[crate::sources::P_TLNLNODE] = if cfg.tl_nlnode { 1.0 } else { 0.0 };
                 }
+                // diagnostic: the tangent contributions of the masks of
+                // P_TLFREEZE left out (HWW3_TLFREEZE, see srce_tl)
+                if let Some(m) = std::env::var("HWW3_TLFREEZE").ok().and_then(|v| v.parse::<f64>().ok()) {
+                    eprintln!("sources: tangent contributions of the mask {m} of P_TLFREEZE left out (diagnostic)");
+                    t.par[crate::sources::P_TLFREEZE] = m;
+                }
                 eprintln!("sources: {} (BETAMAX {}, {} units per cube)", p.display(), q.st.bbeta, cfg.units);
                 let seeds = match &cfg.tangent {
                     Some(name) => Some(tangent_seeds(name, &q, &t)?),
@@ -2235,11 +2241,13 @@ impl<F: Real> Model<F> {
         let (ntloc, itloch, facth, fack) = self.prepare()?;
         let (v, d) = self.probe(nodes);
         out.push(("prepare", v, d));
+        self.nonfinite_report("prepare");
         for _ in 0..itloch {
             self.ktp3(facth, fack);
         }
         let (v, d) = self.probe(nodes);
         out.push(("ktp3a", v, d));
+        self.nonfinite_report("ktp3a");
         if self.cfg.flcx {
             for ik in 0..self.nk {
                 self.geographic(ik);
@@ -2247,16 +2255,52 @@ impl<F: Real> Model<F> {
         }
         let (v, d) = self.probe(nodes);
         out.push(("geo", v, d));
+        self.nonfinite_report("geo");
         for _ in itloch..ntloc {
             self.ktp3(facth, fack);
         }
         let (v, d) = self.probe(nodes);
         out.push(("ktp3b", v, d));
+        self.nonfinite_report("ktp3b");
         let checks = check.and_then(|h| self.check_srce_step(nodes, h));
         self.sources();
         let (v, d) = self.probe(nodes);
         out.push(("srce", v, d));
+        self.nonfinite_report("srce");
         Ok((out, checks))
+    }
+
+    /// Diagnostic of [`Model::step_probed`] with the environment variable
+    /// `HWW3_NANCOUNT` set (to `srce`: after the source terms only): the
+    /// number of nodes whose spectrum or tangent spectrum holds a value that
+    /// is not finite after the part `phase`, with the first of them and the
+    /// frequency of its first such value, on the standard error (the whole
+    /// spectra are downloaded).
+    fn nonfinite_report(&self, phase: &str) {
+        match std::env::var("HWW3_NANCOUNT") {
+            Err(_) => return,
+            Ok(v) if v == "srce" && phase != "srce" => return,
+            _ => {}
+        }
+        let (np, nk, nth) = (self.np, self.nk, self.nth);
+        let count = |v: &[f64]| -> (usize, Vec<(usize, usize)>) {
+            let mut bad = vec![usize::MAX; np];
+            for ik in 0..nk {
+                for i in 0..np {
+                    if bad[i] == usize::MAX && v[(ik * np + i) * nth..(ik * np + i + 1) * nth].iter().any(|x| !x.is_finite()) {
+                        bad[i] = ik;
+                    }
+                }
+            }
+            let first: Vec<(usize, usize)> = bad.iter().enumerate().filter(|(_, &k)| k != usize::MAX).map(|(i, &k)| (i, k)).take(8).collect();
+            (bad.iter().filter(|&&k| k != usize::MAX).count(), first)
+        };
+        let (nv, fv) = count(&self.download_f64(&self.d_va));
+        let (nd, fd) = match self.tl.as_ref() {
+            Some(tl) => count(&self.download_f64(&tl.d_vad)),
+            None => (0, vec![]),
+        };
+        eprintln!("nonfinite {} {phase}: spectrum {nv} nodes {fv:?}, tangent {nd} nodes (node, frequency) {fd:?}", self.time);
     }
 
     /// One-step check of the tangent of `W3SRCE` at the nodes `nodes`, on the

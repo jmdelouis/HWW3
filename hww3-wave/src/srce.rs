@@ -499,11 +499,15 @@ fn sin4<F: Float>(
         if t == 0 {
             let taupx = sc[S_TAUX] - tsh * sc[S_SX];
             let taupy = sc[S_TAUY] - tsh * sc[S_SY];
-            let ustp = min((taupx * taupx + taupy * taupy).powf(F::new(0.25f32)), max(ustar, F::new(0.3f32)));
-            let usdirp = taupy.atan2(taupx);
+            // |tau|^(1/4) and the cosine and sine of the direction of the
+            // stress from square roots instead of POW, ATAN2, COS and SIN
+            // (equal to round-off; this is the serial chain of the loop)
+            let r = (taupx * taupx + taupy * taupy).sqrt();
+            let ustp = min(r.sqrt(), max(ustar, F::new(0.3f32)));
+            let pos = r > zero;
             sc[S_USTP] = ustp;
-            sc[S_COSU] = usdirp.cos();
-            sc[S_SINU] = usdirp.sin();
+            sc[S_COSU] = select(pos, taupx / r, one);
+            sc[S_SINU] = select(pos, taupy / r, zero);
         }
         sync_cube();
         if t < nth {

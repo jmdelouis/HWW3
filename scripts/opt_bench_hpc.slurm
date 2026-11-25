@@ -19,6 +19,13 @@
 #   tl    24 h of the f64 BETAMAX tangent;
 #   tl32  the same tangent in single precision, against the f64 tangent of
 #         the present build (relative differences);
+#   tl32w the f32 tangent over the training window of the calibration
+#         (156 h) against its f64 tangent at p0 (cal/it0_BETAMAX), at the
+#         observations and in the Jacobian of cost 3;
+#   freeze32  the same with each diagnostic mask of P_TLFREEZE (MASKS),
+#         the number of nodes with a non-finite tangent after each source step;
+#   probe32  1 h of the f32 tangent with the nodes of NODES probed after
+#         each part of every step (probe.csv), to find where it goes wrong;
 #   src   the value source kernel alone on the nodes of the source harness
 #         of grid v5 K=4 repeated REP times (default 200, about the size of
 #         the grid; hww3-src check-gpu), f32 and f64, both builds: time of
@@ -56,7 +63,7 @@ run() {
   local b=$1 o=$2 h=$3
   shift 3
   echo "== $o: $h h $*"
-  $b/hww3-prop run $G --restart $R $FORCE $PAR --hours $h --out64 --out $o "$@" 2>&1 | grep -E "steps in|rror|panicked"
+  $b/hww3-prop run $G --restart $R $FORCE $PAR --hours $h --out64 --out $o "$@" 2>&1 | grep -E "steps in|rror|panicked|nonfinite"
 }
 ref() {
   # ref CASE HOURS [options]: the run of the present build, once
@@ -89,6 +96,31 @@ for c in ${CASES:-f32w f64 tl}; do
       ref tl 24 --f64 --tangent BETAMAX
       run $NEW $O/tl32 24 --units ${UNITS:-128} --tangent BETAMAX
       $PY scripts/opt_compare.py $S/opt/bench/base/tl $O/tl32 --prefix hs,dhs,dt02 --rel ;;
+    tl32w)
+      # the f32 tangent over the training window of the calibration (156 h,
+      # to 7 January 12:00) against the f64 tangent at p0 of the calibration
+      # (cal/it0_BETAMAX): the fields, the derivatives at the observations
+      # of cost 3, and the columns of the Jacobian and dJ (cal_jaccmp.py)
+      C=$S/cal
+      run $NEW $O/tl32w 156 --units ${UNITS:-128} --tangent BETAMAX
+      $PY scripts/opt_compare.py $C/it0_BETAMAX $O/tl32w --prefix hs,dhs,dt02 --rel
+      $PY scripts/tl_cmp_obs.py $C/op_train_cost3.npz $C/it0_BETAMAX $O/tl32w
+      for r in $C/it0_BETAMAX $O/tl32w; do
+        echo "== eval $r"
+        $PY scripts/cal_obs.py eval $C/op_train_cost3.npz $C/it0_value BETAMAX:$r --json $O/eval_$(basename $r).json --npz $O/eval_$(basename $r).npz | grep -E "\"J\"|dJ/dln" | cut -c1-160
+      done
+      $PY scripts/cal_jaccmp.py $O/eval_it0_BETAMAX.npz $O/eval_tl32w.npz BETAMAX ;;
+    freeze32)
+      # the f32 tangent over 1 h with each mask of P_TLFREEZE (srce_tl) left
+      # out, nodes with a tangent that is not finite after each source step
+      for m in ${MASKS:-0 255 2 4 8 16 32 64 128 1}; do
+        echo "== mask $m"
+        HWW3_TLFREEZE=$m HWW3_NANCOUNT=srce run $NEW $O/freeze32 1 --units ${UNITS:-128} --tangent BETAMAX --probe 0 | grep -E "nonfinite" | cut -c1-140 | head -6
+      done ;;
+    probe32)
+      run $NEW $O/probe32 ${HOURS:-1} --units ${UNITS:-128} --tangent BETAMAX --probe ${NODES//:/,}
+      head -1 $O/probe32/probe.csv
+      head -${ROWS:-80} $O/probe32/probe.csv | tail -n +2 ;;
     src)
       for opt in "" --f64; do
         for b in $BASE $NEW; do
@@ -112,6 +144,6 @@ for c in ${CASES:-f32w f64 tl}; do
           $b/hww3-src check-tl $S/m2/harness/$hn --units ${UNITS:-128} --h 1e-4 2>&1 | grep -vE "^\s*$"
         done
       done ;;
-    *) echo "case $c: f32w, f32, f64, tl, tl32, src, srcs or m3" ;;
+    *) echo "case $c: f32w, f32, f64, tl, tl32, tl32w, freeze32, probe32, src, srcs or m3" ;;
   esac
 done

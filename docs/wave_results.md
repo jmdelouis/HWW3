@@ -1701,9 +1701,9 @@ identical to the bit to step 2 (all 216 hours in f32, 48 hours in f64).
 They make the f32 value kernel slower, though: 117.3 s per model day
 instead of 101.7, which the source kernel alone confirms (below). In f64
 they change nothing (265.2 s). The value kernel of 35ecb15 already used
-128 registers per unit in f32, the most that allows 4 nodes per SM; the
-likely cause is that step 3 needs more and loses a node per SM, but the
-counters of hpc cannot show it. In the tangent kernel step 3 takes the
+128 registers per unit in f32, the most that allows 4 nodes per SM. Step
+3 needs 168 (read from its PTX, see the second checkpoint below), so an
+SM holds 3 nodes instead of 4. In the tangent kernel step 3 takes the
 first day from 843.8 to 798.0 s, also identical to the bit to step 2, so
 it is kept there, in slots of its own.
 
@@ -1753,6 +1753,149 @@ twice (job 4444291):
 Between two rounds the same build can differ by 10 % in f64. The
 differences against WW3 and the CPU transcription are the same as for
 35ecb15 to the printed digits.
+
+### Optimisation steps (second checkpoint, 25 November)
+
+The checks are those of the first checkpoint, against 35ecb15. In
+addition, the registers per unit of the source kernels are read in two
+ways, which give the same counts:
+- from the PTX that CubeCL compiles (`scripts/opt_ptx_hpc.slurm`): it is
+  written under `CUBECL_CUDA_DUMP_PTX`, then read by `ptxas -v` of CUDA
+  13.0 for sm_80. The NVRTC that CubeCL loads writes PTX version 9.2,
+  newer than this `ptxas` reads, so the script lowers the version line
+  to 9.0; the sm_80 instructions are the same.
+- at run time under Nsight Systems (`scripts/opt_profile_hpc.slurm`,
+  `PART=regs`, job 4460958).
+
+| Kernel | Registers per unit | Shared memory per node | Nodes per SM |
+|---|---|---|---|
+| `srce` f32, first checkpoint | 128 (about 110 B spilled) | 38,768 B | 4 |
+| `srce` f32 with step 3 | 168 | – | 3 (registers) |
+| `srce` f64 | 255 | 76,384 B | 2 (registers and shared memory) |
+| `srce_tl` f64 before step 4 | 255 | 156,832 B | 1 |
+| `srce_tl` f64, first checkpoint | 168 (4.3 KB of stack per unit) | 76,192 B | 2 (shared memory) |
+| `srce_tl` f64, step 6 | 168 | 53,360 B | 3 |
+
+CubeCL declares only the size of the cube (`.reqntid 128`). The compiler
+chooses the registers, and neither `--maxrregcount` nor a launch bound can
+cap them without changing CubeCL.
+
+The steps, in seconds per model day, over the same hours as in the first
+checkpoint:
+
+| Step | f32, 216 h | f64, 48 h | f64 tangent, 24 h | Against the step before |
+|---|---|---|---|---|
+| present build (35ecb15) | 124.1 | 505.1 | 931.4 | – |
+| first checkpoint (ce6470f) | 101.7 | 266.4 | 590.2 | – |
+| 5. square roots in the serial step of `W3SIN4`; tangent of `W3SDB1` kept finite in f32; 4 tangent slots per frequency | 98.8 | 246.1 | 565.8 | round-off |
+| 6. tangent: the DIA and `W3SDS4` work in the buffers of the spectrum | – | – | 509.9 | identical to the bit |
+
+**5. Square roots in the serial step of `W3SIN4`.** In the loop of
+`W3SIN4` over the frequencies, unit 0 computes the stress left after the
+lower frequencies: $|\tau|^{1/4}$ with POW, then the direction with ATAN2
+and its cosine and sine. Now $r = \sqrt{\tau_x^2 + \tau_y^2}$,
+$|\tau|^{1/4} = \sqrt{r}$, and the cosine and sine are $\tau_x / r$ and
+$\tau_y / r$ (1 and 0 at $r = 0$). The value and tangent kernels both do
+this. The results differ at round-off:
+- In f64, $H_s$ differs from 35ecb15 by at most 1.5e-12 m over 48 h
+  (hourly RMS median 1.4e-16 m).
+- In f32 over the week: hourly RMS median 3.7e-6 m, 99th percentile
+  1.6e-4 m, largest 0.116 m at one node and hour. Step 2 gave 9.4e-7,
+  1.2e-4 and 9.7e-2 m.
+- The costs of the calibration windows differ from 35ecb15 by at most
+  2e-3 (35,543.385 against 35,543.386), and every bias and RMSE is the
+  same to the printed digits (job 4460587).
+- The M3 check of the source tangent (job 4453109) has no smooth node
+  above 1e-4 in any direction. The medians and 99th percentiles are the
+  same to two digits; the largest change is the maximum of `SDSC2` on
+  grid v4, 5.6e-7 to 6.1e-7.
+
+The source kernel alone takes 0.614–0.636 s instead of 0.653–0.654 s per
+step in f32, and 1.335–1.339 s instead of 1.446–1.447 s in f64 (−7.5 %,
+job 4453110).
+
+Two changes of the tangent kernel come with step 5:
+- `kd` keeps only the tangents of the four slots per frequency that have
+  one (`EB`, `EB2`, `CNST`, `BTH0`), instead of 19. This is identical to
+  the bit and gains nothing alone (592.0 s, job 4433135), but a node then
+  needs 72,352 B, which leaves room for step 6.
+- The tangent of `W3SDB1` stays finite in f32 (below). In f64 nothing
+  changes: the 24 hours of the tangent are identical to the bit to the
+  build without it.
+
+**6. The tangent kernel in three nodes per SM.** At 168 registers per
+unit, the registers allow 3 nodes per SM. Shared memory set the limit at
+2. Now:
+- The extended spectrum of the DIA and its tangent (`UE`, 10,944 B each
+  in f64) are held in the buffers of the spectrum and its tangent. These
+  are one slot longer than the extended grid; the extra slot holds the
+  zero of the bins below the grid. The DIA reads the spectrum only to
+  build `UE`.
+- The crest lengths of the cumulative term of `W3SDS4` and their tangent
+  are held in the same buffers. `W3SDS4` reads the spectrum of other bins
+  only for the saturation, before.
+- Meanwhile the unit of each bin keeps the spectrum and the tangent of
+  its bins, and puts them back after.
+
+A node needs 53,360 B. The tangent run takes 509.9 s per model day
+instead of 565.8 s (−10 %), identical to the bit: all 24 hours of $H_s$,
+its tangent and that of $T_{m02}$ (job 4461185). The M3 check gives the
+same figures as step 5. The gain is smaller than the third node suggests.
+The tangent kernel also keeps 4 KB of local memory per unit, which the
+extra node shares. The first launch now compiles in 14.4 s, against 5.4 s.
+
+**Not kept: the f32 tangent.** The f32 tangent was not finite after one
+hour. Two diagnostics of `hww3-prop run --probe` found where:
+- `HWW3_NANCOUNT` counts the nodes with a non-finite spectrum or tangent
+  after each part of the step.
+- `HWW3_TLFREEZE` leaves out the tangent of one source term (the masks of
+  `P_TLFREEZE`); `opt_bench_hpc.slurm` runs it as the case `freeze32`.
+
+The tangent became non-finite in the source step, at 1,282 nodes in
+frequencies 12–19 after the first step. The propagation then spread it to
+387,701 nodes in six steps. Only leaving out the tangent of `W3SDB1`
+removed it (job 4440818). There, below $B = 0.2$, `QB` is 0 and $BB^2$
+underflows to 0 in f32 ($H_{rms}$ about 1e-9 m), so the term
+`QB FMEAN dBB / BB^2` was 0/0; it is now 0.
+
+The f32 tangent is then finite everywhere and takes 302.4 s per model
+day over the first day (326.9 s after step 6, identical to the bit). It
+is not accurate enough. Against the f64 tangent:
+- Over the first day, the tangent of $H_s$ differs by a relative RMS of
+  7.1e-4 (median hour) and 3.5e-2 (largest hour); that of $T_{m02}$ by
+  1.2e-2 and 0.15.
+- Over the training window of the calibration (156 h, job 4460585,
+  against `cal/it0_BETAMAX`), the tangent of $H_s$ reaches 9e9 at some
+  nodes.
+- At the observations of cost 3, the derivatives differ by a relative
+  L2 of 0.26 for the altimeters (correlation 0.91), 7.8e-3 for buoy
+  $H_s$ and 4.4e-2 for buoy $T_{m02}$.
+- $\partial J / \partial \ln$ `BETAMAX` is 1.921e4 against 1.797e4
+  (+6.9 %). The altimeter column of the Jacobian differs by 25.8 %
+  (cosine 0.967), and $A^T A$ by 2.8 %.
+
+The f32 tangent is therefore not used. The f64 reference comes from an
+older build; over 24 h two f64 builds differ by at most 4e-9 m in the
+tangent of $H_s$.
+
+**Where the value kernel spends its time.** A part that only reads its
+inputs and rewrites the same values can be called twice per dynamic step
+with results identical to the bit. The extra time is its cost (builds for
+timing only, not kept; jobs 4459038 and 4462234). `W3SIN4` without
+accumulation and `W3SPR4` are such parts; the DIA and `W3SDS4` are, when
+called again with a scale of 0. In f64, on the 373,800 nodes of the
+source kernel alone:
+
+| Part | Extra time per step | Share of 1.33–1.35 s |
+|---|---|---|
+| `W3SIN4` (inside the loop) | 0.36–0.38 s | 27 % |
+| `W3SDS4` | 0.10–0.11 s | 8 % |
+| DIA (`W3SNL1`) | 0.08 s | 6 % |
+| `W3SPR4` | 0.03–0.16 s | 2–10 % |
+
+In f32 the same builds vary by 5–10 % between rounds. `W3SIN4` adds
+0.10–0.21 s of 0.63–0.72 s, and the DIA nothing measurable. The serial
+loop of `W3SIN4` over the frequencies is the largest single part.
 
 ## Coastal diagnostics of the buoy scores
 

@@ -19,6 +19,8 @@
 #              tangent, the geographic sweeps, W3KTP3 and the sub-cycling
 #              count) in runs of 1 h: occupancy, memory and compute
 #              throughput, launch configuration, warp states.
+#   PART=regs  registers per unit and shared memory of the source kernels
+#              at run time (value f32 and f64, f64 and f32 tangents);
 #   PART=units the units per cube of the source kernel (UNITS_LIST): time
 #              and H_s against the first value, in f32 and f64.
 #   sbatch --export=ALL,PART=nsys,TAG=base scripts/opt_profile_hpc.slurm
@@ -56,6 +58,22 @@ case $PART in
       ls $O/${t}_*.csv
       echo "== $t, $h h, --profile"
       run prof_$t $h $opt --profile
+    done
+    ;;
+  regs)
+    # registers per unit and shared memory of the source kernels as the
+    # driver compiles them at run time: runs of HOURS (default 1) under
+    # Nsight Systems in f32, f64 and the f64 and f32 BETAMAX tangents, the
+    # first two launches of the source kernel in the GPU trace (Reg/Trd,
+    # DymSMem)
+    for c in "value_f32:" "value_f64:--f64" "tangent_f64:--f64 --tangent BETAMAX" "tangent_f32:--tangent BETAMAX"; do
+      t=${c%%:*}; opt=${c#*:}
+      echo "== $t"
+      nsys profile -t cuda --sample=none --cpuctxsw=none --force-overwrite true -o $O/regs_$t \
+        $B run $G --restart $R $FORCE --hours ${HOURS:-1} --out $O/run_regs_$t $opt 2>&1 | grep -E "steps in|rror|panicked"
+      nsys stats --force-export=true --report cuda_gpu_trace --format csv --output $O/regs_$t $O/regs_$t.nsys-rep > /dev/null 2>&1
+      head -1 $O/regs_${t}_cuda_gpu_trace.csv
+      grep -E "srce" $O/regs_${t}_cuda_gpu_trace.csv | head -2
     done
     ;;
   ncu)

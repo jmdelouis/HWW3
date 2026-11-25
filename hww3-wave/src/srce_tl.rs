@@ -18,9 +18,12 @@
 //! unit of each bin (bins `r nu + t` of unit `t`, registers or local
 //! memory); the DIA computes each pass for the values, then for the
 //! tangents in the same `b1`, `b2`, and the input and the saturation use
-//! the DIA buffers as scratch, so that a node needs about 76 kB of shared
-//! memory in double precision (two nodes per SM on an A100) against 153 kB
-//! with every array in shared memory.
+//! the DIA buffers as scratch. The extended spectrum of the DIA and its
+//! tangent, and the crest lengths of the saturation and their tangent, are
+//! held in the buffers of `a` and `ad` while the unit of each bin keeps its
+//! spectrum and tangent (`sa`, `sad`), so that a node needs about 53 kB of
+//! shared memory in double precision (three nodes per SM on an A100)
+//! against 153 kB with every array in shared memory.
 
 // The `#[cube]` macro generates, for every kernel, a launch struct and
 // functions that carry no documentation; the kernels themselves are
@@ -43,6 +46,15 @@ const K_ZCN: usize = NKB + 3;
 const K_SWV: usize = NKB + 4;
 const K_SWT: usize = NKB + 5;
 const NKB_TL: usize = NKB + 6;
+
+/// Slots of `kd`, the tangents of the per-frequency values of `kb` that
+/// have one: `EB`, `EB2` (W3SPR4, W3SIN4, W3SBT4), `CNST` (W3SIN4) and
+/// `BTH0` (W3SDS4).
+const KD_EB: usize = 0;
+const KD_EB2: usize = 1;
+const KD_CNST: usize = 2;
+const KD_BTH0: usize = 3;
+const NKD: usize = 4;
 
 /// Derivative of [`table`] at `x` along `dx`.
 #[cube]
@@ -166,8 +178,8 @@ fn spr4_tl<F: Float>(
         kb[K_EB * nk + t] = eb;
         kb[K_EB2 * nk + t] = eb2;
         kb[K_AMAX * nk + t] = amax;
-        kd[K_EB * nk + t] = deb;
-        kd[K_EB2 * nk + t] = deb2;
+        kd[KD_EB * nk + t] = deb;
+        kd[KD_EB2 * nk + t] = deb2;
     }
     sync_cube();
     if t == 0 {
@@ -181,8 +193,8 @@ fn spr4_tl<F: Float>(
             let f = kb[K_DCG * nk + ik];
             let eb = kb[K_EB * nk + ik] * f;
             let eb2 = kb[K_EB2 * nk + ik] * f;
-            let deb = kd[K_EB * nk + ik] * f;
-            let deb2 = kd[K_EB2 * nk + ik] * f;
+            let deb = kd[KD_EB * nk + ik] * f;
+            let deb2 = kd[KD_EB2 * nk + ik] * f;
             let s = sig[ik + 1];
             let sp = kb[K_SPW * nk + ik];
             let wq = kb[K_WNP * nk + ik];
@@ -203,7 +215,7 @@ fn spr4_tl<F: Float>(
         let ddl = dden[nk - 1];
         let cgl = kb[K_CG * nk + nk - 1];
         let eband = kb[K_EB * nk + nk - 1] * (ddl / cgl) / ddl;
-        let deband = kd[K_EB * nk + nk - 1] * (ddl / cgl) / ddl;
+        let deband = kd[KD_EB * nk + nk - 1] * (ddl / cgl) / ddl;
         emean += eband * par[P_FTE];
         fmean += eband * par[P_FTF];
         fmean1 += eband * par[P_SSTXFTFTAIL];
@@ -213,7 +225,7 @@ fn spr4_tl<F: Float>(
         df1 += deband * par[P_SSTXFTFTAIL];
         dwn += deband * par[P_SSTXFTWN];
         let eband2 = kb[K_EB2 * nk + nk - 1] * (ddl / cgl) / ddl;
-        let deband2 = kd[K_EB2 * nk + nk - 1] * (ddl / cgl) / ddl;
+        let deband2 = kd[KD_EB2 * nk + nk - 1] * (ddl / cgl) / ddl;
         emeanws += eband2 * par[P_FTE];
         fmeanws += eband2 * par[P_SSTXFTFTAIL];
         dews += deband2 * par[P_FTE];
@@ -352,7 +364,7 @@ fn sin4_tl<F: Float>(
             deb += ad[t * nth + th];
         }
         kb[K_EB * nk + t] = eb;
-        kd[K_EB * nk + t] = deb;
+        kd[KD_EB * nk + t] = deb;
         // the constants of frequency t in the loop below (as in sin4)
         let k = kb[K_WN * nk + t];
         let c = kb[K_CG * nk + t];
@@ -361,7 +373,7 @@ fn sin4_tl<F: Float>(
         kb[K_CM * nk + t] = k / s2;
         kb[K_CONST2 * nk + t] = dden2k[t] / c * grav / (s / k * drat);
         kb[K_CNST * nk + t] = s2 * const0;
-        kd[K_CNST * nk + t] = s2 * dconst0;
+        kd[KD_CNST * nk + t] = s2 * dconst0;
         kb[K_ZCN * nk + t] = (k * z0).ln();
         kb[K_SWV * nk + t] = -sw4 * drat * two * k * (two * nu_air * s2).sqrt();
         kb[K_SWT * nk + t] = -drat * sw0 * F::new(16.0f32) * s2 * s2 / grav;
@@ -374,7 +386,7 @@ fn sin4_tl<F: Float>(
         let mut dao = zero;
         for ik in 0..nk {
             let eb = kb[K_EB * nk + ik];
-            let deb = kd[K_EB * nk + ik];
+            let deb = kd[KD_EB * nk + ik];
             let s = sig[ik + 1];
             let c = kb[K_CG * nk + ik];
             uo += eb * s * s * dden[ik] / c;
@@ -474,16 +486,18 @@ fn sin4_tl<F: Float>(
             let dtaupy = sd[S_TAUY] - tsh * sd[S_SY];
             let p = taupx * taupx + taupy * taupy;
             let dp = two * (taupx * dtaupx + taupy * dtaupy);
-            let r4 = p.powf(F::new(0.25f32));
+            // as in sin4: square roots instead of POW, ATAN2, COS and SIN
+            let r = p.sqrt();
+            let r4 = r.sqrt();
             let dr4 = select(p > zero, F::new(0.25f32) * r4 / p * dp, zero);
             let m = max(ustar, F::new(0.3f32));
             let dm = select(ustar > F::new(0.3f32), dustar, zero);
             let ustp = min(r4, m);
             let dustp = select(r4 < m, dr4, dm);
-            let usdirp = taupy.atan2(taupx);
             let dusdirp = select(p > zero, (taupx * dtaupy - taupy * dtaupx) / p, zero);
-            let cosu = usdirp.cos();
-            let sinu = usdirp.sin();
+            let pos = r > zero;
+            let cosu = select(pos, taupx / r, one);
+            let sinu = select(pos, taupy / r, zero);
             sc[S_USTP] = ustp;
             sc[S_COSU] = cosu;
             sc[S_SINU] = sinu;
@@ -505,7 +519,7 @@ fn sin4_tl<F: Float>(
             let ducn = dustp * cm;
             let const2 = kb[K_CONST2 * nk + ik];
             let cnst = kb[K_CNST * nk + ik];
-            let dcnst = kd[K_CNST * nk + ik];
+            let dcnst = kd[KD_CNST * nk + ik];
             let zcn = kb[K_ZCN * nk + ik];
             let swellcoefv = kb[K_SWV * nk + ik];
             let swellcoeft = kb[K_SWT * nk + ik];
@@ -886,6 +900,10 @@ fn sln1_tl<F: Float>(
 }
 
 /// `W3SNL1` (DIA) and its tangent; `dsnlc1` is the derivative of `NLPROP`.
+/// The extended spectrum `UE(1-NTH..NSPECY)` and its tangent are held in
+/// the buffers of `a` and `ad` (`nspecy + 1` long) at `ISP - 1`, the bins
+/// below the grid at `nspecy` (zero), while the unit of each bin keeps its
+/// spectrum and tangent in `sa`, `sad`; they are put back at the end.
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn snl1_tl<F: Float>(
@@ -894,11 +912,11 @@ fn snl1_tl<F: Float>(
     dia_ip: &[u32],
     dia_ic: &[u32],
     af11: &[F],
-    a: &Shared<[F]>,
-    ad: &Shared<[F]>,
+    a: &mut Shared<[F]>,
+    ad: &mut Shared<[F]>,
     kb: &Shared<[F]>,
-    ue: &mut Shared<[F]>,
-    ued: &mut Shared<[F]>,
+    sa: &mut Array<F>,
+    sad: &mut Array<F>,
     b1: &mut Shared<[F]>,
     b2: &mut Shared<[F]>,
     vs: &mut Array<F>,
@@ -936,21 +954,23 @@ fn snl1_tl<F: Float>(
     let dal1 = par[P_DAL1];
     let dal2 = par[P_DAL2];
     let dal3 = par[P_DAL3];
-    for r in 0..(nspecy + nth + nu - 1) / nu {
-        let u = r * nu + t;
-        if u < nspecy + nth {
-            let mut v = zero;
-            let mut dv = zero;
-            if u >= nth && u < nspec + nth {
-                let is = u - nth;
-                let ik = is / nth;
-                let conx = tpiinv::<F>() / sig[ik + 1] * kb[K_CG * nk + ik];
-                v = a[is] / conx;
-                dv = ad[is] / conx;
-            }
-            ue[u] = v;
-            ued[u] = dv;
+    // UE(ISP) at a[ISP - 1] from the spectrum of the bin, kept in sa
+    for r in 0..(nspec + nu - 1) / nu {
+        let is = r * nu + t;
+        if is < nspec {
+            let ik = is / nth;
+            let conx = tpiinv::<F>() / sig[ik + 1] * kb[K_CG * nk + ik];
+            let x = a[is];
+            let dx = ad[is];
+            sa[r] = x;
+            sad[r] = dx;
+            a[is] = x / conx;
+            ad[is] = dx / conx;
         }
+    }
+    if t == 0 {
+        a[nspecy] = zero;
+        ad[nspecy] = zero;
     }
     for r in 0..(nth + nu - 1) / nu {
         let u = r * nu + t;
@@ -962,8 +982,8 @@ fn snl1_tl<F: Float>(
     sync_cube();
     if t < nth {
         for ifr in nk..nspecy / nth {
-            ue[nth + ifr * nth + t] = ue[ifr * nth + t] * par[P_FACHFE];
-            ued[nth + ifr * nth + t] = ued[ifr * nth + t] * par[P_FACHFE];
+            a[ifr * nth + t] = a[(ifr - 1) * nth + t] * par[P_FACHFE];
+            ad[ifr * nth + t] = ad[(ifr - 1) * nth + t] * par[P_FACHFE];
         }
     }
     sync_cube();
@@ -978,23 +998,23 @@ fn snl1_tl<F: Float>(
             for r in 0..(nspecx + nu - 1) / nu {
                 let isp = r * nu + t;
                 if isp < nspecx {
-                    let e00 = ue[isp + nth];
-                    let i0 = dia_ip[isp] as usize;
-                    let i1 = dia_ip[nspecx + isp] as usize;
-                    let i2 = dia_ip[2 * nspecx + isp] as usize;
-                    let i3 = dia_ip[3 * nspecx + isp] as usize;
-                    let i4 = dia_ip[4 * nspecx + isp] as usize;
-                    let i5 = dia_ip[5 * nspecx + isp] as usize;
-                    let i6 = dia_ip[6 * nspecx + isp] as usize;
-                    let i7 = dia_ip[7 * nspecx + isp] as usize;
-                    let i8 = dia_ip[8 * nspecx + isp] as usize;
-                    let i9 = dia_ip[9 * nspecx + isp] as usize;
-                    let i10 = dia_ip[10 * nspecx + isp] as usize;
-                    let i11 = dia_ip[11 * nspecx + isp] as usize;
-                    let i12 = dia_ip[12 * nspecx + isp] as usize;
-                    let i13 = dia_ip[13 * nspecx + isp] as usize;
-                    let i14 = dia_ip[14 * nspecx + isp] as usize;
-                    let i15 = dia_ip[15 * nspecx + isp] as usize;
+                    let e00 = a[isp];
+                    let i0 = ue_index(dia_ip[isp] as usize, nth, nspecy);
+                    let i1 = ue_index(dia_ip[nspecx + isp] as usize, nth, nspecy);
+                    let i2 = ue_index(dia_ip[2 * nspecx + isp] as usize, nth, nspecy);
+                    let i3 = ue_index(dia_ip[3 * nspecx + isp] as usize, nth, nspecy);
+                    let i4 = ue_index(dia_ip[4 * nspecx + isp] as usize, nth, nspecy);
+                    let i5 = ue_index(dia_ip[5 * nspecx + isp] as usize, nth, nspecy);
+                    let i6 = ue_index(dia_ip[6 * nspecx + isp] as usize, nth, nspecy);
+                    let i7 = ue_index(dia_ip[7 * nspecx + isp] as usize, nth, nspecy);
+                    let i8 = ue_index(dia_ip[8 * nspecx + isp] as usize, nth, nspecy);
+                    let i9 = ue_index(dia_ip[9 * nspecx + isp] as usize, nth, nspecy);
+                    let i10 = ue_index(dia_ip[10 * nspecx + isp] as usize, nth, nspecy);
+                    let i11 = ue_index(dia_ip[11 * nspecx + isp] as usize, nth, nspecy);
+                    let i12 = ue_index(dia_ip[12 * nspecx + isp] as usize, nth, nspecy);
+                    let i13 = ue_index(dia_ip[13 * nspecx + isp] as usize, nth, nspecy);
+                    let i14 = ue_index(dia_ip[14 * nspecx + isp] as usize, nth, nspecy);
+                    let i15 = ue_index(dia_ip[15 * nspecx + isp] as usize, nth, nspecy);
                     let w0 = par[P_AWG];
                     let w1 = par[P_AWG + 1];
                     let w2 = par[P_AWG + 2];
@@ -1003,10 +1023,10 @@ fn snl1_tl<F: Float>(
                     let w5 = par[P_AWG + 5];
                     let w6 = par[P_AWG + 6];
                     let w7 = par[P_AWG + 7];
-                    let ep1 = w0 * ue[i0] + w1 * ue[i1] + w2 * ue[i2] + w3 * ue[i3];
-                    let em1 = w4 * ue[i4] + w5 * ue[i5] + w6 * ue[i6] + w7 * ue[i7];
-                    let ep2 = w0 * ue[i8] + w1 * ue[i9] + w2 * ue[i10] + w3 * ue[i11];
-                    let em2 = w4 * ue[i12] + w5 * ue[i13] + w6 * ue[i14] + w7 * ue[i15];
+                    let ep1 = w0 * a[i0] + w1 * a[i1] + w2 * a[i2] + w3 * a[i3];
+                    let em1 = w4 * a[i4] + w5 * a[i5] + w6 * a[i6] + w7 * a[i7];
+                    let ep2 = w0 * a[i8] + w1 * a[i9] + w2 * a[i10] + w3 * a[i11];
+                    let em2 = w4 * a[i12] + w5 * a[i13] + w6 * a[i14] + w7 * a[i15];
                     let caf = cons * af11[isp];
                     let factor = caf * e00;
                     let sa1a = e00 * (ep1 * dal1 + em1 * dal2);
@@ -1032,11 +1052,11 @@ fn snl1_tl<F: Float>(
                             b2[isp + nth] = factor * m2;
                         }
                     } else {
-                        let de00 = ued[isp + nth];
-                        let dep1 = w0 * ued[i0] + w1 * ued[i1] + w2 * ued[i2] + w3 * ued[i3];
-                        let dem1 = w4 * ued[i4] + w5 * ued[i5] + w6 * ued[i6] + w7 * ued[i7];
-                        let dep2 = w0 * ued[i8] + w1 * ued[i9] + w2 * ued[i10] + w3 * ued[i11];
-                        let dem2 = w4 * ued[i12] + w5 * ued[i13] + w6 * ued[i14] + w7 * ued[i15];
+                        let de00 = ad[isp];
+                        let dep1 = w0 * ad[i0] + w1 * ad[i1] + w2 * ad[i2] + w3 * ad[i3];
+                        let dem1 = w4 * ad[i4] + w5 * ad[i5] + w6 * ad[i6] + w7 * ad[i7];
+                        let dep2 = w0 * ad[i8] + w1 * ad[i9] + w2 * ad[i10] + w3 * ad[i11];
+                        let dem2 = w4 * ad[i12] + w5 * ad[i13] + w6 * ad[i14] + w7 * ad[i15];
                         let dcaf = dcons * af11[isp];
                         let dfactor = dcaf * e00 + caf * de00;
                         let dsa1a = de00 * (ep1 * dal1 + em1 * dal2) + e00 * (dep1 * dal1 + dem1 * dal2);
@@ -1114,12 +1134,31 @@ fn snl1_tl<F: Float>(
             sync_cube();
         }
     }
+    // the spectrum and its tangent back in a, ad
+    for r in 0..(nspec + nu - 1) / nu {
+        let is = r * nu + t;
+        if is < nspec {
+            a[is] = sa[r];
+            ad[is] = sad[r];
+        }
+    }
+    sync_cube();
+}
+
+/// Index in the buffers of `a` and `ad` of `UE(ISP)` held at
+/// `ue[ISP + NTH - 1]` (an index of `DIA_IP`): `ISP - 1`, or `z`, the zero
+/// slot, for the bins below the grid.
+#[cube]
+fn ue_index(u: usize, nth: usize, z: usize) -> usize {
+    select(u >= nth, u, nth + z) - nth
 }
 
 /// `W3SDS4` (saturation, cumulative, turbulent and viscous terms) and its
-/// tangent; `dsdsc2` is the derivative of `SDSC2`. `dn`, `dnd` hold the
-/// breaking-crest lengths and their tangent, `b1`, `b1d` the saturation
-/// and its tangent (scratch buffers of the DIA).
+/// tangent; `dsdsc2` is the derivative of `SDSC2`. `b1`, `b1d` hold the
+/// saturation and its tangent (scratch buffers of the DIA); once the
+/// saturation is computed the unit of each bin keeps the spectrum and its
+/// tangent in `sa`, `sad`, and the buffers of `a` and `ad` hold the
+/// breaking-crest lengths and their tangent; they are put back at the end.
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn sds4_tl<F: Float>(
@@ -1130,14 +1169,14 @@ fn sds4_tl<F: Float>(
     satw: &[F],
     sati: &[u32],
     cumw: &[F],
-    a: &Shared<[F]>,
-    ad: &Shared<[F]>,
+    a: &mut Shared<[F]>,
+    ad: &mut Shared<[F]>,
     kb: &mut Shared<[F]>,
     kd: &mut Shared<[F]>,
     b1: &mut Shared<[F]>,
     b1d: &mut Shared<[F]>,
-    dn: &mut Shared<[F]>,
-    dnd: &mut Shared<[F]>,
+    sa: &mut Array<F>,
+    sad: &mut Array<F>,
     vs: &mut Array<F>,
     vsd: &mut Array<F>,
     vd: &mut Array<F>,
@@ -1178,6 +1217,15 @@ fn sds4_tl<F: Float>(
         }
     }
     sync_cube();
+    // the spectrum and its tangent of the bin kept by its unit: a and ad
+    // hold DN and DND below
+    for r in 0..(nspec + nu - 1) / nu {
+        let is = r * nu + t;
+        if is < nspec {
+            sa[r] = a[is];
+            sad[r] = ad[is];
+        }
+    }
     if t < nk {
         let mut m = b1[t * nth];
         let mut dm = b1d[t * nth];
@@ -1189,7 +1237,7 @@ fn sds4_tl<F: Float>(
             }
         }
         kb[K_BTH0 * nk + t] = m;
-        kd[K_BTH0 * nk + t] = dm;
+        kd[KD_BTH0 * nk + t] = dm;
     }
     let br = par[P_SSDSBR];
     let c3 = par[P_SDSC3];
@@ -1207,8 +1255,8 @@ fn sds4_tl<F: Float>(
                 let qv = sq - epsr;
                 let q = max(qv, zero);
                 let dq = select(qv > zero, b1d[is] / (two * sq), zero);
-                dn[is] = q * q * F::new(28.16f32) / (two * (pi * pi));
-                dnd[is] = two * q * dq * cb;
+                a[is] = q * q * F::new(28.16f32) / (two * (pi * pi));
+                ad[is] = two * q * dq * cb;
             }
         }
     }
@@ -1234,7 +1282,7 @@ fn sds4_tl<F: Float>(
             let s = sig[ik + 1];
             let qv = kb[K_BTH0 * nk + ik] / coef1 - one;
             let q = max(qv, zero);
-            let dq = select(qv > zero, kd[K_BTH0 * nk + ik] / coef1, zero);
+            let dq = select(qv > zero, kd[KD_BTH0 * nk + ik] / coef1, zero);
             let sdiagiso = c2 * s * c6 * (q * q);
             let dsdiagiso = dsdsc2 * s * c6 * (q * q) + c2 * s * c6 * two * q * dq;
             let coef2 = c2 * s * (one - c6) / (coef1 * coef1);
@@ -1246,8 +1294,8 @@ fn sds4_tl<F: Float>(
             let drp = select(rr > zero, par[P_SSDSP] * rp / rr * drr, zero);
             let d = sdiagiso + coef2 * rp;
             let dd = dsdiagiso + dcoef2 * rp + coef2 * drp;
-            let x = a[is];
-            let dxa = ad[is];
+            let x = sa[r];
+            let dxa = sad[r];
             let mut sv = d * x;
             let mut dsv = dd * x + d * dxa;
             let mut dv = d;
@@ -1265,8 +1313,8 @@ fn sds4_tl<F: Float>(
                             for th2 in 0..nth {
                                 let dth = select(th2 >= th, th2 - th, th - th2);
                                 let w = cumw[(ik2 * nk + ik) * nth + dth];
-                                dot += w * dn[ik2 * nth + th2];
-                                ddot += w * dnd[ik2 * nth + th2];
+                                dot += w * a[ik2 * nth + th2];
+                                ddot += w * ad[ik2 * nth + th2];
                             }
                             renewal += dot;
                             drenewal += ddot;
@@ -1293,6 +1341,14 @@ fn sds4_tl<F: Float>(
             vd[r] += scale * dv;
             vsd[r] += scale * dsv;
             vdd[r] += scale * ddv;
+        }
+    }
+    sync_cube();
+    for r in 0..(nspec + nu - 1) / nu {
+        let is = r * nu + t;
+        if is < nspec {
+            a[is] = sa[r];
+            ad[is] = sad[r];
         }
     }
     sync_cube();
@@ -1371,7 +1427,11 @@ fn sdb1_tl<F: Float>(
         if bb > thr && (bb - qb).abs() > thr {
             if bb < one {
                 d = -(two * par[P_SDBC1] * qb * fmean / bb);
-                dd = -(two * par[P_SDBC1] * (dqb * fmean / bb + qb * dfmean / bb - qb * fmean * dbb / (bb * bb)));
+                // QB = 0 below B = 0.2, where BB^2 can underflow to 0 in f32
+                // (H_rms of 1e-9 m): the term is 0, not 0 / 0 (identical
+                // to the bit in f64, where BB^2 > 0)
+                let tq = select(qb > zero, qb * fmean * dbb / (bb * bb), zero);
+                dd = -(two * par[P_SDBC1] * (dqb * fmean / bb + qb * dfmean / bb - tq));
             } else {
                 d = -(two * par[P_SDBC1] * fmean * bb);
                 dd = -(two * par[P_SDBC1] * (dfmean * bb + fmean * dbb));
@@ -1422,7 +1482,7 @@ fn sbt4_tl<F: Float>(
             deb += ad[t * nth + th];
         }
         kb[K_EB * nk + t] = eb;
-        kd[K_EB * nk + t] = deb;
+        kd[KD_EB * nk + t] = deb;
     }
     sync_cube();
     if t == 0 {
@@ -1458,8 +1518,8 @@ fn sbt4_tl<F: Float>(
                     let factor = (dden[ik] / kb[K_CG * nk + ik]) * two * cb * grav;
                     u += kb[K_EB * nk + ik] * factor;
                     ao += kb[K_EB * nk + ik] * factor / (s * s);
-                    du += kd[K_EB * nk + ik] * factor;
-                    dao += kd[K_EB * nk + ik] * factor / (s * s);
+                    du += kd[KD_EB * nk + ik] * factor;
+                    dao += kd[KD_EB * nk + ik] * factor / (s * s);
                 }
                 kb[K_CBETA * nk + ik] = cb;
             }
@@ -1634,19 +1694,22 @@ pub fn srce_tl<F: Float>(
             let zero = F::new(0.0f32);
             let one = F::new(1.0f32);
             let dtg = F::cast_from(dtg_);
-            let mut a = Shared::<[F]>::new_slice(nk * nth);
-            let mut ad = Shared::<[F]>::new_slice(nk * nth);
+            // a and ad hold the extended spectrum of the DIA and its tangent
+            // (nspecy + 1) and the crest lengths of W3SDS4, the spectrum
+            // being kept meanwhile by the unit of each bin in sa, sad
+            let mut a = Shared::<[F]>::new_slice(nspecy + 1);
+            let mut ad = Shared::<[F]>::new_slice(nspecy + 1);
+            let mut sa = Array::<F>::new((nk * nth + nu - 1) / nu);
+            let mut sad = Array::<F>::new((nk * nth + nu - 1) / nu);
             let mut vs = Array::<F>::new((nk * nth + nu - 1) / nu);
             let mut vsd = Array::<F>::new((nk * nth + nu - 1) / nu);
             let mut vd = Array::<F>::new((nk * nth + nu - 1) / nu);
             let mut vdd = Array::<F>::new((nk * nth + nu - 1) / nu);
             let mut ws = Shared::<[u8]>::new_slice(nk * nth);
-            let mut ue = Shared::<[F]>::new_slice(nspecy + nth);
-            let mut ued = Shared::<[F]>::new_slice(nspecy + nth);
             let mut b1 = Shared::<[F]>::new_slice(nspecx + nth);
             let mut b2 = Shared::<[F]>::new_slice(nspecx + nth);
             let mut kb = Shared::<[F]>::new_slice(NKB_TL * nk);
-            let mut kd = Shared::<[F]>::new_slice(NKB_TL * nk);
+            let mut kd = Shared::<[F]>::new_slice(NKD * nk);
             let mut sc = Shared::<[F]>::new_slice(NSC);
             let mut sd = Shared::<[F]>::new_slice(NSC);
             let mut dr = Shared::<[F]>::new_slice(3 * nth);
@@ -1850,7 +1913,7 @@ pub fn srce_tl<F: Float>(
                     sync_cube();
                 }
                 snl1_tl::<F>(
-                    par, sig, dia_ip, dia_ic, af11, &a, &ad, &kb, &mut ue, &mut ued, &mut b1, &mut b2, &mut vs,
+                    par, sig, dia_ip, dia_ic, af11, &mut a, &mut ad, &kb, &mut sa, &mut sad, &mut b1, &mut b2, &mut vs,
                     &mut vsd, &mut vd, &mut vdd, wnmean * depth, dwnmean * depth, dsnlc1, isc_nl, nk, nth, nspecx, nspecy, nu,
                 );
                 if nlcut.abs() > zero {
@@ -1889,7 +1952,7 @@ pub fn srce_tl<F: Float>(
                     sync_cube();
                 }
                 sds4_tl::<F>(
-                    par, sig, ecos, esin, satw, sati, cumw, &a, &ad, &mut kb, &mut kd, &mut b1, &mut b2, &mut ue, &mut ued, &mut vs, &mut vsd, &mut vd,
+                    par, sig, ecos, esin, satw, sati, cumw, &mut a, &mut ad, &mut kb, &mut kd, &mut b1, &mut b2, &mut sa, &mut sad, &mut vs, &mut vsd, &mut vd,
                     &mut vdd, depth, ustar, dustar, udir, dudir, dsdsc2, isc_ds, nk, nth, nsat, nu,
                 );
                 if (fz & 8u32) != 0u32 {

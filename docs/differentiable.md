@@ -1133,6 +1133,27 @@ counters there; [GPU model results](wave_results.md)):
   faster.
 - The costs and scores of the calibration windows are unchanged to 2e-7.
 
+**Progress (second checkpoint, 25 November;
+[GPU model results](wave_results.md)).**
+- The registers per unit are now read from the PTX and at run time:
+  128 for the f32 value kernel (4 nodes per SM), 255 in f64 (2 nodes) and
+  168 for the tangent kernel. The constants of `W3SIN4` take the f32
+  value kernel to 168 registers and 3 nodes per SM, which is why they
+  slow it.
+- Square roots replace POW, ATAN2, COS and SIN in the serial step of
+  `W3SIN4`, at round-off: f32 week 98.8 s per model day, f64 246.1 s.
+  The scores are the same to the printed digits.
+- Step 2 (aliasing) is done for the tangent: the DIA and `W3SDS4` work in
+  the buffers of the spectrum, 53 KB per node and 3 nodes per SM. The
+  tangent takes 509.9 s per model day over the first day, identical to
+  the bit (565.8 s before, 931.4 s for 35ecb15).
+- Step 6 fails: the f32 tangent, once a 0/0 of `W3SDB1` in f32 is fixed,
+  takes 302 s per model day but grows wrong over the calibration window.
+  $\partial J / \partial \ln$ `BETAMAX` is off by 6.9 % and the
+  altimeter column of the Jacobian by 26 %. It is not used.
+- `W3SIN4` is about 27 % of the f64 value source kernel, `W3SDS4` 8 % and
+  the DIA 6 %.
+
 ## 10. Other routes, briefly
 
 | route | effort | why not the main route |
