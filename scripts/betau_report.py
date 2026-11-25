@@ -1,12 +1,14 @@
 """Report of the BETAMAX(U) test (docs/differentiable.md, section 9.7).
 
     python scripts/betau_report.py OUT_DIR GN.json --runs p0:it0_value+s3:it3_value+bu:bu2_trial [--scratch S]
+    python scripts/betau_report.py OUT_DIR bu1:gnu1.json:x+bus3:gnus3.json:x_new --runs ...
 
 GN.json is the Gauss-Newton step (cal_gn.py) whose x is the final point of
 BETAMAX(U) (its "x" with --at x, or its "x_new" with --at x_new) and whose
 covariance gives the posterior uncertainty of ln BETAMAX(U) =
 ln 1.75 + sum_k c_k phi_k(U): var = phi(U)^T C phi(U), unscaled and scaled
-by the reduced chi-square. The runs (directories of $S/cal) are compared on
+by the reduced chi-square. Several curves are drawn together when given as
+LABEL:GN.json[:x|x_new] separated by +. The runs (directories of $S/cal) are compared on
 the training and validation windows through the operators of the third cost
 (op_<window>_cost3.npz: depth-aware buoy operator without the excluded
 buoys): the bias and RMSE of the buoy H_s and of the altimeter blocks by
@@ -70,7 +72,7 @@ def wind_at(o, wind, tags):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("out")
-    ap.add_argument("gn")
+    ap.add_argument("gn", help="GN.json, or LABEL:GN.json[:x|x_new] separated by + for several curves")
     ap.add_argument("--runs", default="p0:it0_value+s3:it3_value")
     ap.add_argument("--at", default="x_new", choices=("x", "x_new"))
     ap.add_argument("--windows", default="train+valid")
@@ -82,20 +84,29 @@ def main():
     runs = dict(r.split(":") for r in a.runs.split("+"))
     rep = {"runs": runs, "knots": KNOTS.tolist()}
 
-    # the curve and its posterior uncertainty
-    g = json.load(open(a.gn))
-    names = g["names"]
-    x = np.array(g[a.at])
-    ib = [names.index("BETAU%d" % k) for k in range(len(KNOTS))]
-    cov = np.array(g["cov"])[np.ix_(ib, ib)]
-    chi = g["reduced_chi2"]
+    # the curves and their posterior uncertainty
+    specs = []
+    for s in a.gn.split("+"):
+        p = s.split(":")
+        specs.append(("BETAMAX(U)", p[0], a.at) if len(p) == 1 else (p[0], p[1], p[2] if len(p) > 2 else a.at))
     u = np.linspace(0, 26, 261)
     P = phi(u)
-    lnb = np.log(B0) + P @ x[ib]
-    sd = np.sqrt(np.einsum("ik,kl,il->i", P, cov, P))
-    rep["curve"] = {"c": x[ib].tolist(), "beta_at_knots": (B0 * np.exp(x[ib])).tolist(),
-                    "sd_ln_at_knots": np.sqrt(np.diag(cov)).tolist(), "sd_ln_scaled_at_knots": (np.sqrt(np.diag(cov) * chi)).tolist(),
-                    "reduced_chi2": chi, "others": {n: {"x": float(x[i]), "factor": float(np.exp(x[i]))} for i, n in enumerate(names) if i not in ib}}
+    curves = {}
+    for lab, f, at in specs:
+        g = json.load(open(f))
+        names = g["names"]
+        x = np.array(g[at])
+        ib = [names.index("BETAU%d" % k) for k in range(len(KNOTS))]
+        cov = np.array(g["cov"])[np.ix_(ib, ib)]
+        chi = g["reduced_chi2"]
+        lnb = np.log(B0) + P @ x[ib]
+        sd = np.sqrt(np.einsum("ik,kl,il->i", P, cov, P))
+        entry = {"gn": f, "at": at, "c": x[ib].tolist(), "beta_at_knots": (B0 * np.exp(x[ib])).tolist(),
+                 "sd_ln_at_knots": np.sqrt(np.diag(cov)).tolist(), "sd_ln_scaled_at_knots": (np.sqrt(np.diag(cov) * chi)).tolist(),
+                 "reduced_chi2": chi, "others": {n: {"x": float(x[i]), "factor": float(np.exp(x[i]))} for i, n in enumerate(names) if i not in ib}}
+        curves[lab] = (lnb, sd, chi, B0 * np.exp(x[ib]), entry)
+    rep["curves"] = {lab: c[4] for lab, c in curves.items()}
+    rep["curve"] = next(iter(rep["curves"].values()))
 
     # the observations of both windows and the wind at them
     wsamp = []
@@ -141,11 +152,12 @@ def main():
     # the curve with the wind distribution
     ws = np.concatenate(wsamp)
     fig, ax = plt.subplots(figsize=(8, 5))
-    b = np.exp(lnb)
-    ax.fill_between(u, np.exp(lnb - np.sqrt(chi) * sd), np.exp(lnb + np.sqrt(chi) * sd), color="C0", alpha=0.15, label="1 sd, scaled by the reduced chi-square")
-    ax.fill_between(u, np.exp(lnb - sd), np.exp(lnb + sd), color="C0", alpha=0.35, label="1 sd")
-    ax.plot(u, b, "C0-", label="BETAMAX(U)")
-    ax.plot(KNOTS, B0 * np.exp(x[ib]), "C0o")
+    for col, (lab, (lnb, sd, chi, bk, _)) in zip(("C0", "C2", "C4", "C1"), curves.items()):
+        ax.fill_between(u, np.exp(lnb - np.sqrt(chi) * sd), np.exp(lnb + np.sqrt(chi) * sd), color=col, alpha=0.15,
+                        label="%s: 1 sd, scaled by the reduced chi-square" % lab)
+        ax.fill_between(u, np.exp(lnb - sd), np.exp(lnb + sd), color=col, alpha=0.35, label="%s: 1 sd" % lab)
+        ax.plot(u, np.exp(lnb), "-", color=col, label=lab)
+        ax.plot(KNOTS, bk, "o", color=col)
     ax.axhline(B0, color="k", lw=0.8, ls=":", label="p0 1.75")
     ax.axhline(1.37249382, color="C3", lw=0.8, ls="--", label="step 3 1.3725")
     ax.set_xlabel("wind speed at the node (m/s)")
@@ -161,7 +173,7 @@ def main():
     plt.close(fig)
     rep["wind_quantiles"] = {str(q): float(np.quantile(ws, q)) for q in (0.5, 0.9, 0.99, 0.999)}
     json.dump(rep, open(os.path.join(a.out, "betau_report.json"), "w"), indent=1)
-    print(json.dumps(rep["curve"], indent=1))
+    print(json.dumps(rep["curves"], indent=1))
     for kind in ("buoy", "alt"):
         for key in ("obs", "wind"):
             print(kind, "by", key)

@@ -1354,8 +1354,56 @@ cost with its prior (34,442.0 to 33,989.3):
   at the knots;
 - `SDSC2` moves to ×0.636.
 
-**Cost.** One 216 h value run took 0.34 GPU-hours. The GPU tally from
-23 November 07:27 is 35.0 GPU-hours.
+**From step 3** (Jean-Marc: "Oui, l'essayer"). The step predicted above
+was run (value run job 4415590, 20 min; monitoring job 4415591), to be
+accepted only if both windows fall against step 3:
+
+- **Point.** $\beta$ is 1.625, 1.684, 1.336, 1.438, 1.355, 1.298 and
+  1.525 at the knots, with `SDSC2` ×0.636 and `NLPROP` ×1.136.
+- **Training.** The cost with its prior went from 34,442.0 to 34,048.6
+  (−1.14 %, against −1.31 % predicted). The data term went from 34,432.2
+  to 34,018.0 (−1.20 %), or −4.29 % from $p_0$.
+- **Validation.** The data term rose from 48,173.9 to 48,592.1 (+0.87 %;
+  −3.28 % from $p_0$, against −4.12 % at step 3).
+  - The altimeters rose by 401 and $T_{m02}$ by 151.
+  - The buoy $H_s$ fell by 134.
+
+The step is therefore rejected, and with it the test of `BETAMAX`$(U)$ on
+these windows ends at step 3.
+
+| Window | Run | $J$ | Altimeters | Buoy $H_s$ | Buoy $T_{m02}$ (s) |
+|---|---|---|---|---|---|
+| training | from step 3 | 34,018.0 (−4.29 %) | +0.48 / 24.48 | −8.23 / 28.34 | −0.481 / 0.968 |
+| validation | from step 3 | 48,592.1 (−3.28 %) | +3.14 / 25.77 | −7.64 / 38.41 | −0.425 / 1.004 |
+
+(Percentages from $p_0$; the other rows are in the table above.)
+
+- **Training scores.** Against step 3, the training altimeters go from
+  −1.38 / 24.73 to +0.48 / 24.48 cm and the buoys from −9.60 / 28.52 to
+  −8.23 / 28.34 cm.
+- **Validation scores.** The altimeters move away from step 3
+  (+1.36 / 25.66 to +3.14 / 25.77 cm), while the buoys improve
+  (−8.89 / 38.67 to −7.64 / 38.41 cm).
+- **Shape of the curve.** It repeats that of the first point, 0.15–0.23
+  lower in $\ln\beta$ from 5 m/s up: high at 5 and 11 m/s, low at 8 and
+  14–17 m/s, rising at 20 m/s. Both points come from the same Jacobian at
+  $p_0$, so the shape is not independent evidence.
+- **Bias by class** (both windows, cm, from step 3, against step 3):
+  - altimeters at 15–20 m/s: −6.3 against −6.1;
+  - altimeters at 12–15 m/s: +2.5 against +0.6;
+  - buoys above 6 m: −67.9 against −74.6;
+  - the RMSEs are equal or lower in 22 of the 31 classes, most in the
+    rare ones: altimeters above 8 m (90.1 against 116.7 cm, 39 blocks)
+    and above 20 m/s (51.5 against 60.0 cm, 62 blocks);
+  - the altimeters at 1.5–3 m, where most blocks are, get 0.4–0.5 cm
+    more RMSE (19.3 and 23.2 against 18.9 and 22.7 cm).
+
+`scripts/betau_report.py` now draws several curves together
+(`bu1:gnu1.json:x+bus3:gnus3.json:x_new`); the report of the four runs is
+in `cal/betau_report_s3` on hpc (CPU job 4415662).
+
+**Cost.** Each 216 h value run took 0.33–0.34 GPU-hours. The GPU tally
+from 23 November 07:27 is 35.4 GPU-hours.
 
 ## Preprocessing in Rust (in progress)
 

@@ -1028,8 +1028,13 @@ penalties.
    - At 15–20 m/s of wind the altimeter bias is +0.9 cm, against +14.2 cm
      at $p_0$ and −6.1 cm at step 3.
    - The same Jacobian at the residuals of step 3 predicts a further
-     −1.31 % for a $\beta(U)$ step from step 3. That step has not been run
-     ([GPU model results](wave_results.md)).
+     −1.31 % for a $\beta(U)$ step from step 3. Run on Jean-Marc's
+     request, it lowers the training cost by 1.20 % against step 3, but
+     the validation cost rises by 0.87 %, mostly in the altimeters, so it
+     is rejected ([GPU model results](wave_results.md)).
+   - On these windows, then, $\beta(U)$ does not beat the constant step 3.
+     The month after the optimisation, with a refreshed Jacobian, will be
+     the real test.
 2. Then one or two features of the wind history, computed from the forcing
    only: $dU/dt$, the turning rate of the wind direction and $|\nabla U|$,
    with a few spline coefficients each, using the vector tangent once the
