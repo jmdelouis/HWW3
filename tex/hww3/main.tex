@@ -2830,6 +2830,47 @@ the source kernel;
 \end{itemize}
 Nsight Compute cannot run on the hpc cluster: the performance counters
 of the GPUs are reserved to the administrators (job 4416360).
+\item \emph{First checkpoint} (commit \texttt{ce6470f}). Each change is
+compared with runs of the present build over the same hours, from the
+same restart and on the same type of GPU: the week in single precision,
+48 hours in double precision and the first day of the double-precision
+tangent of \texttt{BETAMAX}.
+\begin{itemize}
+\item The wind-sea flags stored as bytes need 38\,384 instead of 41\,840
+bytes per node in single precision and 75\,616 instead of 83\,680 in
+double precision, so 4 and 2 nodes fit per multiprocessor. The results
+are identical bit for bit in the three runs, and the week goes from
+124.1 to \SI{108.9}{s} per model day, 48 hours in double precision from
+505.1 to \SI{304.5}{s}.
+\item The powers and the ratios DDEN/CG of the serial loop of W3SPR4,
+computed before it by 32 units, bring these to 101.7 and \SI{266.4}{s}.
+The differences are at round-off: \SI{9e-14}{m} at most on $H_s$ in
+double precision, and the costs of the calibration windows (35\,543 to
+69\,351) change by at most $6\times10^{-3}$ with every score the same to
+the printed digits.
+\item In the tangent kernel the constants per frequency of W3SIN4 are
+computed before its loop (identical bit for bit, 843.8 to \SI{798.0}{s}
+for the first day; in the value kernel they slow single precision to
+\SI{117.3}{s} and are left out). The source sums and their tangents are
+kept by the unit of each bin, the DIA does each pass for the values then
+for the tangents in the same two buffers, and W3SDS4 and W3SIN4 use the
+DIA buffers as scratch: a node needs 76\,192 instead of 156\,832 bytes,
+2 nodes fit per multiprocessor, and the first day takes \SI{590.2}{s}
+instead of \SI{931.4}{s}. The differences are at round-off
+(\SI{3.1e-14}{m} on $H_s$, \SI{9.9e-11}{m} on its tangent), and the M3
+check of the source tangent gives the same medians, 99th percentiles and
+maxima in every direction on the harnesses of grids v5 and v4 (job
+4447407). The same per-unit sums slow the single-precision value kernel
+(\SI{143.2}{s}) and are not used there, and 64 units per cube are slower
+than 128.
+\item Overall: 124.1 to \SI{101.7}{s} per model day in single precision
+($-18\,\%$), 505.1 to \SI{266.4}{s} in double precision ($-47\,\%$),
+931.4 to \SI{590.2}{s} for the tangent ($-37\,\%$).
+\item A first single-precision tangent, not part of the checkpoint, runs
+the first day in \SI{380}{s}. Its source tangent produces NaN from the
+first step at 1\,282 nodes (frequencies 12 to 19); the cause is being
+traced and it is not used.
+\end{itemize}
 \end{itemize}
 
 
