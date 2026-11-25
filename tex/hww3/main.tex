@@ -2562,8 +2562,43 @@ North Sea coasts. At the start, isolated spikes of the same kind (Gulf of
 Finland, 4 January) reach no observation of the training window, whose
 largest derivative is \SI{7.5}{m}, so the three steps are not affected.
 The tangent of the model is therefore locally unstable at some ice-edge
-and shallow nodes. The tangents of the third step are not used, and the
-cause is to be found before the next calibrations.
+and shallow nodes. The tangents of the third step are not used.
+\item \emph{Cause of the growth.} The 527 blocks come from a young wind
+sea at the ice edge on the coast of northern Labrador (two nodes at
+\ang{63.9}\,W, \ang{59.74}\,N, ice concentration 0.44, depth \SI{32}{m},
+wind \SI{16}{m/s}, $H_s$ 3 to \SI{4}{m}). The tangent goes from
+\SI{5}{m} on 4 January at 19\,h to $1.3\times10^6$\,m at 22\,h and drifts
+to the Newfoundland coast by 7 January. A double-precision probe of every
+part of every step (job 4388139) puts the growth in the source step,
+which multiplies the tangent by 3 to 4.3 per \SI{600}{s} step on 8 of 108
+steps. Central differences of the step give the same factor, 3.4 to 4.6,
+where the steps $10^{-4}$ and $10^{-5}$ agree; they disagree on 67 of the
+108 steps, at discrete switches of the source terms. The model itself
+therefore amplifies small perturbations there, and the tangent is right.
+Without the tangent of the DIA the factor is 1.2 to 1.75, without that of
+the wind input 1.5 to 2.4, and without that of the dissipation 4 to 6: the
+DIA's coupling of the wind-sea bins, with the wind input, beats the
+damping of the dissipation.
+\item \emph{Leaving out the DIA's tangent.} An option leaves out the
+tangent of the DIA with respect to the spectrum in the bins where the
+global step times its diagonal exceeds a threshold $C$; the derivative
+with respect to \texttt{NLPROP} is kept. At the parameters of the third
+step, over the training window, the number of altimeter blocks above
+\SI{10}{m} goes from 527 to 540 for $C=1$ (job 4374294), 78 for
+$C=0.5$ (job 4374295) and none for $C=0.25$ (job 4392466; largest
+derivative \SI{7.2}{m}, none above \SI{10}{m} on the validation window
+against 1\,903). $C=0.25$ creates a new spike of $3.6\times10^6$\,m at
+one Colombian coast node on 8 January, which reaches no observation. The
+checks of M3 with $C=0.25$ at the start (job 4393681) fail: 41 to 54 of
+the 1\,586 to 1\,854 smooth nodes of the source step differ from the
+central differences by more than $10^{-4}$, up to 100\,\%, against none
+without the cut, and after \SI{1}{h} the tangent of $H_s$ differs by
+more than $10^{-4}$ at 1\,310 nodes for the wind and 5\,715 for the
+initial state, against 18 and 7. The cut thus acts at the start on about
+3\,\% of the nodes, while the tangents of the total energy and of the
+mean $H_s$ do not move. No cut is adopted. The tangents at the start used
+by the test of \texttt{BETAMAX} as a function of the wind are bounded at
+every training observation (largest \SI{5.0}{m}).
 \end{itemize}
 
 \begin{figure}[H]
