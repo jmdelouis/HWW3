@@ -12,9 +12,15 @@
 //! derivative is zero: the tangent is exact where the model is smooth.
 //!
 //! Tangents sit next to the values: `ad` for the spectrum, `vsd`, `vdd` for
-//! the source sums, `ued`, `b1d`, `b2d`, `dnd` for the DIA and the
-//! saturation, `kd` and `sd` for the per-frequency and scalar slots of `kb`
-//! and `sc`, `drd` for the per-direction stress partials.
+//! the source sums, `ued` for the DIA, `kd` and `sd` for the per-frequency
+//! and scalar slots of `kb` and `sc`, `drd` for the per-direction stress
+//! partials. The source sums `vs`, `vd` and their tangents are kept by the
+//! unit of each bin (bins `r nu + t` of unit `t`, registers or local
+//! memory); the DIA computes each pass for the values, then for the
+//! tangents in the same `b1`, `b2`, and the input and the saturation use
+//! the DIA buffers as scratch, so that a node needs about 76 kB of shared
+//! memory in double precision (two nodes per SM on an A100) against 153 kB
+//! with every array in shared memory.
 
 // The `#[cube]` macro generates, for every kernel, a launch struct and
 // functions that carry no documentation; the kernels themselves are
@@ -24,6 +30,19 @@
 use crate::sources::*;
 use crate::srce::*;
 use cubecl::prelude::*;
+
+/// Slots of `kb` (and `kd`) of the tangent kernel after those of
+/// [`crate::srce`]: the constants per frequency of `W3SIN4`, computed by the
+/// units `ik < nk` before its loop over the frequencies (`CM`, `CONST2`,
+/// `CNST`, `ln(k z0)` and the two swell coefficients; the same operations as
+/// in the loop).
+const K_CM: usize = NKB;
+const K_CONST2: usize = NKB + 1;
+const K_CNST: usize = NKB + 2;
+const K_ZCN: usize = NKB + 3;
+const K_SWV: usize = NKB + 4;
+const K_SWT: usize = NKB + 5;
+const NKB_TL: usize = NKB + 6;
 
 /// Derivative of [`table`] at `x` along `dx`.
 #[cube]
@@ -109,7 +128,7 @@ fn spr4_tl<F: Float>(
     dden: &[F],
     a: &Shared<[F]>,
     ad: &Shared<[F]>,
-    ws: &Shared<[F]>,
+    ws: &Shared<[u8]>,
     kb: &mut Shared<[F]>,
     kd: &mut Shared<[F]>,
     sc: &mut Shared<[F]>,
@@ -136,10 +155,13 @@ fn spr4_tl<F: Float>(
             let x = a[t * nth + th];
             let dx = ad[t * nth + th];
             eb += x;
-            eb2 += x * ws[t * nth + th];
             amax = max(amax, x);
             deb += dx;
-            deb2 += dx * ws[t * nth + th];
+            // wind-sea flag (0 or 1, one byte per bin): as x * flag
+            if ws[t * nth + th] != 0u8 {
+                eb2 += x;
+                deb2 += dx;
+            }
         }
         kb[K_EB * nk + t] = eb;
         kb[K_EB2 * nk + t] = eb2;
@@ -156,14 +178,14 @@ fn spr4_tl<F: Float>(
         let (mut de, mut dfm, mut df1, mut dwn, mut dews, mut dfws) = (zero, zero, zero, zero, zero, zero);
         let mut amax = zero;
         for ik in 0..nk {
-            let f = dden[ik] / kb[K_CG * nk + ik];
+            let f = kb[K_DCG * nk + ik];
             let eb = kb[K_EB * nk + ik] * f;
             let eb2 = kb[K_EB2 * nk + ik] * f;
             let deb = kd[K_EB * nk + ik] * f;
             let deb2 = kd[K_EB2 * nk + ik] * f;
             let s = sig[ik + 1];
-            let sp = s.powf(two * tw);
-            let wq = kb[K_WN * nk + ik].powf(wp);
+            let sp = kb[K_SPW * nk + ik];
+            let wq = kb[K_WNP * nk + ik];
             emean += eb;
             fmean += eb / s;
             fmean1 += eb * sp;
@@ -279,11 +301,13 @@ fn sin4_tl<F: Float>(
     fwtab: &[F],
     a: &Shared<[F]>,
     ad: &Shared<[F]>,
-    vs: &mut Shared<[F]>,
-    vsd: &mut Shared<[F]>,
-    vd: &mut Shared<[F]>,
-    vdd: &mut Shared<[F]>,
-    ws: &mut Shared<[F]>,
+    vs: &mut Array<F>,
+    vsd: &mut Array<F>,
+    vd: &mut Array<F>,
+    vdd: &mut Array<F>,
+    st: &mut Shared<[F]>,
+    std: &mut Shared<[F]>,
+    ws: &mut Shared<[u8]>,
     kb: &mut Shared<[F]>,
     kd: &mut Shared<[F]>,
     sc: &mut Shared<[F]>,
@@ -302,6 +326,7 @@ fn sin4_tl<F: Float>(
     accumulate: bool,
     #[comptime] nk: usize,
     #[comptime] nth: usize,
+    #[comptime] nu: usize,
 ) {
     let t = UNIT_POS as usize;
     let zero = F::new(0.0f32);
@@ -317,6 +342,8 @@ fn sin4_tl<F: Float>(
     let const0 = const1 * drat;
     let dconst0 = dconst1 * drat;
     let tsh = par[P_TTAUWSHELTER].abs();
+    let sw0 = par[P_SSWELLF];
+    let sw4 = par[P_SSWELLF + 4];
     if t < nk {
         let mut eb = zero;
         let mut deb = zero;
@@ -326,6 +353,18 @@ fn sin4_tl<F: Float>(
         }
         kb[K_EB * nk + t] = eb;
         kd[K_EB * nk + t] = deb;
+        // the constants of frequency t in the loop below (as in sin4)
+        let k = kb[K_WN * nk + t];
+        let c = kb[K_CG * nk + t];
+        let s2 = sig2k[t];
+        let s = sig[t + 1];
+        kb[K_CM * nk + t] = k / s2;
+        kb[K_CONST2 * nk + t] = dden2k[t] / c * grav / (s / k * drat);
+        kb[K_CNST * nk + t] = s2 * const0;
+        kd[K_CNST * nk + t] = s2 * dconst0;
+        kb[K_ZCN * nk + t] = (k * z0).ln();
+        kb[K_SWV * nk + t] = -sw4 * drat * two * k * (two * nu_air * s2).sqrt();
+        kb[K_SWT * nk + t] = -drat * sw0 * F::new(16.0f32) * s2 * s2 / grav;
     }
     sync_cube();
     if t == 0 {
@@ -425,9 +464,8 @@ fn sin4_tl<F: Float>(
     let duorb = sd[S_UORB];
     let dfw = sd[S_FW];
     let dpturb = sd[S_PTURB];
-    let sw0 = par[P_SSWELLF];
     let sw2 = par[P_SSWELLF + 2];
-    let sw4 = par[P_SSWELLF + 4];
+    let dzcn = dz0 / z0;
     for ik in 0..nk {
         if t == 0 {
             let taupx = sc[S_TAUX] - tsh * sc[S_SX];
@@ -461,20 +499,16 @@ fn sin4_tl<F: Float>(
             let dustp = sd[S_USTP];
             let dcosu = sd[S_COSU];
             let dsinu = sd[S_SINU];
-            let k = kb[K_WN * nk + ik];
-            let c = kb[K_CG * nk + ik];
             let s2 = sig2k[ik];
-            let cm = k / s2;
+            let cm = kb[K_CM * nk + ik];
             let ucn = ustp * cm + par[P_ZZALP];
             let ducn = dustp * cm;
-            let s = sig[ik + 1];
-            let const2 = dden2k[ik] / c * grav / (s / k * drat);
-            let cnst = s2 * const0;
-            let dcnst = s2 * dconst0;
-            let zcn = (k * z0).ln();
-            let dzcn = dz0 / z0;
-            let swellcoefv = -sw4 * drat * two * k * (two * nu_air * s2).sqrt();
-            let swellcoeft = -drat * sw0 * F::new(16.0f32) * s2 * s2 / grav;
+            let const2 = kb[K_CONST2 * nk + ik];
+            let cnst = kb[K_CNST * nk + ik];
+            let dcnst = kd[K_CNST * nk + ik];
+            let zcn = kb[K_ZCN * nk + ik];
+            let swellcoefv = kb[K_SWV * nk + ik];
+            let swellcoeft = kb[K_SWT * nk + ik];
             let is = ik * nth + t;
             let coswind = ecos[t] * cosu + esin[t] * sinu;
             let dcw = ecos[t] * dcosu + esin[t] * dsinu;
@@ -515,41 +549,55 @@ fn sin4_tl<F: Float>(
             dr[2 * nth + t] = select(dst < zero, one, zero);
             drd[t] = dtemp2 * ecos[t];
             drd[nth + t] = dtemp2 * esin[t];
-            ws[is] = llws;
+            ws[is] = select(llws > zero, 1u8, 0u8);
             if accumulate {
-                vs[is] += scale * (dst * x);
-                vd[is] += scale * dst;
-                vsd[is] += scale * (ddst * x + dst * dxa);
-                vdd[is] += scale * ddst;
+                st[is] = dst;
+                std[is] = ddst;
             }
         }
         sync_cube();
-        if t == 0 {
-            let mut sx = sc[S_SX];
-            let mut sy = sc[S_SY];
-            let mut snx = sc[S_SNX];
-            let mut sny = sc[S_SNY];
-            let mut dsx = sd[S_SX];
-            let mut dsy = sd[S_SY];
+        // SX, SY, SNX, SNY and the tangents of SX, SY summed over the
+        // directions in the order of WW3, one sum per unit (as in sin4)
+        if t < 4 {
+            let neg = t >= 2;
+            let off = (t % 2) * nth;
+            let mut acc = sc[S_SX + t];
             for th in 0..nth {
-                if dr[2 * nth + th] > zero {
-                    snx += dr[th];
-                    sny += dr[nth + th];
-                } else {
-                    sx += dr[th];
-                    sy += dr[nth + th];
-                    dsx += drd[th];
-                    dsy += drd[nth + th];
+                let pos = dr[2 * nth + th] > zero;
+                if (neg && pos) || (!neg && !pos) {
+                    acc += dr[off + th];
                 }
             }
-            sc[S_SX] = sx;
-            sc[S_SY] = sy;
-            sc[S_SNX] = snx;
-            sc[S_SNY] = sny;
-            sd[S_SX] = dsx;
-            sd[S_SY] = dsy;
+            sc[S_SX + t] = acc;
+        } else if t < 6 {
+            let off = (t - 4) * nth;
+            let mut acc = sd[S_SX + t - 4];
+            for th in 0..nth {
+                if !(dr[2 * nth + th] > zero) {
+                    acc += drd[off + th];
+                }
+            }
+            sd[S_SX + t - 4] = acc;
         }
         sync_cube();
+    }
+    // the input and its tangent added to the sources of each unit's bins
+    // (the bins of a unit are r nu + t), in the order of the bins as before
+    if accumulate {
+        let nspec = nk * nth;
+        for r in 0..(nspec + nu - 1) / nu {
+            let is = r * nu + t;
+            if is < nspec {
+                let dst = st[is];
+                let ddst = std[is];
+                let x = a[is];
+                let dxa = ad[is];
+                vs[r] += scale * (dst * x);
+                vd[r] += scale * dst;
+                vsd[r] += scale * (ddst * x + dst * dxa);
+                vdd[r] += scale * ddst;
+            }
+        }
     }
     if t == 0 {
         let sx = sc[S_SX];
@@ -780,8 +828,8 @@ fn sln1_tl<F: Float>(
     ecos: &[F],
     esin: &[F],
     kb: &Shared<[F]>,
-    vs: &mut Shared<[F]>,
-    vsd: &mut Shared<[F]>,
+    vs: &mut Array<F>,
+    vsd: &mut Array<F>,
     fhigh: F,
     dfhigh: F,
     ustar: F,
@@ -831,8 +879,8 @@ fn sln1_tl<F: Float>(
             let d = max(cwv, zero);
             let dd = select(cwv > zero, dcwv, zero);
             let d2 = d * d;
-            vs[is] += scale * (wnf * (d2 * d2));
-            vsd[is] += scale * (dwnf * (d2 * d2) + wnf * F::new(4.0f32) * d2 * d * dd);
+            vs[r] += scale * (wnf * (d2 * d2));
+            vsd[r] += scale * (dwnf * (d2 * d2) + wnf * F::new(4.0f32) * d2 * d * dd);
         }
     }
 }
@@ -852,15 +900,11 @@ fn snl1_tl<F: Float>(
     ue: &mut Shared<[F]>,
     ued: &mut Shared<[F]>,
     b1: &mut Shared<[F]>,
-    b1d: &mut Shared<[F]>,
     b2: &mut Shared<[F]>,
-    b2d: &mut Shared<[F]>,
-    dn: &mut Shared<[F]>,
-    dnd: &mut Shared<[F]>,
-    vs: &mut Shared<[F]>,
-    vsd: &mut Shared<[F]>,
-    vd: &mut Shared<[F]>,
-    vdd: &mut Shared<[F]>,
+    vs: &mut Array<F>,
+    vsd: &mut Array<F>,
+    vd: &mut Array<F>,
+    vdd: &mut Array<F>,
     kdmean: F,
     dkdmean: F,
     dsnlc1: F,
@@ -913,8 +957,6 @@ fn snl1_tl<F: Float>(
         if u < nth {
             b1[u] = zero;
             b2[u] = zero;
-            b1d[u] = zero;
-            b2d[u] = zero;
         }
     }
     sync_cube();
@@ -925,134 +967,159 @@ fn snl1_tl<F: Float>(
         }
     }
     sync_cube();
+    // the three passes of the DIA, each first for the values (tan = 0),
+    // then for the tangents (tan = 1) in the same B1, B2: the products are
+    // those of WW3 for the values and of their derivatives for the
+    // tangents, the diagonal DN of a bin kept by the unit of the bin
+    let mut dn = Array::<F>::new((nspec + nu - 1) / nu);
+    let mut dnd = Array::<F>::new((nspec + nu - 1) / nu);
     for pass in 0..3u32 {
-        for r in 0..(nspecx + nu - 1) / nu {
-            let isp = r * nu + t;
-            if isp < nspecx {
-                let e00 = ue[isp + nth];
-                let de00 = ued[isp + nth];
-                let i0 = dia_ip[isp] as usize;
-                let i1 = dia_ip[nspecx + isp] as usize;
-                let i2 = dia_ip[2 * nspecx + isp] as usize;
-                let i3 = dia_ip[3 * nspecx + isp] as usize;
-                let i4 = dia_ip[4 * nspecx + isp] as usize;
-                let i5 = dia_ip[5 * nspecx + isp] as usize;
-                let i6 = dia_ip[6 * nspecx + isp] as usize;
-                let i7 = dia_ip[7 * nspecx + isp] as usize;
-                let i8 = dia_ip[8 * nspecx + isp] as usize;
-                let i9 = dia_ip[9 * nspecx + isp] as usize;
-                let i10 = dia_ip[10 * nspecx + isp] as usize;
-                let i11 = dia_ip[11 * nspecx + isp] as usize;
-                let i12 = dia_ip[12 * nspecx + isp] as usize;
-                let i13 = dia_ip[13 * nspecx + isp] as usize;
-                let i14 = dia_ip[14 * nspecx + isp] as usize;
-                let i15 = dia_ip[15 * nspecx + isp] as usize;
-                let w0 = par[P_AWG];
-                let w1 = par[P_AWG + 1];
-                let w2 = par[P_AWG + 2];
-                let w3 = par[P_AWG + 3];
-                let w4 = par[P_AWG + 4];
-                let w5 = par[P_AWG + 5];
-                let w6 = par[P_AWG + 6];
-                let w7 = par[P_AWG + 7];
-                let ep1 = w0 * ue[i0] + w1 * ue[i1] + w2 * ue[i2] + w3 * ue[i3];
-                let em1 = w4 * ue[i4] + w5 * ue[i5] + w6 * ue[i6] + w7 * ue[i7];
-                let ep2 = w0 * ue[i8] + w1 * ue[i9] + w2 * ue[i10] + w3 * ue[i11];
-                let em2 = w4 * ue[i12] + w5 * ue[i13] + w6 * ue[i14] + w7 * ue[i15];
-                let dep1 = w0 * ued[i0] + w1 * ued[i1] + w2 * ued[i2] + w3 * ued[i3];
-                let dem1 = w4 * ued[i4] + w5 * ued[i5] + w6 * ued[i6] + w7 * ued[i7];
-                let dep2 = w0 * ued[i8] + w1 * ued[i9] + w2 * ued[i10] + w3 * ued[i11];
-                let dem2 = w4 * ued[i12] + w5 * ued[i13] + w6 * ued[i14] + w7 * ued[i15];
-                let caf = cons * af11[isp];
-                let dcaf = dcons * af11[isp];
-                let factor = caf * e00;
-                let dfactor = dcaf * e00 + caf * de00;
-                let sa1a = e00 * (ep1 * dal1 + em1 * dal2);
-                let dsa1a = de00 * (ep1 * dal1 + em1 * dal2) + e00 * (dep1 * dal1 + dem1 * dal2);
-                let sa1b = sa1a - ep1 * em1 * dal3;
-                let dsa1b = dsa1a - (dep1 * em1 + ep1 * dem1) * dal3;
-                let sa2a = e00 * (ep2 * dal1 + em2 * dal2);
-                let dsa2a = de00 * (ep2 * dal1 + em2 * dal2) + e00 * (dep2 * dal1 + dem2 * dal2);
-                let sa2b = sa2a - ep2 * em2 * dal3;
-                let dsa2b = dsa2a - (dep2 * em2 + ep2 * dem2) * dal3;
-                if pass == 0u32 {
-                    b1[isp + nth] = factor * sa1b;
-                    b2[isp + nth] = factor * sa2b;
-                    b1d[isp + nth] = dfactor * sa1b + factor * dsa1b;
-                    b2d[isp + nth] = dfactor * sa2b + factor * dsa2b;
-                } else if pass == 1u32 {
-                    let p1 = dal1 * e00 - dal3 * em1;
-                    let p2 = dal1 * e00 - dal3 * em2;
-                    b1[isp + nth] = factor * p1;
-                    b2[isp + nth] = factor * p2;
-                    b1d[isp + nth] = dfactor * p1 + factor * (dal1 * de00 - dal3 * dem1);
-                    b2d[isp + nth] = dfactor * p2 + factor * (dal1 * de00 - dal3 * dem2);
-                    if isp < nspec {
-                        dn[isp] = -two * (caf * (sa1a + sa1b) + caf * (sa2a + sa2b));
-                        dnd[isp] = -two * (dcaf * (sa1a + sa1b) + caf * (dsa1a + dsa1b) + dcaf * (sa2a + sa2b) + caf * (dsa2a + dsa2b));
+        for tan in 0..2u32 {
+            for r in 0..(nspecx + nu - 1) / nu {
+                let isp = r * nu + t;
+                if isp < nspecx {
+                    let e00 = ue[isp + nth];
+                    let i0 = dia_ip[isp] as usize;
+                    let i1 = dia_ip[nspecx + isp] as usize;
+                    let i2 = dia_ip[2 * nspecx + isp] as usize;
+                    let i3 = dia_ip[3 * nspecx + isp] as usize;
+                    let i4 = dia_ip[4 * nspecx + isp] as usize;
+                    let i5 = dia_ip[5 * nspecx + isp] as usize;
+                    let i6 = dia_ip[6 * nspecx + isp] as usize;
+                    let i7 = dia_ip[7 * nspecx + isp] as usize;
+                    let i8 = dia_ip[8 * nspecx + isp] as usize;
+                    let i9 = dia_ip[9 * nspecx + isp] as usize;
+                    let i10 = dia_ip[10 * nspecx + isp] as usize;
+                    let i11 = dia_ip[11 * nspecx + isp] as usize;
+                    let i12 = dia_ip[12 * nspecx + isp] as usize;
+                    let i13 = dia_ip[13 * nspecx + isp] as usize;
+                    let i14 = dia_ip[14 * nspecx + isp] as usize;
+                    let i15 = dia_ip[15 * nspecx + isp] as usize;
+                    let w0 = par[P_AWG];
+                    let w1 = par[P_AWG + 1];
+                    let w2 = par[P_AWG + 2];
+                    let w3 = par[P_AWG + 3];
+                    let w4 = par[P_AWG + 4];
+                    let w5 = par[P_AWG + 5];
+                    let w6 = par[P_AWG + 6];
+                    let w7 = par[P_AWG + 7];
+                    let ep1 = w0 * ue[i0] + w1 * ue[i1] + w2 * ue[i2] + w3 * ue[i3];
+                    let em1 = w4 * ue[i4] + w5 * ue[i5] + w6 * ue[i6] + w7 * ue[i7];
+                    let ep2 = w0 * ue[i8] + w1 * ue[i9] + w2 * ue[i10] + w3 * ue[i11];
+                    let em2 = w4 * ue[i12] + w5 * ue[i13] + w6 * ue[i14] + w7 * ue[i15];
+                    let caf = cons * af11[isp];
+                    let factor = caf * e00;
+                    let sa1a = e00 * (ep1 * dal1 + em1 * dal2);
+                    let sa1b = sa1a - ep1 * em1 * dal3;
+                    let sa2a = e00 * (ep2 * dal1 + em2 * dal2);
+                    let sa2b = sa2a - ep2 * em2 * dal3;
+                    if tan == 0u32 {
+                        if pass == 0u32 {
+                            b1[isp + nth] = factor * sa1b;
+                            b2[isp + nth] = factor * sa2b;
+                        } else if pass == 1u32 {
+                            let p1 = dal1 * e00 - dal3 * em1;
+                            let p2 = dal1 * e00 - dal3 * em2;
+                            b1[isp + nth] = factor * p1;
+                            b2[isp + nth] = factor * p2;
+                            if isp < nspec {
+                                dn[r] = -two * (caf * (sa1a + sa1b) + caf * (sa2a + sa2b));
+                            }
+                        } else {
+                            let m1 = dal2 * e00 - dal3 * ep1;
+                            let m2 = dal2 * e00 - dal3 * ep2;
+                            b1[isp + nth] = factor * m1;
+                            b2[isp + nth] = factor * m2;
+                        }
+                    } else {
+                        let de00 = ued[isp + nth];
+                        let dep1 = w0 * ued[i0] + w1 * ued[i1] + w2 * ued[i2] + w3 * ued[i3];
+                        let dem1 = w4 * ued[i4] + w5 * ued[i5] + w6 * ued[i6] + w7 * ued[i7];
+                        let dep2 = w0 * ued[i8] + w1 * ued[i9] + w2 * ued[i10] + w3 * ued[i11];
+                        let dem2 = w4 * ued[i12] + w5 * ued[i13] + w6 * ued[i14] + w7 * ued[i15];
+                        let dcaf = dcons * af11[isp];
+                        let dfactor = dcaf * e00 + caf * de00;
+                        let dsa1a = de00 * (ep1 * dal1 + em1 * dal2) + e00 * (dep1 * dal1 + dem1 * dal2);
+                        let dsa1b = dsa1a - (dep1 * em1 + ep1 * dem1) * dal3;
+                        let dsa2a = de00 * (ep2 * dal1 + em2 * dal2) + e00 * (dep2 * dal1 + dem2 * dal2);
+                        let dsa2b = dsa2a - (dep2 * em2 + ep2 * dem2) * dal3;
+                        if pass == 0u32 {
+                            b1[isp + nth] = dfactor * sa1b + factor * dsa1b;
+                            b2[isp + nth] = dfactor * sa2b + factor * dsa2b;
+                        } else if pass == 1u32 {
+                            let p1 = dal1 * e00 - dal3 * em1;
+                            let p2 = dal1 * e00 - dal3 * em2;
+                            b1[isp + nth] = dfactor * p1 + factor * (dal1 * de00 - dal3 * dem1);
+                            b2[isp + nth] = dfactor * p2 + factor * (dal1 * de00 - dal3 * dem2);
+                            if isp < nspec {
+                                dnd[r] = -two * (dcaf * (sa1a + sa1b) + caf * (dsa1a + dsa1b) + dcaf * (sa2a + sa2b) + caf * (dsa2a + dsa2b));
+                            }
+                        } else {
+                            let m1 = dal2 * e00 - dal3 * ep1;
+                            let m2 = dal2 * e00 - dal3 * ep2;
+                            b1[isp + nth] = dfactor * m1 + factor * (dal2 * de00 - dal3 * dep1);
+                            b2[isp + nth] = dfactor * m2 + factor * (dal2 * de00 - dal3 * dep2);
+                        }
                     }
-                } else {
-                    let m1 = dal2 * e00 - dal3 * ep1;
-                    let m2 = dal2 * e00 - dal3 * ep2;
-                    b1[isp + nth] = factor * m1;
-                    b2[isp + nth] = factor * m2;
-                    b1d[isp + nth] = dfactor * m1 + factor * (dal2 * de00 - dal3 * dep1);
-                    b2d[isp + nth] = dfactor * m2 + factor * (dal2 * de00 - dal3 * dep2);
                 }
             }
-        }
-        sync_cube();
-        for r in 0..(nspec + nu - 1) / nu {
-            let is = r * nu + t;
-            if is < nspec {
-                if pass == 0u32 {
-                    let ik = is / nth;
-                    let con = tpiinv::<F>() / sig[ik + 1] * kb[K_CG * nk + ik];
-                    let mut ss = -two * (b1[is + nth] + b2[is + nth]);
-                    let mut dss = -two * (b1d[is + nth] + b2d[is + nth]);
-                    for j in 0..8u32 {
-                        let jj = j as usize;
-                        let c1 = dia_ic[2 * jj * nspec + is] as usize;
-                        let c2 = dia_ic[(2 * jj + 1) * nspec + is] as usize;
-                        ss += par[P_AWG + jj] * (b1[c1] + b2[c2]);
-                        dss += par[P_AWG + jj] * (b1d[c1] + b2d[c2]);
+            sync_cube();
+            for r in 0..(nspec + nu - 1) / nu {
+                let is = r * nu + t;
+                if is < nspec {
+                    if pass == 0u32 {
+                        let ik = is / nth;
+                        let con = tpiinv::<F>() / sig[ik + 1] * kb[K_CG * nk + ik];
+                        let mut ss = -two * (b1[is + nth] + b2[is + nth]);
+                        for j in 0..8u32 {
+                            let jj = j as usize;
+                            let c1 = dia_ic[2 * jj * nspec + is] as usize;
+                            let c2 = dia_ic[(2 * jj + 1) * nspec + is] as usize;
+                            ss += par[P_AWG + jj] * (b1[c1] + b2[c2]);
+                        }
+                        if tan == 0u32 {
+                            vs[r] += scale * (con * ss);
+                        } else {
+                            vsd[r] += scale * (con * ss);
+                        }
+                    } else if pass == 1u32 {
+                        let mut d = select(tan == 0u32, dn[r], dnd[r]);
+                        for j in 0..4u32 {
+                            let jj = j as usize;
+                            let c1 = dia_ic[2 * jj * nspec + is] as usize;
+                            let c2 = dia_ic[(2 * jj + 1) * nspec + is] as usize;
+                            d += par[P_SWG + jj] * (b1[c1] + b2[c2]);
+                        }
+                        if tan == 0u32 {
+                            dn[r] = d;
+                        } else {
+                            dnd[r] = d;
+                        }
+                    } else {
+                        let mut d = select(tan == 0u32, dn[r], dnd[r]);
+                        for j in 4..8u32 {
+                            let jj = j as usize;
+                            let c1 = dia_ic[2 * jj * nspec + is] as usize;
+                            let c2 = dia_ic[(2 * jj + 1) * nspec + is] as usize;
+                            d += par[P_SWG + jj] * (b1[c1] + b2[c2]);
+                        }
+                        if tan == 0u32 {
+                            vd[r] += scale * d;
+                        } else {
+                            vdd[r] += scale * d;
+                        }
                     }
-                    vs[is] += scale * (con * ss);
-                    vsd[is] += scale * (con * dss);
-                } else if pass == 1u32 {
-                    let mut d = dn[is];
-                    let mut dd = dnd[is];
-                    for j in 0..4u32 {
-                        let jj = j as usize;
-                        let c1 = dia_ic[2 * jj * nspec + is] as usize;
-                        let c2 = dia_ic[(2 * jj + 1) * nspec + is] as usize;
-                        d += par[P_SWG + jj] * (b1[c1] + b2[c2]);
-                        dd += par[P_SWG + jj] * (b1d[c1] + b2d[c2]);
-                    }
-                    dn[is] = d;
-                    dnd[is] = dd;
-                } else {
-                    let mut d = dn[is];
-                    let mut dd = dnd[is];
-                    for j in 4..8u32 {
-                        let jj = j as usize;
-                        let c1 = dia_ic[2 * jj * nspec + is] as usize;
-                        let c2 = dia_ic[(2 * jj + 1) * nspec + is] as usize;
-                        d += par[P_SWG + jj] * (b1[c1] + b2[c2]);
-                        dd += par[P_SWG + jj] * (b1d[c1] + b2d[c2]);
-                    }
-                    vd[is] += scale * d;
-                    vdd[is] += scale * dd;
                 }
             }
+            sync_cube();
         }
-        sync_cube();
     }
 }
 
 /// `W3SDS4` (saturation, cumulative, turbulent and viscous terms) and its
 /// tangent; `dsdsc2` is the derivative of `SDSC2`. `dn`, `dnd` hold the
-/// breaking-crest lengths and their tangent.
+/// breaking-crest lengths and their tangent, `b1`, `b1d` the saturation
+/// and its tangent (scratch buffers of the DIA).
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn sds4_tl<F: Float>(
@@ -1071,10 +1138,10 @@ fn sds4_tl<F: Float>(
     b1d: &mut Shared<[F]>,
     dn: &mut Shared<[F]>,
     dnd: &mut Shared<[F]>,
-    vs: &mut Shared<[F]>,
-    vsd: &mut Shared<[F]>,
-    vd: &mut Shared<[F]>,
-    vdd: &mut Shared<[F]>,
+    vs: &mut Array<F>,
+    vsd: &mut Array<F>,
+    vd: &mut Array<F>,
+    vdd: &mut Array<F>,
     depth: F,
     ustar: F,
     dustar: F,
@@ -1222,10 +1289,10 @@ fn sds4_tl<F: Float>(
                 sv += x * diag2;
                 dsv += dxa * diag2 + x * ddiag2;
             }
-            vs[is] += scale * sv;
-            vd[is] += scale * dv;
-            vsd[is] += scale * dsv;
-            vdd[is] += scale * ddv;
+            vs[r] += scale * sv;
+            vd[r] += scale * dv;
+            vsd[r] += scale * dsv;
+            vdd[r] += scale * ddv;
         }
     }
     sync_cube();
@@ -1331,10 +1398,10 @@ fn sbt4_tl<F: Float>(
     kd: &mut Shared<[F]>,
     sc: &mut Shared<[F]>,
     sd: &mut Shared<[F]>,
-    vs: &mut Shared<[F]>,
-    vsd: &mut Shared<[F]>,
-    vd: &mut Shared<[F]>,
-    vdd: &mut Shared<[F]>,
+    vs: &mut Array<F>,
+    vsd: &mut Array<F>,
+    vd: &mut Array<F>,
+    vdd: &mut Array<F>,
     depth: F,
     d50_: F,
     psic: F,
@@ -1498,10 +1565,10 @@ fn sbt4_tl<F: Float>(
             let cb = kb[K_CBETA * nk + ik];
             let dsum = -fbt * cb;
             let ddsum = -dfbt * cb;
-            vs[is] += dsum * a[is];
-            vsd[is] += ddsum * a[is] + dsum * ad[is];
-            vd[is] += dsum;
-            vdd[is] += ddsum;
+            vs[r] += dsum * a[is];
+            vsd[r] += ddsum * a[is] + dsum * ad[is];
+            vd[r] += dsum;
+            vdd[r] += ddsum;
         }
     }
     sync_cube();
@@ -1569,21 +1636,17 @@ pub fn srce_tl<F: Float>(
             let dtg = F::cast_from(dtg_);
             let mut a = Shared::<[F]>::new_slice(nk * nth);
             let mut ad = Shared::<[F]>::new_slice(nk * nth);
-            let mut vs = Shared::<[F]>::new_slice(nk * nth);
-            let mut vsd = Shared::<[F]>::new_slice(nk * nth);
-            let mut vd = Shared::<[F]>::new_slice(nk * nth);
-            let mut vdd = Shared::<[F]>::new_slice(nk * nth);
-            let mut ws = Shared::<[F]>::new_slice(nk * nth);
-            let mut dn = Shared::<[F]>::new_slice(nk * nth);
-            let mut dnd = Shared::<[F]>::new_slice(nk * nth);
+            let mut vs = Array::<F>::new((nk * nth + nu - 1) / nu);
+            let mut vsd = Array::<F>::new((nk * nth + nu - 1) / nu);
+            let mut vd = Array::<F>::new((nk * nth + nu - 1) / nu);
+            let mut vdd = Array::<F>::new((nk * nth + nu - 1) / nu);
+            let mut ws = Shared::<[u8]>::new_slice(nk * nth);
             let mut ue = Shared::<[F]>::new_slice(nspecy + nth);
             let mut ued = Shared::<[F]>::new_slice(nspecy + nth);
             let mut b1 = Shared::<[F]>::new_slice(nspecx + nth);
-            let mut b1d = Shared::<[F]>::new_slice(nspecx + nth);
             let mut b2 = Shared::<[F]>::new_slice(nspecx + nth);
-            let mut b2d = Shared::<[F]>::new_slice(nspecx + nth);
-            let mut kb = Shared::<[F]>::new_slice(NKB * nk);
-            let mut kd = Shared::<[F]>::new_slice(NKB * nk);
+            let mut kb = Shared::<[F]>::new_slice(NKB_TL * nk);
+            let mut kd = Shared::<[F]>::new_slice(NKB_TL * nk);
             let mut sc = Shared::<[F]>::new_slice(NSC);
             let mut sd = Shared::<[F]>::new_slice(NSC);
             let mut dr = Shared::<[F]>::new_slice(3 * nth);
@@ -1596,7 +1659,7 @@ pub fn srce_tl<F: Float>(
                     let th = is - ik * nth;
                     a[is] = va[(ik * np + i) * nth + th];
                     ad[is] = vad[(ik * np + i) * nth + th];
-                    ws[is] = one;
+                    ws[is] = 1u8;
                 }
             }
             if t < nk {
@@ -1604,6 +1667,9 @@ pub fn srce_tl<F: Float>(
                 kb[K_WN * nk + t] = w;
                 kb[K_CG * nk + t] = cg[(t + 1) * np + i];
                 kb[K_DAM * nk + t] = par[P_FACP] / (sig[t + 1] * (w * w * w));
+                kb[K_SPW * nk + t] = sig[t + 1].powf(F::new(2.0f32) * par[P_WWNMEANPTAIL]);
+                kb[K_WNP * nk + t] = w.powf(par[P_WWNMEANP]);
+                kb[K_DCG * nk + t] = dden[t] / kb[K_CG * nk + t];
             }
             sync_cube();
             let d_inp = dw[i];
@@ -1648,8 +1714,8 @@ pub fn srce_tl<F: Float>(
             let dust0 = sd[S_USTAR];
             let dz00 = sd[S_Z0];
             sin4_tl::<F>(
-                par, tauhf, dtauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &ad, &mut vs, &mut vsd, &mut vd, &mut vdd, &mut ws, &mut kb, &mut kd,
-                &mut sc, &mut sd, &mut dr, &mut drd, ust0, dust0, z00, dz00, udir, dudir, beta, dbeta, one, false, nk, nth,
+                par, tauhf, dtauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &ad, &mut vs, &mut vsd, &mut vd, &mut vdd, &mut b1, &mut b2, &mut ws,
+                &mut kb, &mut kd, &mut sc, &mut sd, &mut dr, &mut drd, ust0, dust0, z00, dz00, udir, dudir, beta, dbeta, one, false, nk, nth, nu,
             );
             let tauwx = sc[S_TAUWX];
             let tauwy = sc[S_TAUWY];
@@ -1697,10 +1763,10 @@ pub fn srce_tl<F: Float>(
                 for r in 0..(nspec + nu - 1) / nu {
                     let is = r * nu + t;
                     if is < nspec {
-                        vs[is] = zero;
-                        vd[is] = zero;
-                        vsd[is] = zero;
-                        vdd[is] = zero;
+                        vs[r] = zero;
+                        vd[r] = zero;
+                        vsd[r] = zero;
+                        vdd[r] = zero;
                     }
                 }
                 sync_cube();
@@ -1709,8 +1775,8 @@ pub fn srce_tl<F: Float>(
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            s1[r] = vsd[is];
-                            s2[r] = vdd[is];
+                            s1[r] = vsd[r];
+                            s2[r] = vdd[r];
                         }
                     }
                     sync_cube();
@@ -1722,8 +1788,8 @@ pub fn srce_tl<F: Float>(
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            vsd[is] = s1[r];
-                            vdd[is] = s2[r];
+                            vsd[r] = s1[r];
+                            vdd[r] = s2[r];
                         }
                     }
                     sync_cube();
@@ -1733,23 +1799,24 @@ pub fn srce_tl<F: Float>(
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            s1[r] = vsd[is];
-                            s2[r] = vdd[is];
+                            s1[r] = vsd[r];
+                            s2[r] = vdd[r];
                         }
                     }
                     sync_cube();
                 }
                 sin4_tl::<F>(
-                    par, tauhf, dtauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &ad, &mut vs, &mut vsd, &mut vd, &mut vdd, &mut ws, &mut kb,
-                    &mut kd, &mut sc, &mut sd, &mut dr, &mut drd, ustar, dustar, z0, dz0, udir, dudir, beta, dbeta, isc_in, true, nk, nth,
+                    par, tauhf, dtauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &ad, &mut vs, &mut vsd, &mut vd, &mut vdd, &mut b1, &mut b2,
+                    &mut ws, &mut kb, &mut kd, &mut sc, &mut sd, &mut dr, &mut drd, ustar, dustar, z0, dz0, udir, dudir, beta, dbeta, isc_in, true, nk,
+                    nth, nu,
                 );
                 if (fz & 2u32) != 0u32 {
                     sync_cube();
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            vsd[is] = s1[r];
-                            vdd[is] = s2[r];
+                            vsd[r] = s1[r];
+                            vdd[r] = s2[r];
                         }
                     }
                     sync_cube();
@@ -1763,8 +1830,8 @@ pub fn srce_tl<F: Float>(
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            s1[r] = vsd[is];
-                            s2[r] = vdd[is];
+                            s1[r] = vsd[r];
+                            s2[r] = vdd[r];
                         }
                     }
                     sync_cube();
@@ -1774,16 +1841,16 @@ pub fn srce_tl<F: Float>(
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            n_s[r] = vs[is];
-                            n_d[r] = vd[is];
-                            n_sd[r] = vsd[is];
-                            n_dd[r] = vdd[is];
+                            n_s[r] = vs[r];
+                            n_d[r] = vd[r];
+                            n_sd[r] = vsd[r];
+                            n_dd[r] = vdd[r];
                         }
                     }
                     sync_cube();
                 }
                 snl1_tl::<F>(
-                    par, sig, dia_ip, dia_ic, af11, &a, &ad, &kb, &mut ue, &mut ued, &mut b1, &mut b1d, &mut b2, &mut b2d, &mut dn, &mut dnd, &mut vs,
+                    par, sig, dia_ip, dia_ic, af11, &a, &ad, &kb, &mut ue, &mut ued, &mut b1, &mut b2, &mut vs,
                     &mut vsd, &mut vd, &mut vdd, wnmean * depth, dwnmean * depth, dsnlc1, isc_nl, nk, nth, nspecx, nspecy, nu,
                 );
                 if nlcut.abs() > zero {
@@ -1791,10 +1858,10 @@ pub fn srce_tl<F: Float>(
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            n_s[r] = vs[is] - n_s[r];
-                            n_d[r] = vd[is] - n_d[r];
-                            n_sd[r] = vsd[is] - n_sd[r];
-                            n_dd[r] = vdd[is] - n_dd[r];
+                            n_s[r] = vs[r] - n_s[r];
+                            n_d[r] = vd[r] - n_d[r];
+                            n_sd[r] = vsd[r] - n_sd[r];
+                            n_dd[r] = vdd[r] - n_dd[r];
                         }
                     }
                     sync_cube();
@@ -1804,8 +1871,8 @@ pub fn srce_tl<F: Float>(
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            vsd[is] = s1[r];
-                            vdd[is] = s2[r];
+                            vsd[r] = s1[r];
+                            vdd[r] = s2[r];
                         }
                     }
                     sync_cube();
@@ -1815,14 +1882,14 @@ pub fn srce_tl<F: Float>(
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            s1[r] = vsd[is];
-                            s2[r] = vdd[is];
+                            s1[r] = vsd[r];
+                            s2[r] = vdd[r];
                         }
                     }
                     sync_cube();
                 }
                 sds4_tl::<F>(
-                    par, sig, ecos, esin, satw, sati, cumw, &a, &ad, &mut kb, &mut kd, &mut b1, &mut b1d, &mut dn, &mut dnd, &mut vs, &mut vsd, &mut vd,
+                    par, sig, ecos, esin, satw, sati, cumw, &a, &ad, &mut kb, &mut kd, &mut b1, &mut b2, &mut ue, &mut ued, &mut vs, &mut vsd, &mut vd,
                     &mut vdd, depth, ustar, dustar, udir, dudir, dsdsc2, isc_ds, nk, nth, nsat, nu,
                 );
                 if (fz & 8u32) != 0u32 {
@@ -1830,8 +1897,8 @@ pub fn srce_tl<F: Float>(
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            vsd[is] = s1[r];
-                            vdd[is] = s2[r];
+                            vsd[r] = s1[r];
+                            vdd[r] = s2[r];
                         }
                     }
                     sync_cube();
@@ -1847,8 +1914,8 @@ pub fn srce_tl<F: Float>(
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            s1[r] = vsd[is];
-                            s2[r] = vdd[is];
+                            s1[r] = vsd[r];
+                            s2[r] = vdd[r];
                         }
                     }
                     sync_cube();
@@ -1862,8 +1929,8 @@ pub fn srce_tl<F: Float>(
                     for r in 0..(nspec + nu - 1) / nu {
                         let is = r * nu + t;
                         if is < nspec {
-                            vsd[is] = s1[r];
-                            vdd[is] = s2[r];
+                            vsd[r] = s1[r];
+                            vdd[r] = s2[r];
                         }
                     }
                     sync_cube();
@@ -1885,8 +1952,8 @@ pub fn srce_tl<F: Float>(
                         let th = is - ik * nth;
                         let ainit = va[(ik * np + i) * nth + th];
                         let damax = min(kb[K_DAM * nk + ik], max(par[P_XREL] * ainit, afilt));
-                        let afac = one / max(F::new(1.0e-10f32), (vs[is] / damax).abs());
-                        dtl = min(dtl, afac / max(F::new(1.0e-10f32), one + afac * min(zero, vd[is])));
+                        let afac = one / max(F::new(1.0e-10f32), (vs[r] / damax).abs());
+                        dtl = min(dtl, afac / max(F::new(1.0e-10f32), one + afac * min(zero, vd[r])));
                     }
                 }
                 red[t] = dtl;
@@ -1937,8 +2004,8 @@ pub fn srce_tl<F: Float>(
                         let ik = is / nth;
                         let aold = a[is];
                         let daold = ad[is];
-                        let mut vsd_e = vsd[is];
-                        let mut vdd_e = vdd[is];
+                        let mut vsd_e = vsd[r];
+                        let mut vdd_e = vdd[r];
                         if nlcut.abs() > zero {
                             let g = select(nlcut > zero, n_d[r], n_d[r].abs()) * dtg;
                             if g > nlcut.abs() || cut_all > zero {
@@ -1950,11 +2017,11 @@ pub fn srce_tl<F: Float>(
                                 vdd_e = vdd_e - n_dd[r] + n_d[r] * rel;
                             }
                         }
-                        let denv = one - hdt * vd[is];
+                        let denv = one - hdt * vd[r];
                         let den = max(one, denv);
                         let dden_ = select(denv > one && (fz & 64u32) == 0u32, -hdt * vdd_e, zero);
-                        let mut inc = vs[is] * dt / den;
-                        let mut dinc = dt * (vsd_e * den - vs[is] * dden_) / (den * den);
+                        let mut inc = vs[r] * dt / den;
+                        let mut dinc = dt * (vsd_e * den - vs[r] * dden_) / (den * den);
                         if shave {
                             let dam = kb[K_DAM * nk + ik];
                             let clamped = inc.abs() > dam;

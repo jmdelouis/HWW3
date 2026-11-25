@@ -1636,6 +1636,124 @@ More units per cube do not help:
 The kernel's speed follows the number of nodes an SM holds at once, set by
 the shared memory.
 
+### Optimisation steps (checkpoint of 25 November)
+
+Each step is checked with `scripts/opt_bench_hpc.slurm` against runs of
+the present build (commit 35ecb15, kept in `opt/bin_base`) over the same
+hours, from the restart of 1 January 00:10 with the parameters of p0:
+- the week in f32 (216 h) and 48 h in f64, compared hour by hour
+  (`scripts/opt_compare.py`), with the costs and scores of the
+  calibration windows for the week (`scripts/opt_scores_hpc.slurm`);
+- 24 h of the f64 `BETAMAX` tangent ($H_s$, its tangent and that of
+  $T_{m02}$);
+- the M3 check of the source tangent (`hww3-src check-tl`) on the harness
+  nodes of grids v5 $K=4$ and v4, with both builds.
+
+All runs used A100-SXM4-80GB GPUs. The calibration runs at p0 (`cal/it0_value`,
+`cal/it0_BETAMAX`) are not the reference: they came from an older build,
+which differs from 35ecb15 at round-off (2 of 216 hours identical to the
+bit in f32). `it0_BETAMAX` also covers 156 h, against the first 24 h here,
+which cost the most.
+
+The steps, in seconds per model day (1 to 10 January for f32, the first
+two days for f64, the first day for the tangent):
+
+| Step | f32, 216 h | f64, 48 h | f64 tangent, 24 h | Against 35ecb15 |
+|---|---|---|---|---|
+| present build (35ecb15) | 124.1 | 505.1 | 931.4 | – |
+| 1. wind-sea flags in bytes | 108.9 | 304.5 | 939.0 | identical to the bit (all three) |
+| 2. powers of `W3SPR4` out of its serial loop | 101.7 | 266.4 | 843.8 | round-off |
+| 3. constants of `W3SIN4` out of its loop, its sums one per unit | 117.3 | 265.2 | 798.0 | identical to the bit to step 2 |
+| 4. tangent: source sums per unit, DIA in two halves | – | – | 590.2 | round-off |
+
+This checkpoint keeps steps 1–2 in the value kernel: 101.7 s per model day
+in f32 and 266.4 s in f64, against 124.1 and 505.1. The tangent kernel
+has steps 1–4: 590.2 s against 931.4.
+
+**1. Flags in bytes.** The 0/1 wind-sea flags of `W3SPR4` and `W3SIN4`
+took one float per bin. In bytes the source kernel needs 38,384 B instead
+of 41,840 B per node in f32 and 75,616 B instead of 83,680 B in f64. An SM
+then holds 4 nodes instead of 3 in f32, and 2 instead of 1 in f64 (with
+254 registers per unit the registers also allow 2). The results are
+identical to the bit in f32 (all 216 hours), in f64 and for the tangent.
+
+**2. Powers out of the serial loop of `W3SPR4`.** The sums of `W3SPR4`
+over the frequencies run on unit 0. The powers of $\sigma$ and $k$ in
+them (`WNMEANPTAIL`, `WNMEANP`) and the ratio `DDEN / CG` are now
+computed once per frequency by units 0–31 at the start of the kernel. The
+formulas are those of the loop, but the results differ at round-off:
+- In f64, $H_s$ differs by at most 9.0e-14 m over 48 h (hourly RMS 1e-16).
+- In f32, the differences grow as round-off does over a week, as between
+  any two f32 builds: hourly RMS median 9.4e-7 m, 99th percentile
+  1.2e-4 m, largest 9.7e-2 m at one node and hour.
+- The costs of the calibration windows differ by at most 6e-3 out of
+  35,000–69,000 (2e-7), and every bias and RMSE is the same to the
+  printed digits.
+
+The three slots per frequency bring the kernel to 38,768 B per node in
+f32 and 76,384 B in f64, still 4 and 2 nodes per SM.
+
+**3. Constants out of the loop of `W3SIN4`: in the tangent only.** The
+constants per frequency of `W3SIN4` (`CM`, `CONST2`, `CNST`, `ln(k z0)`,
+the swell coefficients) computed before its loop, and its four sums over
+the directions (`SX`, `SY`, `SNX`, `SNY`) one per unit, give results
+identical to the bit to step 2 (all 216 hours in f32, 48 hours in f64).
+They make the f32 value kernel slower, though: 117.3 s per model day
+instead of 101.7, which the source kernel alone confirms (below). In f64
+they change nothing (265.2 s). The value kernel of 35ecb15 already used
+128 registers per unit in f32, the most that allows 4 nodes per SM; the
+likely cause is that step 3 needs more and loses a node per SM, but the
+counters of hpc cannot show it. In the tangent kernel step 3 takes the
+first day from 843.8 to 798.0 s, also identical to the bit to step 2, so
+it is kept there, in slots of its own.
+
+**4. The tangent kernel in two nodes per SM.** The tangent kernel needed
+156,832 B per node, so an SM held one node. Now:
+- The source sums `VS`, `VD` and their tangents are kept by the unit of
+  each bin (bins $r\,n_u + t$ of unit $t$, in registers or local
+  memory) instead of shared memory; `W3SIN4` stores its input in a
+  scratch buffer and adds it after its loop over the frequencies.
+- The DIA computes each of its three passes first for the values, then
+  for the tangents, in the same two buffers instead of four, and keeps its
+  diagonal per unit.
+- `W3SDS4` uses the DIA buffers as scratch.
+
+A node then needs 76,192 B, and an SM holds 2 nodes, as the 255
+registers per unit allow. The tangent run takes 590.2 s per model day
+instead of 931.4 s (−37 %), with differences at round-off: $H_s$ at most
+3.1e-14 m, its tangent at most 9.9e-11 m, that of $T_{m02}$ at most
+2.0e-9 s. The M3 check of the source tangent of this checkpoint gives
+the same medians, 99th percentiles and maxima against the central
+differences as 35ecb15 in every direction on both harnesses (job
+4447407). The first launch of the tangent
+kernel takes 5.3 s instead of 1.1 s: this is the time `check-tl` gives for
+the spectrum direction, and it includes the compilation of the kernel.
+
+**Not kept: the same change in the value kernel.** With the source sums
+per unit (on top of step 3), the value kernel needs 25,712 B in f32 and
+50,272 B in f64 but is not faster:
+- f64: 268.6 s per model day, against 265.2 s for step 3 (2 nodes per SM
+  either way, set by the registers);
+- f32: 143.2 s, against 117.3 s for step 3;
+- with 64 units, for more nodes per SM: 283.2 s in f64 and 174.5 s for
+  48 h in f32, against 145.4 s for 35ecb15.
+
+**The source kernel alone.** One global step of the value kernel on the
+1,869 harness nodes of grid v5 $K=4$ repeated 200 times (373,800 nodes,
+`hww3-src check-gpu`), the builds one after the other on the same GPU,
+twice (job 4444291):
+
+| Build | f32 (s) | f64 (s) |
+|---|---|---|
+| 35ecb15 | 0.805, 0.815 | 2.831, 2.828 |
+| step 1 | 0.713, 0.694 | 1.691, 1.689 |
+| steps 1–2 | 0.647, 0.641 | 1.459, 1.641 |
+| steps 1–3 | 0.804, 0.746 | 1.446, 1.596 |
+
+Between two rounds the same build can differ by 10 % in f64. The
+differences against WW3 and the CPU transcription are the same as for
+35ecb15 to the printed digits.
+
 ## Coastal diagnostics of the buoy scores
 
 At the start of the calibration the buoy $H_s$ is too low (bias −4.85 cm on

@@ -1115,6 +1115,24 @@ counters there; [GPU model results](wave_results.md)):
    triangle array in global memory. About −5 % in f32.
 9. Asynchronous outputs: under 1 %, done last if at all.
 
+**Progress (checkpoint of 25 November;
+[GPU model results](wave_results.md)).**
+- Step 1 is done and identical to the bit: f32 week 108.9 s per model day
+  instead of 124.1, f64 304.5 s instead of 505.1.
+- Part of step 3 is done: the powers in the serial loop of `W3SPR4` are
+  computed before it by all units, with differences at round-off. The
+  value kernel then takes 101.7 s per model day in f32 and 266.4 s in f64.
+  The same for the constants of `W3SIN4` is identical to the bit but slows
+  the f32 value kernel (117.3 s), so only the tangent kernel has it.
+- Step 4 is done: 2 nodes per SM for the tangent, 590 s per model day
+  instead of 931 s over the first day (−37 %), at round-off, with the M3
+  check of the source tangent unchanged.
+- Step 2 brings nothing more. With the flags in bytes, the registers, not
+  the shared memory, set the nodes per SM (4 in f32, 2 in f64): the value
+  kernel with its sums per unit needs far less shared memory and is not
+  faster.
+- The costs and scores of the calibration windows are unchanged to 2e-7.
+
 ## 10. Other routes, briefly
 
 | route | effort | why not the main route |

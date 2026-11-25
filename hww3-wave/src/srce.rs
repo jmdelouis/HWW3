@@ -77,7 +77,13 @@ pub(crate) const K_EBY: usize = 6;
 pub(crate) const K_CBETA: usize = 7;
 pub(crate) const K_BTH0: usize = 8;
 pub(crate) const K_AMAX: usize = 9;
-pub(crate) const NKB: usize = 10;
+// constant over a launch, computed by the units ik < nk at the start so that
+// the scalar loop of W3SPR4 reads them: SIG^(2 WWNMEANPTAIL), WN^WWNMEANP and
+// DDEN / CG, the operations of that loop (the results differ at round-off)
+pub(crate) const K_SPW: usize = 10;
+pub(crate) const K_WNP: usize = 11;
+pub(crate) const K_DCG: usize = 12;
+pub(crate) const NKB: usize = 13;
 
 /// `1 / (2 pi)` as WW3's single-precision `TPIINV`.
 #[cube]
@@ -197,7 +203,7 @@ fn spr4<F: Float>(
     sig: &[F],
     dden: &[F],
     a: &Shared<[F]>,
-    ws: &Shared<[F]>,
+    ws: &Shared<[u8]>,
     kb: &mut Shared<[F]>,
     sc: &mut Shared<[F]>,
     u: F,
@@ -216,7 +222,10 @@ fn spr4<F: Float>(
         for th in 0..nth {
             let x = a[t * nth + th];
             eb += x;
-            eb2 += x * ws[t * nth + th];
+            // wind-sea flag (0 or 1, one byte per bin): x or nothing, as x * flag
+            if ws[t * nth + th] != 0u8 {
+                eb2 += x;
+            }
             amax = max(amax, x);
         }
         kb[K_EB * nk + t] = eb;
@@ -235,16 +244,17 @@ fn spr4<F: Float>(
         let mut fmeanws = zero;
         let mut amax = zero;
         for ik in 0..nk {
-            let f = dden[ik] / kb[K_CG * nk + ik];
+            let f = kb[K_DCG * nk + ik];
             let eb = kb[K_EB * nk + ik] * f;
             let eb2 = kb[K_EB2 * nk + ik] * f;
             let s = sig[ik + 1];
+            let sp = kb[K_SPW * nk + ik];
             emean += eb;
             fmean += eb / s;
-            fmean1 += eb * s.powf(F::new(2.0f32) * tw);
-            wnmean += eb * kb[K_WN * nk + ik].powf(wp);
+            fmean1 += eb * sp;
+            wnmean += eb * kb[K_WNP * nk + ik];
             emeanws += eb2;
-            fmeanws += eb2 * s.powf(F::new(2.0f32) * tw);
+            fmeanws += eb2 * sp;
             amax = max(amax, kb[K_AMAX * nk + ik]);
         }
         let ddl = dden[nk - 1];
@@ -388,7 +398,7 @@ fn sin4<F: Float>(
     a: &Shared<[F]>,
     vs: &mut Shared<[F]>,
     vd: &mut Shared<[F]>,
-    ws: &mut Shared<[F]>,
+    ws: &mut Shared<[u8]>,
     kb: &mut Shared<[F]>,
     sc: &mut Shared<[F]>,
     dr: &mut Shared<[F]>,
@@ -537,7 +547,7 @@ fn sin4<F: Float>(
             dr[t] = temp2 * ecos[t];
             dr[nth + t] = temp2 * esin[t];
             dr[2 * nth + t] = select(dst < zero, one, zero);
-            ws[is] = llws;
+            ws[is] = select(llws > zero, 1u8, 0u8);
             if accumulate {
                 vs[is] += scale * (dst * x);
                 vd[is] += scale * dst;
@@ -1278,7 +1288,7 @@ pub fn srce<F: Float>(
             let mut a = Shared::<[F]>::new_slice(nk * nth);
             let mut vs = Shared::<[F]>::new_slice(nk * nth);
             let mut vd = Shared::<[F]>::new_slice(nk * nth);
-            let mut ws = Shared::<[F]>::new_slice(nk * nth);
+            let mut ws = Shared::<[u8]>::new_slice(nk * nth);
             let mut dn = Shared::<[F]>::new_slice(nk * nth);
             let mut ue = Shared::<[F]>::new_slice(nspecy + nth);
             let mut b1 = Shared::<[F]>::new_slice(nspecx + nth);
@@ -1293,7 +1303,7 @@ pub fn srce<F: Float>(
                     let ik = is / nth;
                     let th = is - ik * nth;
                     a[is] = va[(ik * np + i) * nth + th];
-                    ws[is] = one;
+                    ws[is] = 1u8;
                 }
             }
             if t < nk {
@@ -1301,6 +1311,9 @@ pub fn srce<F: Float>(
                 kb[K_WN * nk + t] = w;
                 kb[K_CG * nk + t] = cg[(t + 1) * np + i];
                 kb[K_DAM * nk + t] = par[P_FACP] / (sig[t + 1] * (w * w * w));
+                kb[K_SPW * nk + t] = sig[t + 1].powf(F::new(2.0f32) * par[P_WWNMEANPTAIL]);
+                kb[K_WNP * nk + t] = w.powf(par[P_WWNMEANP]);
+                kb[K_DCG * nk + t] = dden[t] / kb[K_CG * nk + t];
             }
             sync_cube();
             let d_inp = dw[i];
