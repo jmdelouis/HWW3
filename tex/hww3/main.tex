@@ -2599,7 +2599,63 @@ initial state, against 18 and 7. The cut thus acts at the start on about
 mean $H_s$ do not move. No cut is adopted. The tangents at the start used
 by the test of \texttt{BETAMAX} as a function of the wind are bounded at
 every training observation (largest \SI{5.0}{m}).
+\item \emph{Test of \texttt{BETAMAX} as a function of the wind.} The
+test uses the third cost, the Jacobian frozen at the start (the seven
+directions of $\ln\beta(U)$, \texttt{SDSC2} and \texttt{NLPROP}) and no
+cut of the tangent. One Gauss--Newton step from the start (job 4411318)
+lowers the training cost, prior included, from 35\,543.4 to 34\,934.2,
+by 1.71\,\% against 1.68\,\% predicted, and the validation cost from
+50\,242.2 to 49\,772.0, by 0.94\,\%. The next step is predicted to gain
+0.11\,\%, below the 0.2\,\% rule, and is not run. At the knots $\beta$
+is 1.756, 1.953, 1.617, 1.801, 1.650, 1.610 and 1.880
+(figure~\ref{fig:betau}). The posterior standard deviation of $\ln\beta$
+is 0.007 to 0.020 from 5 to \SI{20}{m/s} and 0.065 at \SI{2}{m/s}, a
+lower bound (reduced $\chi^2$ 0.80). \texttt{SDSC2} becomes $\times1.137$
+and \texttt{NLPROP} $\times1.209$. The curve alternates by about
+$\pm0.1$ in $\ln\beta$ around 1.75: it is the minimum of the linear model
+at the start, not a measured shape, and it lies in another valley than
+the third step. In data cost the step gains half of what the third step
+gains on the training window (1.79 against 3.13\,\%) and a quarter on the
+validation window (0.94 against 4.12\,\%). About 85\,\% of the shortfall
+is in the altimeter term: on the validation window the altimeter bias
+and RMSE are \SI{+3.95}{cm} and \SI{26.27}{cm}, against $+5.76$ and
+\SI{26.46}{cm} at the start and $+1.36$ and \SI{25.66}{cm} at the third
+step. By wind (figure~\ref{fig:betaubias}) the altimeter bias at 15 to
+\SI{20}{m/s} goes from \SI{+14.2}{cm} at the start to \SI{+0.9}{cm}
+(third step $-6.1$), and the buoy bias at 12 to \SI{15}{m/s} from $-6.8$
+to \SI{-13.2}{cm} (third step $-17.3$). By observed $H_s$ the buoy bias
+at 6 to \SI{10}{m} is $-54.7$, $-74.6$ and \SI{-64.8}{cm} at the start,
+at the third step and with $\beta(U)$. Below \SI{6}{m} and \SI{20}{m/s}
+the RMSE of a class differs by at most \SI{3}{cm} between the three runs.
+The constant third step belongs to the family (every $c_k=-0.243$) and
+is better than this point, so the Jacobian frozen at the start cannot
+reach it, as in the calibration. Started from the third step in the
+coordinates $c_k$, the same Jacobian predicts a further 1.31\,\% on the
+training cost.
 \end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{fig/cal_betau_curve.png}
+\caption{Test of \texttt{BETAMAX} as a function of the wind: $\beta(U)$
+after one step from the start with the Jacobian of the start, with one
+posterior standard deviation (unscaled and scaled by the reduced
+$\chi^2$), over the distribution of the wind speeds of the node-hours of
+both windows. Dotted: the start (1.75); dashed: the third step of the
+calibration (1.3725).}
+\label{fig:betau}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig/cal_betau_bias.png}
+\caption{Test of \texttt{BETAMAX} as a function of the wind: bias and
+RMSE of the buoy and altimeter $H_s$ over both windows, binned by the
+observed $H_s$ and by the wind speed of the forcing at the observation,
+at the start (p0), at the third step of the calibration (s3) and with
+$\beta(U)$ (bu), under the third cost. CPU job 4415565.}
+\label{fig:betaubias}
+\end{figure}
 
 \begin{figure}[H]
 \centering
