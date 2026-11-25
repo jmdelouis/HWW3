@@ -1008,6 +1008,28 @@ penalties.
    alternation of $\pm 0.05$ between neighbouring knots costs about 5. The
    tangents of `SDSC2` and `NLPROP` at $p_0$ are those of the first step,
    since $\beta(U)$ with all $c_k = 0$ is the constant model.
+
+   *Result* (25 November, with the Jacobian frozen at $p_0$, no cut of the
+   tangent):
+   - One Gauss-Newton step lowered the cost by 1.79 % on the training
+     window and 0.94 % on validation. The next step was predicted to gain
+     0.11 %, so the test stopped there.
+   - $\beta$ goes 1.76, 1.95, 1.62, 1.80, 1.65, 1.61 and 1.88 at the
+     knots, with `SDSC2` ×1.137 and `NLPROP` ×1.209.
+   - The standard deviations of $\ln\beta$ are 0.007–0.02 between 5 and
+     20 m/s, lower bounds.
+   - This is less than the constant step 3 (−3.13 % and −4.12 %), which
+     belongs to the same family. The linear model at $p_0$ does not reach
+     it, and the alternating curve is a minimum of that linear model, not
+     a measured shape of $\beta(U)$.
+   - Against step 3, the buoy $H_s$ bias is 1.2–1.5 cm less negative.
+     On validation the altimeter bias is 2.6 cm larger (+3.95 against
+     +1.36 cm) and its RMSE 0.6 cm larger.
+   - At 15–20 m/s of wind the altimeter bias is +0.9 cm, against +14.2 cm
+     at $p_0$ and −6.1 cm at step 3.
+   - The same Jacobian at the residuals of step 3 predicts a further
+     −1.31 % for a $\beta(U)$ step from step 3. That step has not been run
+     ([GPU model results](wave_results.md)).
 2. Then one or two features of the wind history, computed from the forcing
    only: $dU/dt$, the turning rate of the wind direction and $|\nabla U|$,
    with a few spline coefficients each, using the vector tangent once the

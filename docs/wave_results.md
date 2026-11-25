@@ -1246,6 +1246,117 @@ $p_0$, which the `BETAMAX`$(U)$ test uses, reach no observation above
 from 23 November 07:27 to 24 November 11:47 (28 h). The CPU jobs took
 8.6 h: operators, evaluations and the WW3 runs.
 
+### `BETAMAX`$(U)$ test (25 November)
+
+**Set-up.** The test runs on the same windows and under the third cost
+([Differentiable WW3 study](differentiable.md), section 9.7):
+- control: $\ln\beta = \ln 1.75 + \sum_k c_k\phi_k(U)$ on the knots 2–20 m/s,
+  with `SDSC2` and `NLPROP`;
+- start: $p_0$;
+- Jacobian: frozen from the tangents at $p_0$ (`BETAU0`–`BETAU6`, jobs
+  4332611–4332617, with those of `SDSC2` and `NLPROP`);
+- no cut of the DIA's tangent (Jean-Marc's choice, see "Where the step-3
+  tangent grows" above);
+- prior: $\mathcal N(0, 0.25^2)$ with a smoothness term of scale 0.1
+  (`cal_gn.py --smooth 0.1`);
+- each trial is a 216 h value run (`cal_run_hpc.slurm` with `BETAU`,
+  then `cal_monitor_hpc.slurm`).
+
+**Steps.**
+- Step 1 (job 4411318, 21 min; monitoring job 4411319): the training cost
+  with its prior went from 35,543.4 to 34,934.2 (−1.71 %, against −1.68 %
+  predicted). The validation data term went from 50,242.2 to 49,772.0
+  (−0.94 %).
+- Step 2 is predicted to gain only 0.11 %, below the 0.2 % of the stopping
+  rule, so it was not run.
+
+The final point is step 1. The posterior below is the inverse Hessian of
+the $p_0$ Jacobian at the step-1 residuals: a lower bound.
+
+| Knot (m/s) | 2 | 5 | 8 | 11 | 14 | 17 | 20 |
+|---|---|---|---|---|---|---|---|
+| $c_k$ | +0.004 | +0.110 | −0.079 | +0.029 | −0.059 | −0.083 | +0.072 |
+| $\beta$ | 1.756 | 1.953 | 1.617 | 1.801 | 1.650 | 1.610 | 1.880 |
+| sd of $\ln\beta$ | 0.065 | 0.020 | 0.013 | 0.007 | 0.010 | 0.011 | 0.012 |
+
+- `SDSC2` becomes ×1.137 (sd of the logarithm 0.017) and `NLPROP` ×1.209
+  (0.016).
+- The reduced chi-square is 0.80, which scales the standard deviations by
+  0.89.
+- The largest correlations are those of `SDSC2` with `NLPROP` (+0.68) and
+  with the knots at 8–20 m/s (+0.22 to +0.48).
+
+The curve alternates between the knots by ±0.1 in $\ln\beta$ around a mean
+near 1.75. This is far more than its standard deviations, but those are
+lower bounds, and the point is a minimum of the linear model at $p_0$. It
+lies in another valley than the constant step 3 (`BETAMAX` 1.37,
+`SDSC2` ×0.649): it raises `SDSC2` and `NLPROP` instead.
+
+**Cost and scores against $p_0$ and step 3** (third cost, data term; the
+prior is 26.4 for $\beta(U)$ and 4.2 for step 3; altimeters and buoy $H_s$
+in cm, bias / RMSE, through the operators of the third cost):
+
+| Window | Run | $J$ | Altimeters | Buoy $H_s$ | Buoy $T_{m02}$ (s) |
+|---|---|---|---|---|---|
+| training | $p_0$ | 35,543.4 | +2.86 / 25.46 | −7.48 / 27.68 | −0.490 / 0.996 |
+| | step 3 | 34,432.2 (−3.13 %) | −1.38 / 24.73 | −9.60 / 28.52 | −0.460 / 0.972 |
+| | $\beta(U)$ | 34,907.8 (−1.79 %) | +1.23 / 25.05 | −8.45 / 28.30 | −0.460 / 0.971 |
+| validation | $p_0$ | 50,242.2 | +5.76 / 26.46 | −5.45 / 38.44 | −0.422 / 1.017 |
+| | step 3 | 48,173.9 (−4.12 %) | +1.36 / 25.66 | −8.89 / 38.67 | −0.406 / 0.993 |
+| | $\beta(U)$ | 49,772.0 (−0.94 %) | +3.95 / 26.27 | −7.35 / 38.76 | −0.394 / 1.005 |
+
+$\beta(U)$ lowers the cost by half as much as step 3 on the training
+window, and by a quarter as much on validation. Compared with step 3:
+- it keeps more of the altimeter bias of $p_0$;
+- its buoy $H_s$ bias is 1.2–1.5 cm less negative;
+- on validation, the altimeter cost carries most of the shortfall.
+
+**Bias by sea state and by wind** (both windows, cm, $p_0$ / step 3 /
+$\beta(U)$, `scripts/betau_report.py`, `cal/betau_report` on hpc):
+
+| Observations | Class | Number | $p_0$ | Step 3 | $\beta(U)$ |
+|---|---|---|---|---|---|
+| buoy $H_s$, by observed $H_s$ | 2–3 m | 3,076 | −15.6 | −21.4 | −18.8 |
+| | 4–6 m | 635 | −31.7 | −45.0 | −42.2 |
+| | 6–10 m | 131 | −54.7 | −74.6 | −64.8 |
+| buoy $H_s$, by wind | 9–12 m/s | 4,750 | −6.7 | −11.8 | −8.9 |
+| | 12–15 m/s | 2,026 | −6.8 | −17.3 | −13.2 |
+| | 15–20 m/s | 701 | −12.4 | −26.3 | −23.7 |
+| | 20–30 m/s | 14 | −22.1 | −54.9 | −13.2 |
+| altimeters, by observed $H_s$ | 2–3 m | 17,341 | +7.1 | +3.4 | +5.9 |
+| | 4–6 m | 4,084 | −5.0 | −17.1 | −13.2 |
+| | 6–8 m | 496 | −24.0 | −43.6 | −32.8 |
+| | 8–15 m | 39 | −73.7 | −104.9 | −65.3 |
+| altimeters, by wind | 9–12 m/s | 12,422 | +7.8 | +2.6 | +5.9 |
+| | 12–15 m/s | 4,586 | +12.0 | +0.6 | +5.6 |
+| | 15–20 m/s | 1,389 | +14.2 | −6.1 | +0.9 |
+| | 20–30 m/s | 62 | +19.2 | −19.3 | +21.8 |
+
+- At 15–20 m/s, $\beta(U)$ brings the altimeter bias to +0.9 cm, against
+  +14.2 at $p_0$ and −6.1 at step 3.
+- Its bias for the buoys above 4 m stays between those of $p_0$ and step 3.
+- With $\beta$ rising to 1.88 above 20 m/s, the 62 altimeter blocks there
+  get +21.8 cm, more than at $p_0$, and the 14 buoy hours −13.2 cm.
+
+Below 6 m and 20 m/s, the RMSEs of a class differ by at most 3 cm
+between the three runs.
+
+**What it shows.** With the Jacobian frozen at $p_0$, $\beta(U)$ does not
+reach the cost of the constant step 3, although the constant is in its
+family: all $c_k = \ln(1.3725/1.75) = -0.243$. The linear model at $p_0$ is
+not accurate that far, as in the calibration, which needed the Jacobian at
+step 1.
+
+The same Jacobian applied at the residuals of step 3, from step 3 written
+in the $c_k$ (CPU job 4415564, no run), predicts a further −1.31 % of the
+cost with its prior (34,442.0 to 33,989.3):
+- $\ln\beta$ moves by +0.17, +0.20, −0.03, +0.05, −0.01, −0.06 and +0.11
+  at the knots;
+- `SDSC2` moves to ×0.636.
+
+**Cost.** One 216 h value run took 0.34 GPU-hours. The GPU tally from
+23 November 07:27 is 35.0 GPU-hours.
+
 ## Preprocessing in Rust (in progress)
 
 The aim is a GPU run that needs no WW3 tool; WW3 then only makes the
