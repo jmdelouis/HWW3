@@ -2629,20 +2629,40 @@ at the third step and with $\beta(U)$. Below \SI{6}{m} and \SI{20}{m/s}
 the RMSE of a class differs by at most \SI{3}{cm} between the three runs.
 The constant third step belongs to the family (every $c_k=-0.243$) and
 is better than this point, so the Jacobian frozen at the start cannot
-reach it, as in the calibration. Started from the third step in the
-coordinates $c_k$, the same Jacobian predicts a further 1.31\,\% on the
-training cost.
+reach it, as in the calibration.
+\item \emph{From the third step.} Started from the third step in the
+coordinates $c_k$, the same Jacobian at the residuals of the third step
+predicts a further 1.31\,\% on the training cost. The step (job 4415590)
+gives $\beta$ of 1.625, 1.684, 1.336, 1.438, 1.355, 1.298 and 1.525 at
+the knots, \texttt{SDSC2} $\times0.636$ and \texttt{NLPROP}
+$\times1.136$. The training cost with the prior falls by 1.14\,\% from
+the third step (1.31\,\% predicted), 4.29\,\% from the start in data
+cost, but the validation cost rises by 0.87\,\%, from 48\,173.9 to
+48\,592.1 (altimeters $+401$, $T_{m02}$ $+151$, buoy $H_s$ $-134$), so
+the step is rejected and the test ends at the third step. The point
+repeats the alternation of the first one, 0.15 to 0.23 lower in
+$\ln\beta$ from \SI{5}{m/s} up (figure~\ref{fig:betau}); both come from
+the same Jacobian, so the shape is not independent evidence. Its RMSE is
+equal to or lower than that of the third step in 22 of 31 classes of
+figure~\ref{fig:betaubias}, mostly rare ones (altimeters above
+\SI{8}{m}: 90.1 against \SI{116.7}{cm}), but 0.4 to \SI{0.5}{cm} higher
+for the altimeters at 1.5 to \SI{3}{m}, where most blocks are and where
+the validation cost rises. On these two-day windows and with the
+Jacobian of the start, $\beta(U)$ does not beat the constant third step
+on the validation window; the test with a month of data and a refreshed
+Jacobian is left for after the optimisation.
 \end{itemize}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.8\textwidth]{fig/cal_betau_curve.png}
 \caption{Test of \texttt{BETAMAX} as a function of the wind: $\beta(U)$
-after one step from the start with the Jacobian of the start, with one
-posterior standard deviation (unscaled and scaled by the reduced
-$\chi^2$), over the distribution of the wind speeds of the node-hours of
-both windows. Dotted: the start (1.75); dashed: the third step of the
-calibration (1.3725).}
+after one step from the start (bu1, accepted) and one step from the third
+step of the calibration (bus3, rejected on the validation window), both
+with the Jacobian of the start, with one posterior standard deviation
+(unscaled and scaled by the reduced $\chi^2$), over the distribution of
+the wind speeds of the node-hours of both windows. Dotted: the start
+(1.75); dashed: the third step (1.3725). CPU job 4415662.}
 \label{fig:betau}
 \end{figure}
 
@@ -2652,8 +2672,9 @@ calibration (1.3725).}
 \caption{Test of \texttt{BETAMAX} as a function of the wind: bias and
 RMSE of the buoy and altimeter $H_s$ over both windows, binned by the
 observed $H_s$ and by the wind speed of the forcing at the observation,
-at the start (p0), at the third step of the calibration (s3) and with
-$\beta(U)$ (bu), under the third cost. CPU job 4415565.}
+at the start (p0), at the third step of the calibration (s3), with
+$\beta(U)$ after one step from the start (bu) and after one step from the
+third step (bus3), under the third cost. CPU job 4415662.}
 \label{fig:betaubias}
 \end{figure}
 
