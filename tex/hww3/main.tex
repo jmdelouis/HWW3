@@ -2938,6 +2938,30 @@ scheme and 10.8 times faster than the implicit one.
 \end{itemize}
 \end{itemize}
 
+\paragraph{WW3 structured grids (in progress).} To compare with a global
+multi-grid configuration of WW3 (a regular grid of $0.125^\circ$ from
+$35^\circ$S to $35^\circ$N and two curvilinear polar grids of 15\,km,
+coupled by \texttt{ww3\_multi}, 36 frequencies, 985\,s per model day on
+252 processes), the GPU model reads regular and curvilinear WW3 grids
+and runs them as triangulated meshes with its explicit N scheme (commit
+\texttt{25b14cf}). WW3's third-order UQ scheme and the coupling between
+grids are not reproduced, so agreement with WW3 is not expected to the
+micrometre.
+\begin{itemize}
+\item The meshes have exactly the sea points of \texttt{ww3\_grid}:
+1\,189\,867 for the regular grid, 358\,184 and 529\,414 for the Arctic
+and Antarctic grids (33, 84 and 10 isolated points dropped). The
+regular grid is closed in longitude. The Arctic grid is meshed in a
+frame where the pole is moved to the equator, with the angle at each
+node to turn the wind and current vectors.
+\item Not in the GPU model and left out of these runs: the ice terms
+IC2 and IS2, the coastal reflection REF1, the subgrid obstructions, and
+the choice \texttt{SDSBCHOICE}\,=\,3 with the isotropic cumulative term
+$\texttt{SDSCUM}=+0.3$ of the configuration (the runs use
+\texttt{SDSBCHOICE}\,=\,1 and $\texttt{SDSCUM}=0$, the rest of the
+parameters unchanged).
+\end{itemize}
+
 
 \appendix
 \section{Reproducing}
