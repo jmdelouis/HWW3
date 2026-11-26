@@ -8,6 +8,9 @@
 //!     grid. With --msh the node coordinates are those of the gmsh file, as
 //!     WW3 reads them, instead of the grid's raw arrays (they must agree to
 //!     1e-5 degree).
+//!     On a mesh of a WW3 structured grid in rotated coordinates (hww3-pre
+//!     struct), the fields are interpolated at the geographic positions of
+//!     the nodes and vectors turned into the rotated frame.
 //! hww3-pre cmp-fields A.ww3 B.ww3
 //!     Compare two forcing files time by time: number of values that
 //!     differ and largest difference, per field, over the times of A found
@@ -118,7 +121,11 @@ fn prnc(a: &Args) -> Result<()> {
     anyhow::ensure!(inp.vars.len() == field.ncomp(), "{} variables in the input for {} components", inp.vars.len(), field.ncomp());
     let t0 = Instant::now();
     let grid = Grid::read(&grid_dir)?;
-    let (x, y) = node_coordinates(a, &grid)?;
+    // a mesh of a structured grid in rotated coordinates: interpolate at the
+    // geographic positions, then turn the vectors into the rotated frame
+    let (lon_geo, lat_geo, angle) = Mesh::geographic(&grid_dir, &grid)?;
+    let rotated = angle.iter().any(|&v| v != 0.0);
+    let (x, y) = if rotated && !a.opts.contains_key("--msh") { (lon_geo, lat_geo) } else { node_coordinates(a, &grid)? };
     let g = &inp.grid;
     let w = g.weights(&x, &y);
     println!(
@@ -148,7 +155,14 @@ fn prnc(a: &Args) -> Result<()> {
         }
         let xc = inp.field(0, it)?;
         let yc = if field.ncomp() == 2 { Some(inp.field(1, it)?) } else { None };
-        let f = field.process(&w, g.nxi, &xc, yc.as_deref(), inp.fill);
+        let mut f = field.process(&w, g.nxi, &xc, yc.as_deref(), inp.fill);
+        if rotated && f.len() == 2 {
+            for i in 0..f[0].len() {
+                let (u, v) = rotate_vector(f[0][i] as f64, f[1][i] as f64, angle[i]);
+                f[0][i] = u as f32;
+                f[1][i] = v as f32;
+            }
+        }
         fw.write(t, &f)?;
         n += 1;
     }
