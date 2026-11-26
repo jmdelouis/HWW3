@@ -104,6 +104,62 @@ The spectral grid is the configuration's (`NK = 36`, `NTH = 36`, `FREQ1 =
 0.0339`, `XFR = 1.1`), with the source parameters of its namelists. The
 option `--par-red` of the source kernel needs `NK <= 32` and is off.
 
+## Results on IRIGLOB-7M (one A100, single precision)
+
+Runs of `scripts/struct_run_hpc.slurm` and `scripts/struct_probe_hpc.slurm`
+on an A100-SXM4-80GB of hpc, with the wind and currents that WW3 used on
+the grid (`FIELD_NC/WW3-IRIGLOB-7M_201901.nc`, 1-8 January 2019, written
+on the nodes by `scripts/struct_fieldnc.py`), from calm conditions on
+1 January 00 h:
+
+| Run | Job | Hours | s per model day |
+|---|---|---|---|
+| idealised wind, from calm | 4509420 | 24 | 4,153 |
+| FIELD_NC wind and currents, from calm | 4514626 | 72 | 3,500 |
+
+The cost of the 72 h run stays at 840-900 s per 6 h while the mean H_s
+grows from 0.97 to 2.16 m: it does not come from the calm start. More than
+99 % of it is the source kernel. The source integration of `W3SRCE` takes
+dynamic sub-steps limited by the largest allowed change of the spectrum,
+with at least `DTMIN = 10` s: probes of 1 h from the restart of 4 January
+00 h (mean raw step `dtdyn` of the source kernel at every 1000th node;
+sub-steps per 600 s step `min(60, 600 / max(dtdyn, DTMIN))`) give
+
+| Grid, namelist | Job | Sub-steps per step (mean, median, p90) | s per model day (1 h) |
+|---|---|---|---|
+| IRIGLOB-7M, IRI namelist (`FXFM3 20`, `SDSBR 0.005`) | 4530985 | 36.6, 60, 60 (51 % of the nodes at `DTMIN`) | 3,492 |
+| IRIGLOB-7M, `SDSBR 0.0009` | 4533686 | 25.7, 18.1, 60 | 2,342 |
+| IRIGLOB-7M, `FXFM3 2.5` | 4532957 | 15.3, 11.8, 36.9 | 1,561 |
+| IRIGLOB-7M, `FXFM3 2.5` and `SDSBR 0.0009` | 4533687 | 10.6, 10.9, 17.8 | 1,196 |
+| IRIGLOB-7M, HWW3 namelist (`BETAMAX 1.75`, `SINTABLE 0`, ST4 defaults) | 4532958 | 1.5, 1.0, 2.9 | 343 |
+| v5 K=4 (NK 32), HWW3 namelist | 4530985 | 1.7, 1.0, 2.4 | 263 (101.5 over 48 h) |
+
+So the cost is set by the source parameters of the configuration, not
+by the grid or by `NK = 36`: the prognostic range up to 20 times the mean
+frequency (`FXFM3 = 20`) with frequencies up to 0.96 Hz, and the
+saturation threshold `SDSBR = 0.005`, make the limiter take 20 times more
+sub-steps than in the HWW3 runs. WW3 integrates the sources with the same
+limiter. Per node and sub-step the kernel costs about 0.56 µs on
+IRIGLOB-7M (NK 36) and 0.7 µs on v5 K=4 (NK 32); with the HWW3 namelist
+the cost per node is about 1.2 times that of v5 K=4 (36 frequencies
+instead of 32, 3 nodes per SM instead of 4 in the source kernel). The
+replacement of `SDSBCHOICE = 3` and `SDSCUM = 0.3` changes the
+dissipation and so possibly the number of sub-steps WW3 takes.
+
+At NK 36 the source kernel holds about 43,150 B per node in single
+precision (3 nodes per SM, against 4 at NK 32) and about 85,000 B in
+double precision (1 node per SM, against 2).
+
+H_s against `FIELD_NC` (`scripts/struct_compare.py`; WW3 started 20 days
+earlier, so the GPU run lacks the swell at first):
+
+| Time | Mean H_s GPU / WW3 (m) | Bias (m) | RMSE (m) | Correlation |
+|---|---|---|---|---|
+| 1 Jan 12 h | 1.30 / 2.12 | -0.82 | 1.06 | 0.70 |
+| 2 Jan 12 h | 1.81 / 2.12 | -0.31 | 0.67 | 0.82 |
+| 3 Jan 12 h | 2.09 / 2.13 | -0.05 | 0.49 | 0.88 |
+| 4 Jan 00 h | 2.16 / 2.13 | +0.03 | 0.48 | 0.89 |
+
 The WW3 reference took 137,953 s of wall time on 252 MPI processes of
 Datarmor for the 140 days (`log.mww3`), 985 s per model day for the three
 grids together (2,077,465 sea points).
