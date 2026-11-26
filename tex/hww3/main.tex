@@ -2938,7 +2938,7 @@ scheme and 10.8 times faster than the implicit one.
 \end{itemize}
 \end{itemize}
 
-\paragraph{WW3 structured grids (in progress).} To compare with a global
+\paragraph{WW3 structured grids.} To compare with a global
 multi-grid configuration of WW3 (a regular grid of $0.125^\circ$ from
 $35^\circ$S to $35^\circ$N and two curvilinear polar grids of 15\,km,
 coupled by \texttt{ww3\_multi}, 36 frequencies, 985\,s per model day on
@@ -2979,6 +2979,17 @@ dynamic step and so pays the same sub-steps, but its choice
 \item $H_s$ against the WW3 run on 4 January 00 h: bias \SI{+0.03}{m},
 RMSE \SI{0.48}{m}, correlation 0.89, still converging after three days
 of spin-up against twenty for WW3.
+\item The polar grids, run for 12 hours from a calm sea with the ERA5
+wind and ice and the CMEMS currents and the same parameters, take
+\SI{1127}{s} per model day for the Arctic grid and \SI{1805}{s} for the
+Antarctic grid (commit \texttt{62e26d9}), about \SI{3}{ms} per node and
+model day as for the regular grid (2.94, 3.15 and \SI{3.41}{ms}). The
+three grids one after the other take \SI{6432}{s} per model day on one
+A100, or 1.8 GPU-hours, against \SI{985}{s} on 252 processes for WW3,
+or about 69 core-hours. With the parameters of the North Atlantic runs
+the regular grid alone takes \SI{343}{s}. Double precision, which fits
+one node per multiprocessor at 36 frequencies, and an $H_s$ comparison
+on the polar grids were not run.
 \end{itemize}
 
 
