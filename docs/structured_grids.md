@@ -146,6 +146,27 @@ instead of 32, 3 nodes per SM instead of 4 in the source kernel). The
 replacement of `SDSBCHOICE = 3` and `SDSCUM = 0.3` changes the
 dissipation and so possibly the number of sub-steps WW3 takes.
 
+## The polar grids
+
+ARC-15KM (meshed in rotated coordinates) and ANTARC-15KM run 12 h from
+calm on 1 January 2019 with the ERA5 wind and ice and the CMEMS currents of
+the same week (interpolated by `hww3-pre prnc`, the vectors of ARC-15KM
+turned into the rotated frame), with the IRI namelist as on IRIGLOB-7M.
+Their active-boundary points keep calm spectra (no coupling between the
+grids):
+
+| Grid | Nodes | Job | s per model day | ms per node and model day |
+|---|---|---|---|---|
+| IRIGLOB-7M | 1,189,834 | 4514626 | 3,500 | 2.94 |
+| ARC-15KM | 358,100 | 4537364 | 1,127 | 3.15 |
+| ANTARC-15KM | 529,404 | 4537365 | 1,805 | 3.41 |
+
+The three grids one after the other take 6,432 s per model day on one
+A100 with the IRI source parameters, against 985 s per model day for
+WW3 on 252 processes (about 69 core-hours per model day, the A100 1.8
+hours); with the source parameters of the HWW3 runs IRIGLOB-7M alone takes
+343 s per model day.
+
 At NK 36 the source kernel holds about 43,150 B per node in single
 precision (3 nodes per SM, against 4 at NK 32) and about 85,000 B in
 double precision (1 node per SM, against 2).
