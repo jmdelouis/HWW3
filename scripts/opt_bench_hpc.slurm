@@ -16,6 +16,8 @@
 #   f32w  216 h value run in single precision (the week);
 #   f32   48 h value run in single precision;
 #   f64   the same in double precision;
+#   dev32, dev64  48 h from the restart of 8 January 00 h in f32 and f64
+#         (the hours of the WW3 reference on 32 ranks);
 #   tl    24 h of the f64 BETAMAX tangent;
 #   tl32  the same tangent in single precision, against the f64 tangent of
 #         the present build (relative differences);
@@ -33,13 +35,15 @@
 #   srcs  the same for each build of BINS (directories of $S/opt separated
 #         by :, such as bin_base:bin_ws:bin_spw), one after the other on the
 #         same GPU, REPEAT times (default 2);
+#   srcpr the source kernel alone of NEW with and without --par-red;
 #   m3    the M3 check of the source tangent (hww3-src check-tl against
 #         central differences on the harness nodes of grids v5 K=4 and v4)
 #         with both builds.
 # The first run of a reference also compares it with the calibration run
 # at p0 it repeats ($S/cal/it0_value, $S/cal/it0_BETAMAX).
 #   sbatch --export=ALL,TAG=ws,CASES="f32w f64 tl" scripts/opt_bench_hpc.slurm
-# UNITS sets the units per cube of the new runs (default 128).
+# UNITS sets the units per cube of the new runs (default 128), XOPT adds
+# options to the new value runs (such as --par-red).
 S=/scratch/jmdeloui/HWW3
 D=$S/m2/forcing
 G=$S/grids/natl_v5k4
@@ -81,13 +85,23 @@ for c in ${CASES:-f32w f64 tl}; do
   case $c in
     f32w)
       ref f32w 216
-      run $NEW $O/f32w 216 --units ${UNITS:-128}
+      run $NEW $O/f32w 216 --units ${UNITS:-128} $XOPT
       $PY scripts/opt_compare.py $S/opt/bench/base/f32w $O/f32w --prefix hs,t02 ;;
     f32|f64)
       opt=""; [ $c = f64 ] && opt="--f64"
       ref $c 48 $opt
-      run $NEW $O/$c 48 --units ${UNITS:-128} $opt
+      run $NEW $O/$c 48 --units ${UNITS:-128} $opt $XOPT
       $PY scripts/opt_compare.py $S/opt/bench/base/$c $O/$c --prefix hs,t02 ;;
+    dev32|dev64)
+      # 48 h from the restart of 8 January 00 h of the explicit run (the
+      # hours of the WW3 reference with the full ST4 on 32 ranks, job 4139131)
+      opt=""; [ $c = dev64 ] && opt="--f64"
+      R0=$R
+      R=$S/m1/v5k4/restart001.ww3
+      ref $c 48 $opt
+      run $NEW $O/$c 48 --units ${UNITS:-128} $opt $XOPT
+      $PY scripts/opt_compare.py $S/opt/bench/base/$c $O/$c --prefix hs,t02
+      R=$R0 ;;
     tl)
       ref tl 24 --f64 --tangent BETAMAX
       run $NEW $O/tl 24 --units ${UNITS:-128} --f64 --tangent BETAMAX
@@ -137,6 +151,17 @@ for c in ${CASES:-f32w f64 tl}; do
           done
         done
       done ;;
+    srcpr)
+      # the source kernel alone of NEW with and without --par-red, one after
+      # the other, REPEAT times, with the differences against WW3 and the CPU
+      for k in $(seq ${REPEAT:-2}); do
+        for opt in "" --f64; do
+          for pr in "" --par-red; do
+            echo "== check-gpu $opt $pr"
+            $NEW/hww3-src check-gpu $S/m2/harness/src_8jan_full.bin $opt $pr --units ${UNITS:-128} --replicate ${REP:-200} 2>&1 | grep -E "^GPU|after the step|dynamic step"
+          done
+        done
+      done ;;
     m3)
       for hn in src_8jan_full.bin src_v4_full.bin; do
         for b in $BASE $NEW; do
@@ -144,6 +169,6 @@ for c in ${CASES:-f32w f64 tl}; do
           $b/hww3-src check-tl $S/m2/harness/$hn --units ${UNITS:-128} --h 1e-4 2>&1 | grep -vE "^\s*$"
         done
       done ;;
-    *) echo "case $c: f32w, f32, f64, tl, tl32, tl32w, freeze32, probe32, src, srcs or m3" ;;
+    *) echo "case $c: f32w, f32, f64, tl, tl32, tl32w, dev32, dev64, freeze32, probe32, src, srcs, srcpr or m3" ;;
   esac
 done

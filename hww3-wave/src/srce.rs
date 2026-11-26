@@ -211,6 +211,7 @@ fn spr4<F: Float>(
     tauwy: F,
     #[comptime] nk: usize,
     #[comptime] nth: usize,
+    #[comptime] parred: bool,
 ) {
     let t = UNIT_POS as usize;
     let zero = F::new(0.0f32);
@@ -233,29 +234,71 @@ fn spr4<F: Float>(
         kb[K_AMAX * nk + t] = amax;
     }
     sync_cube();
+    // the sums over the frequencies: on unit 0 in the order of WW3, or with
+    // the option parred (NK <= 32) by the units of the first plane
+    let mut pe = zero;
+    let mut pf = zero;
+    let mut pf1 = zero;
+    let mut pw = zero;
+    let mut pews = zero;
+    let mut pfws = zero;
+    let mut pamax = zero;
+    if parred && nk <= 32 {
+        if t < 32 {
+            let mut e = zero;
+            let mut fe = zero;
+            let mut f1 = zero;
+            let mut w = zero;
+            let mut ews = zero;
+            let mut fws = zero;
+            let mut am = zero;
+            if t < nk {
+                let f = kb[K_DCG * nk + t];
+                let eb = kb[K_EB * nk + t] * f;
+                let eb2 = kb[K_EB2 * nk + t] * f;
+                let sp = kb[K_SPW * nk + t];
+                e = eb;
+                fe = eb / sig[t + 1];
+                f1 = eb * sp;
+                w = eb * kb[K_WNP * nk + t];
+                ews = eb2;
+                fws = eb2 * sp;
+                am = kb[K_AMAX * nk + t];
+            }
+            pe = plane_sum(e);
+            pf = plane_sum(fe);
+            pf1 = plane_sum(f1);
+            pw = plane_sum(w);
+            pews = plane_sum(ews);
+            pfws = plane_sum(fws);
+            pamax = plane_max(am);
+        }
+    }
     if t == 0 {
         let tw = par[P_WWNMEANPTAIL];
         let wp = par[P_WWNMEANP];
-        let mut emean = zero;
-        let mut fmean = zero;
-        let mut fmean1 = zero;
-        let mut wnmean = zero;
-        let mut emeanws = zero;
-        let mut fmeanws = zero;
-        let mut amax = zero;
-        for ik in 0..nk {
-            let f = kb[K_DCG * nk + ik];
-            let eb = kb[K_EB * nk + ik] * f;
-            let eb2 = kb[K_EB2 * nk + ik] * f;
-            let s = sig[ik + 1];
-            let sp = kb[K_SPW * nk + ik];
-            emean += eb;
-            fmean += eb / s;
-            fmean1 += eb * sp;
-            wnmean += eb * kb[K_WNP * nk + ik];
-            emeanws += eb2;
-            fmeanws += eb2 * sp;
-            amax = max(amax, kb[K_AMAX * nk + ik]);
+        let mut emean = pe;
+        let mut fmean = pf;
+        let mut fmean1 = pf1;
+        let mut wnmean = pw;
+        let mut emeanws = pews;
+        let mut fmeanws = pfws;
+        let mut amax = pamax;
+        if !(parred && nk <= 32) {
+            for ik in 0..nk {
+                let f = kb[K_DCG * nk + ik];
+                let eb = kb[K_EB * nk + ik] * f;
+                let eb2 = kb[K_EB2 * nk + ik] * f;
+                let s = sig[ik + 1];
+                let sp = kb[K_SPW * nk + ik];
+                emean += eb;
+                fmean += eb / s;
+                fmean1 += eb * sp;
+                wnmean += eb * kb[K_WNP * nk + ik];
+                emeanws += eb2;
+                fmeanws += eb2 * sp;
+                amax = max(amax, kb[K_AMAX * nk + ik]);
+            }
         }
         let ddl = dden[nk - 1];
         let cgl = kb[K_CG * nk + nk - 1];
@@ -410,6 +453,7 @@ fn sin4<F: Float>(
     accumulate: bool,
     #[comptime] nk: usize,
     #[comptime] nth: usize,
+    #[comptime] parred: bool,
 ) {
     let t = UNIT_POS as usize;
     let zero = F::new(0.0f32);
@@ -510,6 +554,12 @@ fn sin4<F: Float>(
             sc[S_SINU] = select(pos, taupy / r, zero);
         }
         sync_cube();
+        // the contributions of this direction to SX, SY (positive input) and
+        // SNX, SNY (negative input), for the option parred
+        let mut px = zero;
+        let mut py = zero;
+        let mut nx = zero;
+        let mut ny = zero;
         if t < nth {
             let ustp = sc[S_USTP];
             let cosu = sc[S_COSU];
@@ -548,36 +598,79 @@ fn sin4<F: Float>(
             }
             let x = a[is];
             let temp2 = const2 * dst * x;
-            dr[t] = temp2 * ecos[t];
-            dr[nth + t] = temp2 * esin[t];
-            dr[2 * nth + t] = select(dst < zero, one, zero);
+            if parred {
+                let neg = dst < zero;
+                let cx = temp2 * ecos[t];
+                let cy = temp2 * esin[t];
+                px = select(neg, zero, cx);
+                py = select(neg, zero, cy);
+                nx = select(neg, cx, zero);
+                ny = select(neg, cy, zero);
+            } else {
+                dr[t] = temp2 * ecos[t];
+                dr[nth + t] = temp2 * esin[t];
+                dr[2 * nth + t] = select(dst < zero, one, zero);
+            }
             ws[is] = select(llws > zero, 1u8, 0u8);
             if accumulate {
                 vs[is] += scale * (dst * x);
                 vd[is] += scale * dst;
             }
         }
-        sync_cube();
-        if t == 0 {
-            let mut sx = sc[S_SX];
-            let mut sy = sc[S_SY];
-            let mut snx = sc[S_SNX];
-            let mut sny = sc[S_SNY];
-            for th in 0..nth {
-                if dr[2 * nth + th] > zero {
-                    snx += dr[th];
-                    sny += dr[nth + th];
-                } else {
-                    sx += dr[th];
-                    sy += dr[nth + th];
-                }
+        if parred {
+            // sums over the directions by planes, then over the planes
+            let qx = plane_sum(px);
+            let qy = plane_sum(py);
+            let rx = plane_sum(nx);
+            let ry = plane_sum(ny);
+            let w = t / 32;
+            if UNIT_POS_PLANE == 0u32 && w < (nth + 31) / 32 {
+                dr[4 * w] = qx;
+                dr[4 * w + 1] = qy;
+                dr[4 * w + 2] = rx;
+                dr[4 * w + 3] = ry;
             }
-            sc[S_SX] = sx;
-            sc[S_SY] = sy;
-            sc[S_SNX] = snx;
-            sc[S_SNY] = sny;
+            sync_cube();
+            if t == 0 {
+                let mut sx = sc[S_SX];
+                let mut sy = sc[S_SY];
+                let mut snx = sc[S_SNX];
+                let mut sny = sc[S_SNY];
+                for j in 0..(nth + 31) / 32 {
+                    sx += dr[4 * j];
+                    sy += dr[4 * j + 1];
+                    snx += dr[4 * j + 2];
+                    sny += dr[4 * j + 3];
+                }
+                sc[S_SX] = sx;
+                sc[S_SY] = sy;
+                sc[S_SNX] = snx;
+                sc[S_SNY] = sny;
+            }
+            sync_cube();
+        } else {
+            sync_cube();
+            if t == 0 {
+                let mut sx = sc[S_SX];
+                let mut sy = sc[S_SY];
+                let mut snx = sc[S_SNX];
+                let mut sny = sc[S_SNY];
+                for th in 0..nth {
+                    if dr[2 * nth + th] > zero {
+                        snx += dr[th];
+                        sny += dr[nth + th];
+                    } else {
+                        sx += dr[th];
+                        sy += dr[nth + th];
+                    }
+                }
+                sc[S_SX] = sx;
+                sc[S_SY] = sy;
+                sc[S_SNX] = snx;
+                sc[S_SNY] = sny;
+            }
+            sync_cube();
         }
-        sync_cube();
     }
     if t == 0 {
         let sx = sc[S_SX];
@@ -1279,6 +1372,7 @@ pub fn srce<F: Float>(
     #[comptime] nspecy: usize,
     #[comptime] nsat: usize,
     #[comptime] nu: usize,
+    #[comptime] parred: bool,
 ) {
     let i = CUBE_POS as usize;
     let t = UNIT_POS as usize;
@@ -1340,17 +1434,17 @@ pub fn srce<F: Float>(
                 isc_ds = max(zero, min(one, one - c * par[P_ICESCALES + 3]));
             }
             // before the loop: W3SPR4, W3SIN4 (TAUWBUG), W3SPR4
-            spr4::<F>(par, taut, sig, dden, &a, &ws, &mut kb, &mut sc, u, zero, zero, nk, nth);
+            spr4::<F>(par, taut, sig, dden, &a, &ws, &mut kb, &mut sc, u, zero, zero, nk, nth, parred);
             if !start {
                 let ust0 = sc[S_USTAR];
                 let z00 = sc[S_Z0];
                 sin4::<F>(
                     par, tauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &mut vs, &mut vd, &mut ws, &mut kb, &mut sc, &mut dr, ust0, z00, udir, beta, one, false, nk,
-                    nth,
+                    nth, parred,
                 );
                 let tauwx = sc[S_TAUWX];
                 let tauwy = sc[S_TAUWY];
-                spr4::<F>(par, taut, sig, dden, &a, &ws, &mut kb, &mut sc, u, tauwx, tauwy, nk, nth);
+                spr4::<F>(par, taut, sig, dden, &a, &ws, &mut kb, &mut sc, u, tauwx, tauwy, nk, nth, parred);
             }
             if t == 0 {
                 let fh = max(par[P_FFXFM] * max(sc[S_FMEAN1], sc[S_FMEANWS]), par[P_FFXPM] / sc[S_USTAR]);
@@ -1380,7 +1474,7 @@ pub fn srce<F: Float>(
                 sync_cube();
                 sin4::<F>(
                     par, tauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, &a, &mut vs, &mut vd, &mut ws, &mut kb, &mut sc, &mut dr, ustar, z0, udir, beta, isc_in, true,
-                    nk, nth,
+                    nk, nth, parred,
                 );
                 let stauwx = sc[S_TAUWX];
                 let stauwy = sc[S_TAUWY];
@@ -1410,12 +1504,27 @@ pub fn srce<F: Float>(
                         dtl = min(dtl, afac / max(F::new(1.0e-10f32), one + afac * min(zero, vd[is])));
                     }
                 }
-                red[t] = dtl;
+                // the minimum over the units (any order gives the same value):
+                // on unit 0, or with parred by planes
+                if parred {
+                    let m = plane_min(dtl);
+                    if UNIT_POS_PLANE == 0u32 {
+                        red[t / 32] = m;
+                    }
+                } else {
+                    red[t] = dtl;
+                }
                 sync_cube();
                 if t == 0 {
                     let mut dt = red[0];
-                    for j in 1..nu {
-                        dt = min(dt, red[j]);
+                    if parred {
+                        for j in 1..(nu + 31) / 32 {
+                            dt = min(dt, red[j]);
+                        }
+                    } else {
+                        for j in 1..nu {
+                            dt = min(dt, red[j]);
+                        }
                     }
                     dt = max(F::new(0.5f32), dt);
                     sc[S_DTDYN] = sc[S_DTDYN] + dt;
@@ -1450,7 +1559,7 @@ pub fn srce<F: Float>(
                     }
                 }
                 sync_cube();
-                spr4::<F>(par, taut, sig, dden, &a, &ws, &mut kb, &mut sc, u, stauwx, stauwy, nk, nth);
+                spr4::<F>(par, taut, sig, dden, &a, &ws, &mut kb, &mut sc, u, stauwx, stauwy, nk, nth, parred);
                 if t == 0 {
                     let fage = par[P_FFXFA] * (F::new(0.3f32) * u * sc[S_FMEANWS] * tpi::<F>() / par[P_GRAV]).tanh();
                     let fh1 = (par[P_FFXFM] + fage) * sc[S_FMEAN1];
@@ -1642,6 +1751,12 @@ pub struct SourceKernel<F: Real> {
     pub nsat: usize,
     /// Units per cube.
     pub nu: usize,
+    /// The sums of `W3SIN4` over the directions and of `W3SPR4` over the
+    /// frequencies as parallel reductions over the planes (warps), and the
+    /// minimum of the dynamic step by planes: another order of the
+    /// additions, so results that differ at round-off (off by default; the
+    /// value kernel only).
+    pub parred: bool,
     _f: std::marker::PhantomData<F>,
 }
 
@@ -1681,6 +1796,7 @@ impl<F: Real> SourceKernel<F> {
             nspecy: t.nspecy,
             nsat: t.nsat,
             nu,
+            parred: false,
             _f: std::marker::PhantomData,
         }
     }
@@ -1733,6 +1849,7 @@ impl<F: Real> SourceKernel<F> {
                 self.nspecy,
                 self.nsat,
                 self.nu,
+                self.parred,
             );
         }
     }

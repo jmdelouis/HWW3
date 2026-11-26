@@ -41,7 +41,12 @@
 //!     calm starts from calm conditions (zero spectra, WW3's start without
 //!     a restart file) at --start; --restart-out writes the state at the
 //!     end as a FULL WW3 restart, from which a run continues with
-//!     --itstep0 set to the ITSTEP it prints.
+//!     --itstep0 set to the ITSTEP it prints. --par-red computes the sums
+//!     of W3SIN4 over the directions and of W3SPR4 over the frequencies,
+//!     and the minimum of the dynamic step, by reductions over the warps in
+//!     the value source kernel: another order of the additions, so results
+//!     that differ at round-off (off by default; the tangent kernel keeps
+//!     the order of WW3).
 //! hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
 //!     One step's forcing, then one W3KTP3 call on the GPU compared with
 //!     the CPU transcription of W3KTP3 (hww3_wave::cpu) on a sample of nodes.
@@ -475,6 +480,7 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
                    "betamax": cfg.betamax,
                    "tl_nlcut": cfg.tl_nlcut,
                    "tl_nlnode": cfg.tl_nlnode,
+                   "par_red": cfg.par_red,
                    "betau": cfg.betau.as_ref().map(|b| json!({"knots": b.knots, "coefs": b.coefs, "grid": [b.b0, b.db, b.n]})),
                    "scale_par": cfg.scale_par.iter().map(|(n, f)| json!([n, f])).collect::<Vec<_>>()},
     });
@@ -585,6 +591,7 @@ fn perturbations(a: &Args, cfg: &mut Config) -> Result<()> {
         cfg.tl_nlcut = c.parse()?;
     }
     cfg.tl_nlnode = a.flags.contains("--tl-nlnode");
+    cfg.par_red = a.flags.contains("--par-red");
     if let Some(b) = a.opts.get("--betau") {
         let grid = a.opts.get("--betau-grid").map(String::as_str).unwrap_or("0.75:0.25:13");
         cfg.betau = Some(hww3_wave::sources::BetaU::parse(b, grid)?);

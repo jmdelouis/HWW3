@@ -1154,6 +1154,34 @@ counters there; [GPU model results](wave_results.md)):
 - `W3SIN4` is about 27 % of the f64 value source kernel, `W3SDS4` 8 % and
   the DIA 6 %.
 
+**Optimisation done (26 November;
+[GPU model results](wave_results.md)).** In seconds per model day on one
+A100, final build against 35ecb15:
+
+| Run | 35ecb15 | Final build |
+|---|---|---|
+| f32 week | 124.1 | 98.3 |
+| f64, 48 h | 505.1 | 245.3 |
+| f64 tangent, first day | 931.4 | 508.5 |
+
+Against WW3 on the same hours of grid v5 $K=4$ with the full ST4:
+- 64 cores of hpc: 717.1 s; the GPU in f32 is 7.3 times faster.
+- 32 ranks of hpc: 1,491 s; the GPU is 14.7 times faster in f32 and 6.9
+  in f64.
+- 112 cores of Datarmor (other days): 2,601 s explicit and 1,058 s
+  implicit, against which the f32 week is 26 and 10.8 times faster.
+
+How the plan ended:
+- Step 8 is not kept: the geographic sub-step as one kernel is slower
+  (+16 % in f32, +38 % in f64).
+- Step 7 is an option, `--par-red`, off by default: −6.8 % in f64, nothing
+  in f32, round-off.
+- Step 5, the vector tangent, was dropped for M4 ("Oui, passer à M4"). It
+  would save at best 1.3 times for two directions and 1.75 times for
+  nine, and only if the nodes per SM stayed as they are, which the shared
+  memory does not allow.
+- Step 9, asynchronous outputs, is skipped: under 1 %.
+
 ## 10. Other routes, briefly
 
 | route | effort | why not the main route |

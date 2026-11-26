@@ -155,7 +155,7 @@ hww3-prop run <grid dir> --restart FILE|calm [--current FILE] [--level FILE] [--
           --hours H|--stop YYYYMMDDHHMMSS --out DIR [--restart-out FILE]
           [--f64] [--block B] [--units U] [--itstep0 N]
           [--no-cx] [--no-cth] [--no-ck]
-          [--host-level] [--no-bccfl] [--profile]
+          [--host-level] [--no-bccfl] [--profile] [--par-red]
           [--betamax B] [--scale-par NAME:F+...] [--betau KNOTS:COEFS [--betau-grid B0:DB:N]]
           [--tangent NAME [--out64] [--tl-nlcut C [--tl-nlnode]]] [--probe N1,N2,... [--probe-check H]]
 hww3-prop restart-hs <grid dir> --restart FILE --out FILE.f32
@@ -181,6 +181,7 @@ hww3-prop check-steps <grid dir> --restart FILE [forcing as for run]
 | `--host-level` | water-level update on the host instead of the device |
 | `--no-bccfl` | count the interior nodes only in `ITER` (`FSBCCFL = F`); by default every wet node counts, as WW3 does with `UGBCCFL = T` |
 | `--profile` | synchronise after each part of a step and report the time of each part |
+| `--par-red` | in the value source kernel, the sums of `W3SIN4` over the directions and of `W3SPR4` over the frequencies, and the minimum of the dynamic step, as reductions over the warps: another order of the additions, so results that differ at round-off; off by default (the tangent kernel keeps the order of WW3) |
 | `--scale-par NAME:F+...`, `--wind-factor F`, `--init-factor F` | multiply `SDSC2`, `NLPROP` or `BJGAM`, the wind speed of the forcing or the restart spectra by a factor (in double precision) |
 | `--betamax B` | `BETAMAX` with the stress tables `TAUT`, `TAUHFT`, `TAUHFT2` computed for it by the Rust port instead of those of the parameter file |
 | `--tangent NAME` | the tangent of the model for a relative change of `WIND`, `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM` or `INIT` (the restart spectra): `dhs_` and `dt02_` files and the tangent of the total energy (milestone M3) |
@@ -211,7 +212,7 @@ writes the depth and currents of those steps. The job scripts are
 
 ```text
 hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
-hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R]
+hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red]
 hww3-src check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]
 hww3-src tables BASE.params [OTHER.params ...]
 hww3-src params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...]
@@ -228,7 +229,8 @@ depth-breaking flag or the limiter decision differ from WW3. It needs no
 GPU. `check-gpu` runs the GPU source kernel (`srce`) on the same nodes
 and compares the spectra after the step with WW3 and with the CPU
 transcription; `--replicate R` repeats every node `R` times for the
-timing (`scripts/m2_src_gpu_hpc.slurm`). `check-tl` compares the tangent
+timing (`scripts/m2_src_gpu_hpc.slurm`), and `--par-red` is the option of
+`hww3-prop run`. `check-tl` compares the tangent
 kernel `srce_tl` with central differences of `srce` (milestone M3);
 `--tl-nlcut` as for `hww3-prop run`.
 

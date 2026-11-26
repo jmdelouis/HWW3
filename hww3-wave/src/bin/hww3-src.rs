@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
-//! hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R]
+//! hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red]
 //! hww3-src check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]
 //! hww3-src tables BASE.params [OTHER.params ...]
 //! hww3-src params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+NAME:F]
@@ -215,7 +215,7 @@ fn check(path: PathBuf) -> Result<()> {
 /// `replicate` times, for the timing), against the full `W3SRCE` of WW3 and
 /// the CPU transcription.
 #[cfg(feature = "cubecl")]
-fn check_gpu<F: hww3_wave::device::Real>(path: PathBuf, nu: usize, replicate: usize) -> Result<()> {
+fn check_gpu<F: hww3_wave::device::Real>(path: PathBuf, nu: usize, replicate: usize, parred: bool) -> Result<()> {
     use burn::tensor::Device;
     use cubecl::prelude::CubeElement;
     use hww3_wave::sources::SrceTables;
@@ -231,7 +231,8 @@ fn check_gpu<F: hww3_wave::device::Real>(path: PathBuf, nu: usize, replicate: us
     let t = SrceTables::new(&q)?;
     let device = Device::cuda(0);
     let client = hww3_wave::burn_ext::client(&device)?;
-    let k = SourceKernel::<F>::new(&client, &t, nu);
+    let mut k = SourceKernel::<F>::new(&client, &t, nu);
+    k.parred = parred;
     let n = n0 * replicate;
     let mut va = vec![0f64; nspec * n];
     let mut wn = vec![0f64; (nk + 2) * n];
@@ -805,10 +806,11 @@ fn main() -> Result<()> {
         (Some("check-gpu"), Some(f)) => {
             let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
             let rep: usize = opt("--replicate").map(|s| s.parse()).transpose()?.unwrap_or(1);
+            let pr = a.iter().any(|x| x == "--par-red");
             if a.iter().any(|x| x == "--f64") {
-                check_gpu::<f64>(PathBuf::from(f), nu, rep)
+                check_gpu::<f64>(PathBuf::from(f), nu, rep, pr)
             } else {
-                check_gpu::<f32>(PathBuf::from(f), nu, rep)
+                check_gpu::<f32>(PathBuf::from(f), nu, rep, pr)
             }
         }
         #[cfg(feature = "cubecl")]
@@ -819,7 +821,7 @@ fn main() -> Result<()> {
             check_tl(PathBuf::from(f), nu, h, cut, a.iter().any(|x| x == "--tl-nlnode"))
         }
         _ => bail!(
-            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml F] [--check BASE.params] | check-gpu HARNESS [--f64] [--units N] [--replicate R] | check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]"
+            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml F] [--check BASE.params] | check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red] | check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]"
         ),
     }
 }

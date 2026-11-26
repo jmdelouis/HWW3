@@ -129,6 +129,10 @@ pub struct Config {
     /// With `tl_nlcut`, the choice taken for the whole spectrum of a node
     /// ([`crate::sources::P_TLNLNODE`]).
     pub tl_nlnode: bool,
+    /// The parallel reductions of the value source kernel
+    /// ([`crate::srce::SourceKernel::parred`]; off by default: the results
+    /// differ at round-off).
+    pub par_red: bool,
     /// Tangent run: the direction of the tangent, a relative change of the
     /// wind speed (`WIND`), of a source parameter (`BETAMAX`, `SDSC2`,
     /// `NLPROP`, `BJGAM`) or of the spectra of the restart (`INIT`, also
@@ -159,6 +163,7 @@ impl Default for Config {
             betau: None,
             tl_nlcut: 0.0,
             tl_nlnode: false,
+            par_red: false,
             tangent: None,
         }
     }
@@ -651,7 +656,12 @@ impl<F: Real> Model<F> {
                     None => None,
                 };
                 let ntab = t.tauhf.len();
-                Some((SourceKernel::<F>::new(&client, &t, cfg.units), d50, psic, seeds, ntab, t))
+                let mut k = SourceKernel::<F>::new(&client, &t, cfg.units);
+                k.parred = cfg.par_red;
+                if cfg.par_red {
+                    eprintln!("sources: parallel reductions in the value kernel (round-off; --par-red)");
+                }
+                Some((k, d50, psic, seeds, ntab, t))
             }
             None => None,
         };
@@ -2438,7 +2448,8 @@ impl<F: Real> Model<F> {
                 t2.par[crate::sources::P_TLFREEZE] = mk as f64;
                 t2.par[crate::sources::P_TLNLCUT] = cut;
                 t2.par[crate::sources::P_TLNLNODE] = node;
-                let k2 = SourceKernel::<F>::new(&self.client, &t2, self.cfg.units);
+                let mut k2 = SourceKernel::<F>::new(&self.client, &t2, self.cfg.units);
+                k2.parred = self.cfg.par_red;
                 let (d_va, d_ust, d_dt) = (self.upd(&to_k(&va)), self.upd(&zeros), self.upd(&zeros));
                 let args = SrceArgs {
                     va: &d_va,

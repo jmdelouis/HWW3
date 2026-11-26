@@ -1897,6 +1897,108 @@ In f32 the same builds vary by 5–10 % between rounds. `W3SIN4` adds
 0.10–0.21 s of 0.63–0.72 s, and the DIA nothing measurable. The serial
 loop of `W3SIN4` over the frequencies is the largest single part.
 
+### Optimisation done (26 November)
+
+The last items of the plan, checked as before against 35ecb15 and the
+second checkpoint (778b1e7). They end the optimisation.
+
+**Not kept: the geographic sub-step as one kernel.** In the fused kernel,
+each node computes the upwind values $\tilde U_T$ of its triangles itself
+instead of reading them from the triangle kernel's array. Each triangle is
+then computed by its three nodes, and each node gathers the spectra of its
+triangles' nodes. Under Nsight Systems over 2 h (job 4491113) the fused
+kernel is slower than the two kernels it replaces:
+
+| Run | Fused | Two kernels (triangles + nodes) |
+|---|---|---|
+| f32 | 0.649 ms | 0.560 ms (0.292 + 0.268) |
+| f64 | 1.435 ms | 1.043 ms (0.534 + 0.509) |
+| f64 tangent | 2.393 ms | 1.919 ms (0.497 + 0.497 + 0.924) |
+
+It was not identical to the bit either: the compiler contracts the
+multiplications and additions of the same expression differently in the
+two kernels (job 4491114). The two kernels stay.
+
+**Option: parallel reductions (`--par-red`, off by default).** The value
+source kernel can do three reductions over the warps instead of on unit 0:
+- the four sums of `W3SIN4` over the directions, at each step of its loop
+  over the frequencies (`plane_sum`);
+- the sums of `W3SPR4` over the 32 frequencies (`plane_sum`);
+- the minimum of the dynamic step (`plane_min`, which gives the same
+  value in any order).
+
+The option is a compile-time constant of the kernel. Without it the
+kernel is that of the second checkpoint: all 216 hours of the f32 week,
+48 hours in f64 and 24 hours of the tangent are identical to the bit
+(job 4495444). With it (job 4495446):
+- f64 48 h takes 228.6 s per model day instead of 245.3 (−6.8 %). The
+  source kernel alone takes 1.244–1.251 s per step instead of
+  1.346–1.405 s (job 4472571).
+- The f32 week takes 99.3 s instead of 98.3: no gain. The source kernel
+  alone takes 0.631–0.649 s instead of 0.622–0.640 s.
+- The order of the additions changes, so the results differ at
+  round-off. In f64, $H_s$ differs by at most 7.6e-12 m over 48 h. In f32
+  over the week, the hourly RMS median is 3.4e-6 m, as between two f32
+  builds. The costs of the calibration windows differ by at most 4e-3
+  (69,351.110 against 69,351.114), and every bias and RMSE is the same to
+  the printed digits (job 4498053).
+- On the harness nodes, the differences against WW3 and the CPU
+  transcription are the same to the printed digits.
+
+The tangent kernel keeps the order of WW3, so the option has no effect on
+a tangent run.
+
+**Not done: the vector tangent.** Jean-Marc dropped it on 26 November
+("Oui, passer à M4"). One tangent run of the first day takes 508.5 s per
+model day, of which about 245 s is the value path (the f64 value run) and
+about 263 s the tangent. With the value path shared, the best cases are:
+- two directions: about 770 s instead of 1,017 s for two runs (1.3 times);
+- nine directions: about 2,610 s instead of 4,580 s (1.75 times).
+
+Those figures assume the nodes per SM stay as they are, and the shared
+memory does not allow that:
+- Each further direction needs its tangent spectrum, the tangent of the
+  extended spectrum of the DIA and the tangent slots: about 11–15 KB per
+  node in f64.
+- With two directions a node no longer fits in a third of an SM (54,954
+  B). The kernel goes back to 2 nodes per SM, and step 6's gain is lost.
+
+The adjoint of M4 gives the gradient of the cost with respect to all the
+parameters in one backward run, so it replaces the vector tangent for the
+nine directions of `BETAMAX`$(U)$, `SDSC2` and `NLPROP`.
+
+**Not done: asynchronous outputs.** The profile showed that overlapping
+the outputs with the steps can gain less than 1 %.
+
+**Speed at the end of the optimisation.** One A100 of hpc against WW3
+`dea641c` on grid v5 $K=4$ with the full ST4, in seconds per model day.
+The GPU runs start from the restart of 1 January 00:10 (8 January 00 h
+for the last two rows) with the parameters of p0. The 64-core WW3 run is
+the cold start of 1 January with the parameters of calibration step 1:
+a slightly different model, at the same cost.
+
+| Run | Hours | 35ecb15 | Final build | WW3 | Final build against WW3 |
+|---|---|---|---|---|---|
+| f32 | 1–10 Jan (216 h) | 124.1 | 98.3 | 717.1 on 64 cores of hpc (6,453.9 s for 1–10 Jan, job 4269275) | 7.3 times faster |
+| f64 | 1–3 Jan | 505.1 | 245.3 (228.6 with `--par-red`) | – | – |
+| f64 `BETAMAX` tangent | 1 Jan | 931.4 | 508.5 | – | – |
+| f32 | 8–10 Jan | 127.7 | 101.5 | 1,491 on 32 ranks of hpc (2,982 s, job 4139131, same hours) | 14.7 times faster |
+| f64 | 8–10 Jan | 433.3 | 214.8 | the same | 6.9 times faster |
+
+The last two rows are jobs 4495445 (GPU) and 4139131 (WW3). The final
+build is identical to the bit to the second checkpoint. Against 35ecb15,
+the gains are:
+- f32: −21 % over the week and −21 % over 8–10 January;
+- f64: −51 % over 1–3 January and −50 % over 8–10 January;
+- f64 tangent: −45 %.
+
+On Datarmor, 112 cores ran 2–7 January in 2,601 s per model day with the
+explicit scheme and 1,058 s with the implicit one. The f32 week of the
+final build is 26 and 10.8 times faster than these. The days differ, and
+the first days are the most expensive on the GPU.
+
+The GPU time from 23 November 07:27 is 47.0 GPU-hours at this checkpoint.
+
 ## Coastal diagnostics of the buoy scores
 
 At the start of the calibration the buoy $H_s$ is too low (bias −4.85 cm on
