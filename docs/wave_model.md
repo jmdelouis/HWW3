@@ -84,6 +84,7 @@ schemes in [Numerics of the GPU model](wave_numerics.md).
 | `ww3grid` | no | the source-term part of `ww3_grid`: the parameter file of the source terms from the namelists and the grid |
 | `prnc` | no | the interpolation of `ww3_prnc`: weights, `INTERP` and the rescaling of vector fields (`WNT2`, `CRT1`) |
 | `bounc` | no | `ww3_bounc`: the two nearest stations of each open-boundary node, their weights and the decoded station spectra |
+| `structgrid` | no | WW3 structured grids (`RECT`, `CURV`) read as `ww3_grid` does and triangulated for the N scheme, with a rotated pole for polar grids ([structured grids](structured_grids.md)) |
 | `model` | CubeCL | the time loop of `W3WAVE`, propagation only or with the source terms |
 | `cuda_c` | CUDA C | the M0 kernels in CUDA C, through `cudarc` and NVRTC |
 
@@ -258,6 +259,8 @@ hww3-pre cmp-fields A.ww3 B.ww3
 python scripts/bounc_nc.py spec.list DIR
 hww3-pre bounc <grid dir> --input DIR --out nest.ww3 [--msh FILE.msh] [--interp 2]
 hww3-pre cmp-nest A.ww3 B.ww3
+hww3-pre struct WW3_GRID.nml --data DIR --out GRID_DIR [--rotate auto|none|north|south]
+hww3-pre ideal-wind <grid dir> --out wind.ww3 --start T --hours H [--speed U]
 ```
 
 `prnc` writes the forcing file of `ww3_prnc` from the netCDF fields that
@@ -266,4 +269,6 @@ node coordinates from the gmsh file as WW3 does. `cmp-fields` compares two
 forcing files time by time (values that differ, largest difference).
 `bounc` writes the boundary file of `ww3_bounc` from the station spectra
 that `scripts/bounc_nc.py` wrote to `DIR` (`bounc`, see above), and
-`cmp-nest` compares two boundary files. None needs a GPU.
+`cmp-nest` compares two boundary files. `struct` triangulates a WW3
+structured grid into a grid directory and `ideal-wind` writes an idealised
+wind for it ([structured grids](structured_grids.md)). None needs a GPU.

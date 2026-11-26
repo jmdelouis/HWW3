@@ -68,4 +68,5 @@ from it the commands an ordinary run needs.
 
 reproducing
 wave_model
+structured_grids
 ```

@@ -110,6 +110,11 @@ impl Namelists {
         }
     }
 
+    /// String value of `group`/`key`, without its quotes.
+    pub fn s(&self, group: &str, key: &str) -> Option<String> {
+        self.raw(group, key).map(|v| v.trim().trim_matches(|c| c == '\'' || c == '"').trim().to_string())
+    }
+
     /// Logical value of `group`/`key`, or `default`.
     pub fn b(&self, group: &str, key: &str, default: bool) -> Result<bool> {
         match self.raw(group, key) {

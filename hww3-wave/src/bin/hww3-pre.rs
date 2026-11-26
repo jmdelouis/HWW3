@@ -19,12 +19,23 @@
 //! hww3-pre cmp-nest A.ww3 B.ww3
 //!     Compare two boundary files: header, boundary points, indices and
 //!     weights, and the spectra over the times of A found in B.
+//! hww3-pre struct WW3_GRID.nml --data DIR --out GRID_DIR [--rotate auto|none|north|south]
+//!     A WW3 structured grid (RECT or CURV, files in DIR) triangulated into
+//!     an HWW3 grid directory (hww3_wave::structgrid), with the namelist
+//!     copied as GRID_DIR/ww3_grid.nml. The default rotation (auto) moves
+//!     the pole onto the equator when a sea point lies within 10° of it.
+//! hww3-pre ideal-wind <grid dir> --out wind.ww3 --start YYYYMMDDHHMMSS --hours H [--speed U]
+//!     An idealised hourly wind on the nodes, for runs without forcing:
+//!     westerlies and trade winds of amplitude U (default 10 m/s) with
+//!     waves of 3 lows around the globe moving east at 15° per day, turned
+//!     into the rotated frame of a rotated mesh.
 //! ```
 
 use anyhow::{bail, Context, Result};
 use hww3_wave::grid::Grid;
 use hww3_wave::bounc::{boundary_nodes, station_weights, RawSpectra};
 use hww3_wave::prnc::{Field, RawInput};
+use hww3_wave::structgrid::{rotate_vector, Mesh, Rotation, StructGrid};
 use hww3_wave::ww3io::{FieldFile, FieldWriter, NestFile, NestWriter, Time};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -304,6 +315,84 @@ fn cmp_nest(a: &Args) -> Result<()> {
     Ok(())
 }
 
+fn structured(a: &Args) -> Result<()> {
+    let nml = PathBuf::from(a.pos.first().context("struct needs the ww3_grid.nml")?);
+    let data = PathBuf::from(a.opts.get("--data").context("struct needs --data")?);
+    let out = PathBuf::from(a.opts.get("--out").context("struct needs --out")?);
+    let t0 = Instant::now();
+    let g = StructGrid::read(&nml, &data)?;
+    let c = g.counts();
+    println!(
+        "{} ({:?}, {} x {}, closed {}): land {}, sea {}, active boundary {}, excluded {} ({:.1} s)",
+        g.name,
+        g.gtype,
+        g.nx,
+        g.ny,
+        g.closed,
+        c[0],
+        c[1],
+        c[2],
+        c[3],
+        t0.elapsed().as_secs_f64()
+    );
+    let rot = match a.opts.get("--rotate").map(String::as_str).unwrap_or("auto") {
+        "auto" => g.auto_rotation(10.0),
+        r => Rotation::parse(r)?,
+    };
+    let m = g.triangulate(rot)?;
+    let shallow = m.grid.depth.iter().filter(|&&d| d < g.spec.dmin + 1e-5).count();
+    let (lo, hi) = m.grid.lat.iter().fold((90.0f64, -90.0f64), |(l, h), &v| (l.min(v), h.max(v)));
+    println!(
+        "mesh: rotation {:?}, {} nodes of {} sea points ({} in no triangle), {} triangles, {} open-boundary nodes, {} nodes shallower than DMIN {} (dry for the scheme), mesh latitudes {:.2} to {:.2}",
+        rot,
+        m.grid.lon.len(),
+        m.nsea,
+        m.dropped,
+        m.grid.tri.len(),
+        m.grid.obc.len(),
+        shallow,
+        g.spec.dmin,
+        lo,
+        hi
+    );
+    m.write(&out, &std::fs::read_to_string(&nml)?)?;
+    println!("written to {} in {:.1} s", out.display(), t0.elapsed().as_secs_f64());
+    Ok(())
+}
+
+fn ideal_wind(a: &Args) -> Result<()> {
+    let dir = PathBuf::from(a.pos.first().context("ideal-wind needs the grid directory")?);
+    let out = PathBuf::from(a.opts.get("--out").context("ideal-wind needs --out")?);
+    let start = Time::parse(a.opts.get("--start").context("ideal-wind needs --start")?)?;
+    let hours: i64 = a.opts.get("--hours").context("ideal-wind needs --hours")?.parse()?;
+    let u0: f64 = a.opts.get("--speed").map(|s| s.parse()).transpose()?.unwrap_or(10.0);
+    let grid = Grid::read(&dir)?;
+    let (lon, lat, ang) = Mesh::geographic(&dir, &grid)?;
+    let np = lon.len();
+    let mut w = FieldWriter::create(&out, "WND", np, 1, UNGTYPE)?;
+    let d = std::f64::consts::PI / 180.0;
+    for h in 0..=hours {
+        let t = Time::from_secs(start.secs() + 3600 * h);
+        let phase = 15.0 * h as f64 / 24.0;
+        let (mut u, mut v) = (vec![0f32; np], vec![0f32; np]);
+        for i in 0..np {
+            let (l, p) = (lon[i] * d, lat[i] * d);
+            // zonal belts (trades below 30°, westerlies above) and three
+            // travelling lows on the westerlies
+            let s = (3.0 * (lon[i] - phase) * d).sin();
+            let ue = u0 * (-(2.0 * p).cos() * 0.8 + 0.5 * s * (2.0 * p).sin().abs());
+            let un = u0 * 0.5 * (3.0 * (lon[i] - phase) * d).cos() * (2.0 * p).sin() + 0.1 * u0 * l.sin();
+            let (x, y) = rotate_vector(ue, un, ang[i]);
+            u[i] = x as f32;
+            v[i] = y as f32;
+        }
+        w.write(t, &[u, v])?;
+    }
+    w.finish()?;
+    println!("{}: {} hourly winds from {start} on {np} nodes", out.display(), hours + 1);
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let a = parse()?;
     match a.cmd.as_str() {
@@ -311,6 +400,8 @@ fn main() -> Result<()> {
         "cmp-fields" => cmp_fields(&a),
         "bounc" => bounc(&a),
         "cmp-nest" => cmp_nest(&a),
+        "struct" => structured(&a),
+        "ideal-wind" => ideal_wind(&a),
         other => bail!("unknown command {other}"),
     }
 }

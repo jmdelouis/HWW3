@@ -89,6 +89,17 @@ pub struct Geometry {
     pub bccfl: bool,
 }
 
+/// A longitude difference (degrees) brought into [-180, 180].
+pub fn wrap_lon(d: f64) -> f64 {
+    if d > 180.0 {
+        d - 360.0
+    } else if d < -180.0 {
+        d + 360.0
+    } else {
+        d
+    }
+}
+
 /// Linear group speed (m/s) of frequency `f` (Hz) at depth `h` (m).
 pub fn group_speed(f: f64, h: f64) -> f64 {
     let w = 2.0 * PI * f;
@@ -115,13 +126,17 @@ impl Geometry {
         let nth = g.spec.nth;
         assert!(nth <= 63, "at most 63 directions (bit 63 of the mask word pair holds IOBPA)");
         let (x, y) = (&g.lon, &g.lat);
+        // longitude differences taken across the date line when shorter
+        // (global grids closed in longitude, crate::structgrid); a regional
+        // mesh never has an edge longer than 180°
+        let dx = |p: usize, q: usize| wrap_lon(x[p] - x[q]);
         // counter-clockwise triangles (WW3 swaps the triangles of negative area)
         let tri: Vec<[u32; 3]> = g
             .tri
             .iter()
             .map(|t| {
                 let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
-                let a2 = (x[b] - x[a]) * (y[c] - y[a]) - (x[c] - x[a]) * (y[b] - y[a]);
+                let a2 = dx(b, a) * (y[c] - y[a]) - dx(c, a) * (y[b] - y[a]);
                 if a2 < 0.0 { [t[0], t[2], t[1]] } else { *t }
             })
             .collect();
@@ -135,13 +150,13 @@ impl Geometry {
             ine.extend_from_slice(t);
             ien.extend_from_slice(&[
                 y[b] - y[c],
-                x[c] - x[b],
+                dx(c, b),
                 y[c] - y[a],
-                x[a] - x[c],
+                dx(a, c),
                 y[a] - y[b],
-                x[b] - x[a],
+                dx(b, a),
             ]);
-            let area = 0.5 * ((x[b] - x[a]) * (y[c] - y[a]) - (x[c] - x[a]) * (y[b] - y[a]));
+            let area = 0.5 * (dx(b, a) * (y[c] - y[a]) - dx(c, a) * (y[b] - y[a]));
             for &v in t {
                 si[v as usize] += area / 3.0;
             }
@@ -171,8 +186,8 @@ impl Geometry {
                     continue;
                 }
                 let (nx, pv) = (t[(q + 1) % 3] as usize, t[(q + 2) % 3] as usize);
-                let (ax, ay) = (x[nx] - x[v], y[nx] - y[v]);
-                let (bx, by) = (x[pv] - x[v], y[pv] - y[v]);
+                let (ax, ay) = (dx(nx, v), y[nx] - y[v]);
+                let (bx, by) = (dx(pv, v), y[pv] - y[v]);
                 for k in 0..nth {
                     let (evx, evy) = (ecos[k], esin[k]);
                     let d1 = THR - ax * evy + ay * evx;
