@@ -2960,6 +2960,25 @@ the choice \texttt{SDSBCHOICE}\,=\,3 with the isotropic cumulative term
 $\texttt{SDSCUM}=+0.3$ of the configuration (the runs use
 \texttt{SDSBCHOICE}\,=\,1 and $\texttt{SDSCUM}=0$, the rest of the
 parameters unchanged).
+\item With the hourly wind and currents of the WW3 run, the regular grid
+alone takes \SI{3500}{s} per model day on one A100 in single precision
+over 72 hours from a calm sea (commit \texttt{20e76a6}), steady while
+the mean $H_s$ grows from 0.97 to \SI{2.16}{m}, more than 99\,\% of it
+in the source kernel. The parameters of the configuration make the
+dynamic step of W3SRCE short: from the restart of 4 January the mean
+number of source sub-steps per 600\,s step is 36.6, with half the nodes
+at the minimum step of \SI{10}{s}. With $\texttt{SDSBR}=0.0009$ instead
+of 0.005 it falls to 25.7 (\SI{2342}{s} per model day), with
+$\texttt{FXFM3}=2.5$ instead of 20 to 15.3 (\SI{1561}{s}), with both to
+10.6 (\SI{1196}{s}), and with the parameters of the North Atlantic runs
+to 1.5 (\SI{343}{s}), against 1.7 on grid v5 $K=4$. The 36 frequencies
+cost only about 1.2 times more per node and sub-step than 32 (3 nodes
+per multiprocessor instead of 4). WW3 uses the same limiter of the
+dynamic step and so pays the same sub-steps, but its choice
+\texttt{SDSBCHOICE}\,=\,3 may change their number.
+\item $H_s$ against the WW3 run on 4 January 00 h: bias \SI{+0.03}{m},
+RMSE \SI{0.48}{m}, correlation 0.89, still converging after three days
+of spin-up against twenty for WW3.
 \end{itemize}
 
 
