@@ -1182,6 +1182,57 @@ How the plan ended:
   memory does not allow.
 - Step 9, asynchronous outputs, is skipped: under 1 %.
 
+### 9.9 M4: hand-written adjoints or Burn autodiff (26 November 2026)
+
+Jean-Marc started M4 after the optimisation ("Oui, passer à M4"). His
+first choice is how the adjoint is written:
+- hand-written, in CubeCL or in CUDA C;
+- or with Burn's autodiff on Burn tensor operations.
+
+He also allowed CUDA C or Triton for the GPU parts wherever they beat
+CubeCL. Two pieces were written each way and checked by the dot-product
+test against the tangent kernels of M3 ([GPU model
+results](wave_results.md)):
+- the DIA;
+- one geographic sub-step.
+
+| | DIA, time against its value kernel | Sub-step, time against its value kernels | GPU memory beyond the model |
+|---|---|---|---|
+| hand-written, CUDA C | 1.42 | 2.92 | none for the DIA, 0.6 GB of scratch for a sub-step |
+| hand-written, CubeCL | 2.32 | 3.60 | the same |
+| Burn tensor operations and its tape | 77 | about 4,000 | about 0.6 MB per node for the DIA (215 GB for the grid), 6.1 GB per sub-step |
+
+All the dot-product tests agree to 1e-12 or better. The three ways give
+the same gradients to 4e-16.
+
+Burn is not a candidate for the kernels:
+- Its tensors hold every intermediate for all the nodes, and its
+  backward turns the gathers into atomic scatter-adds.
+- The dynamic sub-steps of `W3SRCE`, different at each node, do not
+  write as whole-tensor operations at all.
+
+Burn could still carry the hand-written kernels as custom operations of
+its tape, as M0 did, but it adds nothing to a driver that checkpoints
+by step.
+
+The hand-written adjoints need no atomics and no stored intermediate
+beyond the input of each piece. CUDA C is the faster of the two by 1.6
+times on the DIA and 1.2 times on the sub-step.
+
+With step-level checkpointing in two levels in host RAM (62 states of
+3.9 GB, 242 GB), the gradient of a 156 h cost with respect to all the
+parameters and forcing fields takes an estimated 2.1–2.4 h on one A100.
+That is 2.4–2.7 times less than the nine tangents of the calibration's
+parameters.
+
+**The choice for Jean-Marc:**
+- (a) hand-written adjoints in CUDA C, with the forward and tangent
+  kernels kept in CubeCL, which the CI builds;
+- (b) hand-written adjoints in CubeCL, one language;
+- (c) Burn custom operations around the same hand-written kernels.
+
+(a) is recommended for its speed.
+
 ## 10. Other routes, briefly
 
 | route | effort | why not the main route |

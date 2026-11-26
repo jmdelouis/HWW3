@@ -215,6 +215,7 @@ writes the depth and currents of those steps. The job scripts are
 hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
 hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red]
 hww3-src check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]
+hww3-src adj-dia HARNESS [--units N] [--replicate R] [--burn-replicate RB] [--reps K] [--only cubecl]
 hww3-src tables BASE.params [OTHER.params ...]
 hww3-src params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...]
 hww3-src build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml WW3_GRID.nml] [--check BASE.params]
@@ -233,7 +234,14 @@ transcription; `--replicate R` repeats every node `R` times for the
 timing (`scripts/m2_src_gpu_hpc.slurm`), and `--par-red` is the option of
 `hww3-prop run`. `check-tl` compares the tangent
 kernel `srce_tl` with central differences of `srce` (milestone M3);
-`--tl-nlcut` as for `hww3-prop run`.
+`--tl-nlcut` as for `hww3-prop run`. `adj-dia` (milestone M4) runs the
+DIA alone on the harness spectra repeated `R` times: its value, tangent
+and hand-written adjoint with the dot-product test and the times (and the
+CUDA C adjoint when built with the feature `cuda-c`), then the same DIA as
+Burn tensor operations on `RB` copies, its gradient through Burn's tape
+against the adjoint; `hww3-prop adj-geo GRID --restart FILE [forcing]
+[--f64] [--ik K] [--reps N] [--only cubecl]` does the same for one
+geographic sub-step of frequency `K`.
 
 `tables` computes the stress tables of `INSIN4` for the `BETAMAX` of each
 parameter file and compares them with those WW3 wrote there: `TAUT`

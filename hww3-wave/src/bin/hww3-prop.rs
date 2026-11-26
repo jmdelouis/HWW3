@@ -47,6 +47,12 @@
 //!     the value source kernel: another order of the additions, so results
 //!     that differ at round-off (off by default; the tangent kernel keeps
 //!     the order of WW3).
+//! hww3-prop adj-geo <grid dir> --restart FILE [forcing as for run] [--f64] [--ik K] [--reps N] [--only cubecl]
+//!     Milestone M4 prototype: one geographic sub-step of frequency K after
+//!     the first step's forcing, its value, tangent and hand-written adjoint
+//!     with the dot-product test and the times, then the same sub-step as
+//!     Burn tensor operations with its gradient through Burn's tape
+//!     (unless --only cubecl).
 //! hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
 //!     One step's forcing, then one W3KTP3 call on the GPU compared with
 //!     the CPU transcription of W3KTP3 (hww3_wave::cpu) on a sample of nodes.
@@ -91,7 +97,7 @@ fn parse() -> Result<Args> {
     let valued = [
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
         "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent", "--init-factor", "--betamax",
-        "--stop", "--restart-out", "--betau", "--betau-grid", "--probe", "--probe-check", "--tl-nlcut",
+        "--stop", "--restart-out", "--betau", "--betau-grid", "--probe", "--probe-check", "--tl-nlcut", "--ik", "--reps", "--only",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -966,6 +972,36 @@ fn main() -> Result<()> {
                     m.time, ik, m.max_iter(ik), rel, rms, bad, t.elapsed().as_secs_f64()
                 );
             }
+            Ok(())
+        }
+        "adj-geo" => {
+            let geo = Geometry::new(&grid);
+            let device = Device::cuda(0);
+            let client = hww3_wave::burn_ext::client(&device)?;
+            let opt = |k: &str| a.opts.get(k).map(PathBuf::from);
+            let inp = Inputs {
+                restart: PathBuf::from(&a.opts["--restart"]),
+                current: opt("--current"),
+                level: opt("--level"),
+                ice: opt("--ice"),
+                nest: opt("--nest"),
+                wind: opt("--wind"),
+                sources: opt("--sources"),
+                start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
+            };
+            let ik: usize = a.opts.get("--ik").map(|s| s.parse()).transpose()?.unwrap_or(12);
+            let reps: usize = a.opts.get("--reps").map(|s| s.parse()).transpose()?.unwrap_or(20);
+            let only = a.opts.get("--only").cloned().unwrap_or_default();
+            let rep = if a.flags.contains("--f64") {
+                let mut m = Model::<f64>::new(client, &grid, &geo, &inp, Config::default())?;
+                m.prepare()?;
+                m.adj_geo_check(ik, reps, &only)?
+            } else {
+                let mut m = Model::<f32>::new(client, &grid, &geo, &inp, Config::default())?;
+                m.prepare()?;
+                m.adj_geo_check(ik, reps, &only)?
+            };
+            println!("{}", serde_json::to_string(&rep)?);
             Ok(())
         }
         "check-ktp3" => {

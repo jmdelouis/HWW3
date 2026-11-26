@@ -1999,6 +1999,140 @@ the first days are the most expensive on the GPU.
 
 The GPU time from 23 November 07:27 is 47.0 GPU-hours at this checkpoint.
 
+## Milestone M4: adjoint prototypes (26 November)
+
+Before the full adjoint is written, two pieces of the model are written
+three ways:
+- the DIA (`W3SNL1`), the nonlinear source term with the gathers of the
+  interaction tables;
+- one geographic sub-step (`geo_tri_x4` then `geo_node_x4`), with its
+  clip at 0, mask and open boundary.
+
+The three ways are:
+- a hand-written adjoint in CubeCL (`hww3_wave::adjoint`);
+- the same adjoint in CUDA C, compiled with NVRTC and launched through
+  `cudarc` with `__launch_bounds__` (`hww3_wave::cuda_m4`, feature
+  `cuda-c`);
+- the piece written as Burn tensor operations, its gradient taken by Burn's
+  tape (`hww3_wave::burn_m4`).
+
+Each is checked with true gradients only: the dot-product test
+$\langle L x, y\rangle = \langle x, L^T y\rangle$ against the tangent
+kernels of M3, and the gradients of the three ways against each other.
+
+`hww3-src adj-dia` and `hww3-prop adj-geo` run them. The job script
+`scripts/m4_proto_hpc.slurm` samples the GPU memory with `nvidia-smi`
+during each run (job 4531322, A100, f64).
+
+**How the hand-written adjoints work.** Neither needs atomics nor an
+intermediate of the forward pass beyond its input:
+- The DIA adjoint rebuilds the extended spectrum `UE` from the spectrum.
+  Each bin of the interaction grid gathers the cotangents of its three
+  passes from those of $S$ and $D$ through the transposed index tables of
+  `DIA_IC`. Each bin of `UE` gathers its cotangent through the transposed
+  tables of `DIA_IP`. The transposed tables are built once on the host
+  (39,168 entries).
+- The adjoint of a sub-step runs in three passes after the triangle
+  values are recomputed:
+  - a node pass: the cotangent of the upwind sum and of the node's own
+    value, through the clip and the mask;
+  - a triangle pass: the cotangent of $\tilde U_T$ from its three nodes;
+  - a node pass gathering through the slot lists of the forward kernel.
+
+**DIA** (`W3SNL1` alone, harness nodes of grid v5 $K=4$ repeated 100 times,
+186,900 nodes, one cube of 128 units per node):
+
+| | Time per launch | Against the value kernel | Shared memory per node |
+|---|---|---|---|
+| value (`srce::snl1`) | 0.0420 s | 1 | 73,024 B |
+| tangent (`srce_tl::snl1_tl`) | 0.1196 s | 2.85 | 47,120 B |
+| adjoint, CubeCL | 0.0974 s | 2.32 | 52,096 B |
+| adjoint, CUDA C (102 registers) | 0.0598 s | 1.42 | 52,096 B |
+| Burn, forward and backward | 17.2 µs per node (7,476 nodes) | 77 | about 0.6 MB of GPU memory per node |
+
+- The dot-product test agrees to 1.2e-12 of $\langle L x, y\rangle$
+  (1.8e-17 of $|Lx|\,|y|$).
+- The CUDA C adjoint equals the CubeCL one to 2.8e-16. The result is the
+  same with 1 or 2 nodes per SM asked in the launch bounds.
+- Burn's gradient equals the hand-written adjoint to 4.0e-16, and its own
+  dot-product test agrees to 6.5e-15. Its forward pass alone takes 38
+  times the value kernel. Its tape held about 5 GB for 7,476 nodes: the
+  whole grid at once would need about 215 GB.
+
+**One geographic sub-step** (frequency 12, `sub = 0`, the whole grid:
+424,123 nodes, 807,832 triangles, 36 directions):
+
+| | Time per sub-step | Against the value kernels |
+|---|---|---|
+| value (triangle and node kernels) | 1.073 ms | 1 |
+| tangent | 1.976 ms | 1.84 |
+| adjoint, CubeCL (triangle values recomputed, three passes) | 3.865 ms | 3.60 |
+| adjoint, CUDA C (56, 68, 72, 46 registers) | 3.134 ms | 2.92 |
+| Burn, forward alone | 87 ms | 81 |
+| Burn, forward and backward | 4,276 ms | about 4,000 |
+
+- The dot-product test agrees to 4.0e-15. The CUDA C adjoint equals the
+  CubeCL one to the bit.
+- Burn's gradient equals them to 3.3e-16 (dot-product test 3.8e-15).
+- In Burn, the gathers of the nodes of each triangle and of each
+  (node, triangle) pair become scatter-adds of repeated indices in the
+  backward pass, with atomics in f64. That is why the backward takes 50
+  times the forward.
+- Burn's intermediates of one sub-step take about 6.1 GB (14.5 KB per
+  node), and a step has 287 sub-steps.
+- The hand-written adjoint needs 0.6 GB of scratch per sub-step, reused
+  from one sub-step to the next.
+
+**Step-level checkpointing over 156 h on one A100** (f64, 936 steps of
+600 s):
+- A state is the spectra, $424{,}123 \times 1152 \times 8$ B = 3.9 GB. A
+  forward step takes 1.70 s (245.3 s per model day): about 0.31 s of
+  sweeps (287 × 1.07 ms) and 1.39 s of the rest, mostly the source
+  kernel.
+- **Cost of the adjoint of a step.** The sweeps are recomputed once and
+  reversed at 2.9–3.6 times their cost: about 1.2 s. The source kernel
+  is recomputed once (to rebuild its dynamic sub-steps) and reversed at
+  1.4–2.3 times its cost, the DIA's ratios taken for the whole `W3SRCE`:
+  3.3–4.6 s. The adjoint of a step is then 4.5–5.8 s, 2.7–3.4 forward
+  steps.
+- **Two levels in host RAM.** A checkpoint every 31 steps (31 states)
+  is written during the forward run. In the backward pass, each segment of
+  31 steps is recomputed from its checkpoint, keeping its 31 step starts.
+  That is 62 states, 242 GB of host RAM: an eighth of an A100 node of
+  hpc, which has 2 TB and 8 GPUs. Moving them over PCIe takes about 550 s
+  in all, which can overlap the computation.
+- **Total.** One forward run, one recomputation and the adjoint: 4.7–5.4
+  forward runs of 1,590 s, so 2.1–2.4 h for the gradient of a 156 h cost
+  with respect to all the parameters and forcing fields at once.
+- **Within a step.** The GPU keeps the three states after `W3KTP3`, the
+  propagation and the second `W3KTP3` (12 GB), the inputs of the
+  sub-steps of the frequency being reversed (122 MB each, up to `ITER`),
+  and the spectra of the dynamic sub-steps of the source kernel, by
+  batches of nodes (9.2 KB per node and dynamic sub-step).
+- **With the GPU alone.** 12 states (47 GB), recomputed by binomial
+  checkpointing (4 repetitions for 936 steps), take about 3.2–3.5 h.
+- **Against tangents.** The nine tangents of `BETAMAX`$(U)$, `SDSC2` and
+  `NLPROP` over the same window take about 5.7 h, at the 156 h rate of
+  the calibration's p0 tangent (642 s per model day) scaled by the
+  optimisation's gain on the first day (931.4 to 508.5 s). The adjoint is
+  2.4–2.7 times cheaper for the nine parameters, and it also gives the
+  gradient with respect to the forcing fields, which tangents cannot.
+
+**Register limits.** CubeCL declares only the size of the cube, so its
+kernels cannot be capped. Adding `.maxnreg` to the PTX it writes and
+reading `ptxas -v` gives:
+
+| Kernel | Cap | Spill | Effect |
+|---|---|---|---|
+| f32 value kernel with the hoisted `W3SIN4` constants (step 3, now 168 registers) | 128 | 112 B, as today's kernel | 4 nodes per SM, which would make step 3 usable |
+| f64 value kernel | 168 | 160 B | 3 nodes per SM, if its shared memory also fell under 54,954 B (the variant with per-unit sums had 50,272 B) |
+| tangent kernel | 128 | 12 KB | not useful |
+
+A cap needs the kernel in CUDA C, which `__launch_bounds__(128, n)`
+gives, or a patched CubeCL.
+
+The GPU time from 23 November 07:27 is 51.5 GPU-hours.
+
 ## Coastal diagnostics of the buoy scores
 
 At the start of the calibration the buoy $H_s$ is too low (bias −4.85 cm on

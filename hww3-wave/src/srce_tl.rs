@@ -906,7 +906,7 @@ fn sln1_tl<F: Float>(
 /// spectrum and tangent in `sa`, `sad`; they are put back at the end.
 #[cube]
 #[allow(clippy::too_many_arguments)]
-fn snl1_tl<F: Float>(
+pub(crate) fn snl1_tl<F: Float>(
     par: &[F],
     sig: &[F],
     dia_ip: &[u32],

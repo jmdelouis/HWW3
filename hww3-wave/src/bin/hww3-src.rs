@@ -7,6 +7,7 @@
 //! hww3-src check-ice HARNESS2 --params ST4.params --nml NAMELISTS.nml --grid-nml WW3_GRID.nml [--data DIR]
 //! hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red]
 //! hww3-src check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]
+//! hww3-src adj-dia HARNESS [--units N] [--replicate R] [--burn-replicate RB] [--reps K] [--only cubecl|burn]
 //! hww3-src tables BASE.params [OTHER.params ...]
 //! hww3-src params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+NAME:F]
 //! ```
@@ -15,6 +16,12 @@
 //! integration (`hww3_wave::srce`) on the harness nodes and compares the
 //! spectra after the step with WW3 and with the CPU transcription; with
 //! `--replicate R` each node is repeated `R` times for the timing.
+//! `adj-dia` (milestone M4 prototype) runs the DIA alone on the harness
+//! spectra repeated `R` times in double precision: its value, its tangent
+//! and its hand-written adjoint (`hww3_wave::adjoint`) with the dot-product
+//! test and the times, then the same DIA as Burn tensor operations on the
+//! first `RB` copies, its gradient through Burn's tape against the adjoint
+//! and the tangent (`hww3_wave::burn_m4`); `--only` runs one of the two.
 //! `check-tl` (CubeCL build, milestone M3) checks the tangent kernel
 //! `hww3_wave::srce_tl` against finite differences of that kernel in double
 //! precision, `tables` the stress tables computed here against those of
@@ -360,6 +367,56 @@ fn check_gpu<F: hww3_wave::device::Real>(path: PathBuf, nu: usize, replicate: us
     println!("  spectrum after the step, max |gpu - ww3| / max ww3 per node: max {w_spec:.3e} (ISEA {worst}), mean {w_spec_mean:.3e}; |dHs| max {w_dhs:.3e} m");
     println!("  spectrum after the step, max |gpu - cpu f64| / max cpu per node: max {c_spec:.3e}; |dHs| max {c_dhs:.3e} m");
     println!("  mean dynamic step against WW3: max relative difference {w_dt:.3e}, {bad_dt} nodes above 1e-3; u* max relative difference {w_ust:.3e}");
+    Ok(())
+}
+
+/// `adj-dia`: the DIA prototypes of milestone M4 (see the header).
+#[cfg(feature = "cubecl")]
+fn adj_dia(path: PathBuf, nu: usize, replicate: usize, rb: usize, reps: usize, only: &str) -> Result<()> {
+    use burn::tensor::Device;
+    use hww3_wave::sources::SrceTables;
+    use hww3_wave::srce::SourceKernel;
+    let h = Harness::read(&path)?;
+    let mut pp = path.clone().into_os_string();
+    pp.push(".params");
+    let p = Params::read(&PathBuf::from(pp))?;
+    let q = SrcePar::new(&p)?;
+    let (nk, nth) = (h.nk, h.nth);
+    let nspec = nk * nth;
+    let n0 = h.nodes.len();
+    let t = SrceTables::new(&q)?;
+    let n = n0 * replicate;
+    let mut va = vec![0f64; nspec * n];
+    let mut cg = vec![0f64; nk * n];
+    let mut kdm = vec![0f64; n];
+    for j in 0..n {
+        let inp = &h.nodes[j % n0].inputs;
+        let (mut e, mut ek) = (0f64, 0f64);
+        for ik in 0..nk {
+            let mut eb = 0f64;
+            for th in 0..nth {
+                let v = inp.spec[ik * nth + th] as f64;
+                va[j * nspec + ik * nth + th] = v;
+                eb += v;
+            }
+            cg[j * nk + ik] = inp.cg[ik] as f64;
+            e += eb;
+            ek += eb * inp.wn[ik] as f64;
+        }
+        // k_mean depth from the energy-weighted wavenumber (for the test)
+        kdm[j] = if e > 0.0 { ek / e * inp.v[0] as f64 } else { 1.0 };
+    }
+    let device = Device::cuda(0);
+    let client = hww3_wave::burn_ext::client(&device)?;
+    let k = SourceKernel::<f64>::new(&client, &t, nu);
+    let mut out = serde_json::json!({});
+    let (rep, refs) = hww3_wave::adjoint::dia_check(&client, &k, &t, &va, &cg, &kdm, n, nk, nth, reps)?;
+    out["cubecl"] = rep;
+    if only != "cubecl" && rb > 0 {
+        let nb = n0 * rb.min(replicate);
+        out["burn"] = hww3_wave::burn_m4::dia_burn(&t, &va, &cg, &kdm, nb, nk, nth, &refs, reps)?;
+    }
+    println!("{}", serde_json::to_string(&out)?);
     Ok(())
 }
 
@@ -983,6 +1040,15 @@ fn main() -> Result<()> {
             }
         }
         #[cfg(feature = "cubecl")]
+        (Some("adj-dia"), Some(f)) => {
+            let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
+            let rep: usize = opt("--replicate").map(|s| s.parse()).transpose()?.unwrap_or(200);
+            let rb: usize = opt("--burn-replicate").map(|s| s.parse()).transpose()?.unwrap_or(4);
+            let reps: usize = opt("--reps").map(|s| s.parse()).transpose()?.unwrap_or(3);
+            let only = opt("--only").unwrap_or_default();
+            adj_dia(PathBuf::from(f), nu, rep, rb, reps, &only)
+        }
+        #[cfg(feature = "cubecl")]
         (Some("check-tl"), Some(f)) => {
             let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
             let h: f64 = opt("--h").map(|s| s.parse()).transpose()?.unwrap_or(1e-4);
@@ -990,7 +1056,7 @@ fn main() -> Result<()> {
             check_tl(PathBuf::from(f), nu, h, cut, a.iter().any(|x| x == "--tl-nlnode"))
         }
         _ => bail!(
-            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml F] [--check BASE.params] | check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red] | check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]"
+            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml F] [--check BASE.params] | check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red] | check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]] | adj-dia HARNESS [--units N] [--replicate R] [--burn-replicate RB] [--reps K] [--only cubecl|burn]"
         ),
     }
 }

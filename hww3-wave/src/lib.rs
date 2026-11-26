@@ -56,7 +56,11 @@ pub mod ww3grid;
 pub mod ww3io;
 
 #[cfg(feature = "cubecl")]
+pub mod adjoint;
+#[cfg(feature = "cubecl")]
 pub mod burn_ext;
+#[cfg(feature = "cubecl")]
+pub mod burn_m4;
 #[cfg(feature = "cubecl")]
 pub mod device;
 #[cfg(feature = "cubecl")]
@@ -74,6 +78,8 @@ pub mod srce_tl;
 
 #[cfg(feature = "cuda-c")]
 pub mod cuda_c;
+#[cfg(all(feature = "cubecl", feature = "cuda-c"))]
+pub mod cuda_m4;
 
 #[cfg(test)]
 mod testgrid;

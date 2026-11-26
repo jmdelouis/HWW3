@@ -51,6 +51,9 @@ documented and the CI builds the documentation with warnings as errors.
 | `prop_tl` | CubeCL | tangents of `W3KTP3`, of the geographic node update, of the level remap, of the wind and of the outputs (M3) |
 | `model` | CubeCL | `Model`, `Config`, `Inputs`: the time loop, with the source terms and, with `Config::tangent`, the tangent |
 | `cuda_c` | CUDA C | `CudaGrid`: the `cudarc` `Sweeper` |
+| `adjoint` | CubeCL | M4 prototypes: the DIA alone (`dia_value`, `dia_tangent`) and its hand-written adjoint (`dia_adjoint`, `DiaAdjTables`, `dia_check`), the hand-written adjoint of a geographic sub-step (`geo_adj_node1`, `geo_adj_tri`, `geo_adj_node2`) |
+| `burn_m4` | CubeCL | M4 prototypes with Burn's autodiff: `dia_burn`, `geo_burn`, `GeoHost` |
+| `cuda_m4` | CubeCL and CUDA C | M4 prototypes: the same adjoints in CUDA C (`dia_adjoint_cuda`, `geo_adjoint_cuda`) |
 
 Programs: `hww3-wave` (M0 timings and checks), `hww3-prop` (the model;
 `--tangent` for the M3 tangent) and `hww3-src` (the source terms against
@@ -96,6 +99,7 @@ other values of the calibrated parameters). The Fortran harness
 | `m3_tl_src_hpc.slurm` | the tangent kernel of the source terms against finite differences on the harness nodes (`hww3-src check-tl`) |
 | `m3_tl_run_hpc.slurm`, `m3_tl_compare.py` | a tangent run of `hww3-prop` and, with one or two steps, the perturbed runs and the comparison of the tangent with their central differences (with two steps, on the nodes where they agree) |
 | `m3_tl_cmp_hpc.slurm` | the 48 h tangent runs against the finite-difference runs of M2b |
+| `m4_proto_hpc.slurm` | the M4 prototypes: `hww3-src adj-dia` and `hww3-prop adj-geo` (hand-written adjoints in CubeCL and CUDA C, Burn autodiff), with the peak of the GPU memory of each run |
 | `cal_run_hpc.slurm` | a run of the calibration: value or tangent run with given `BETAMAX` (Rust stress tables), `SDSC2`, `NLPROP`, `BJGAM`, and `BETAMAX`$(U)$ (`BETAU`, `BETAU_GRID`) |
 | `cal_obs.py`, `cal_py_hpc.slurm` | the observation operators of the calibration (altimeter blocks, buoy hours, as the validation scripts match them), the cost and its gradient from tangent runs |
 | `cal_gn.py` | one Gauss–Newton (Levenberg–Marquardt) step with the posterior covariance; `--smooth` adds the second differences of the `BETAMAX`$(U)$ coefficients to the prior |

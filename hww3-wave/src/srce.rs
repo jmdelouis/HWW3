@@ -870,7 +870,7 @@ fn sln1<F: Float>(
 /// cube synchronisation.
 #[cube]
 #[allow(clippy::too_many_arguments)]
-fn snl1<F: Float>(
+pub(crate) fn snl1<F: Float>(
     par: &[F],
     sig: &[F],
     dia_ip: &[u32],

@@ -2530,6 +2530,303 @@ impl<F: Real> Model<F> {
             .collect()
     }
 
+    /// Milestone M4 prototype (`hww3-prop adj-geo`): one geographic
+    /// sub-step of frequency `ik` (the first, `sub = 0`) on the state after
+    /// [`Model::prepare`], its value ([`prop::geo_tri_x4()`] then
+    /// [`prop::geo_node_x4()`]), its tangent along a random `du`
+    /// ([`prop_tl::geo_node_x4_tl()`]) and its hand-written adjoint of a random
+    /// `ybar` ([`crate::adjoint`]: the triangle values recomputed, then
+    /// [`crate::adjoint::geo_adj_node1()`], [`crate::adjoint::geo_adj_tri()`],
+    /// [`crate::adjoint::geo_adj_node2()`]), with the dot-product test and the
+    /// mean times of `reps` launches; then, unless `only` is `cubecl`, the
+    /// same sub-step as Burn tensor operations
+    /// ([`crate::burn_m4::geo_burn`]).
+    pub fn adj_geo_check(&mut self, ik: usize, reps: usize, only: &str) -> Result<serde_json::Value> {
+        use crate::adjoint::{dot, geo_adj_node1, geo_adj_node2, geo_adj_tri, Lcg};
+        use cubecl::prelude::CubeElement;
+        let (np, ne, nk, nth) = (self.np, self.ne, self.nk, self.nth);
+        let nspec = nk * nth;
+        let n = np * nth;
+        let sub = 0u32;
+        let (c, d) = self.dims(n);
+        unsafe {
+            prop::va_to_ac::launch_unchecked::<F>(
+                &self.client,
+                c,
+                d,
+                bf(&self.d_va, nk * n),
+                bf(&self.d_ac, n),
+                bf(&self.d_cg, (nk + 2) * np),
+                bf(&self.d_clats, np),
+                np,
+                ik,
+                nth,
+            );
+        }
+        let u = self.download_f64(&self.d_ac);
+        let mut rng = Lcg(424123);
+        let du: Vec<f64> = rng.vec(n, -1.0, 1.0).iter().zip(&u).map(|(r, x)| r * x).collect();
+        let ybar = rng.vec(n, -1.0, 1.0);
+        let (d_du, d_ybar) = (self.upd(&du), self.upd(&ybar));
+        let fb = std::mem::size_of::<F>();
+        let e = |k: usize| self.client.empty(k * fb);
+        let (d_out, d_out2, d_dout, d_dut, d_ub, d_stb, d_utb, d_ab) = (e(n), e(n), e(n), e(ne * nth), e(n), e(n), e(ne * nth), e(n));
+        let (rd10, rd20) = self.boundary_rd();
+        let nb1 = self.nbnd.max(1);
+        let (ct, dt) = self.dims(ne * (nth / 4));
+        let (cn, dn) = self.dims(np * (nth / 4));
+        let tri = |uin: &Handle, ut: &Handle| unsafe {
+            prop::geo_tri_x4::launch_unchecked::<F>(
+                &self.client,
+                ct.clone(),
+                dt,
+                bf(uin, n),
+                bf(ut, ne * nth),
+                bf(&self.d_coef, nk * ne * 12),
+                bf(&self.d_ccoef, ne * 6),
+                bf(&self.d_ecos, nth),
+                bf(&self.d_esin, nth),
+                bf(&self.d_iter, nspec),
+                bf(&self.d_ine, 3 * ne),
+                ne,
+                ik,
+                sub,
+                nth,
+            );
+        };
+        let value = || {
+            tri(&self.d_ac, &self.d_ut);
+            unsafe {
+                prop::geo_node_x4::launch_unchecked::<F>(
+                    &self.client,
+                    cn.clone(),
+                    dn,
+                    bf(&self.d_ac, n),
+                    bf(&d_out, n),
+                    bf(&self.d_ut, ne * nth),
+                    bf(&self.d_coef, nk * ne * 12),
+                    bf(&self.d_ccoef, ne * 6),
+                    bf(&self.d_ecos, nth),
+                    bf(&self.d_esin, nth),
+                    bf(&self.d_dtk, nspec),
+                    bf(&self.d_iter, nspec),
+                    bf(&self.d_si_inv, np),
+                    bf(&self.d_mlo, np),
+                    bf(&self.d_mhi, np),
+                    bf(&self.d_start, np + 1),
+                    bf(&self.d_slot, 3 * ne),
+                    bf(&self.d_bidx, np),
+                    bf(&self.d_bb0, nb1 * nspec),
+                    bf(&self.d_bbn, nb1 * nspec),
+                    bf(&self.d_clats, np),
+                    rd10,
+                    rd20,
+                    self.cfg.dtg,
+                    np,
+                    ne,
+                    nspec,
+                    ik,
+                    sub,
+                    nth,
+                );
+            }
+        };
+        let tangent = || {
+            tri(&self.d_ac, &self.d_ut);
+            tri(&d_du, &d_dut);
+            unsafe {
+                prop_tl::geo_node_x4_tl::launch_unchecked::<F>(
+                    &self.client,
+                    cn.clone(),
+                    dn,
+                    bf(&self.d_ac, n),
+                    bf(&d_du, n),
+                    bf(&d_out2, n),
+                    bf(&d_dout, n),
+                    bf(&self.d_ut, ne * nth),
+                    bf(&d_dut, ne * nth),
+                    bf(&self.d_coef, nk * ne * 12),
+                    bf(&self.d_ccoef, ne * 6),
+                    bf(&self.d_ecos, nth),
+                    bf(&self.d_esin, nth),
+                    bf(&self.d_dtk, nspec),
+                    bf(&self.d_iter, nspec),
+                    bf(&self.d_si_inv, np),
+                    bf(&self.d_mlo, np),
+                    bf(&self.d_mhi, np),
+                    bf(&self.d_start, np + 1),
+                    bf(&self.d_slot, 3 * ne),
+                    bf(&self.d_bidx, np),
+                    bf(&self.d_bb0, nb1 * nspec),
+                    bf(&self.d_bbn, nb1 * nspec),
+                    bf(&self.d_clats, np),
+                    rd10,
+                    rd20,
+                    self.cfg.dtg,
+                    np,
+                    ne,
+                    nspec,
+                    ik,
+                    sub,
+                    nth,
+                );
+            }
+        };
+        let adjoint = || {
+            tri(&self.d_ac, &self.d_ut);
+            unsafe {
+                geo_adj_node1::launch_unchecked::<F>(
+                    &self.client,
+                    cn.clone(),
+                    dn,
+                    bf(&self.d_ac, n),
+                    bf(&self.d_ut, ne * nth),
+                    bf(&d_ybar, n),
+                    bf(&d_ub, n),
+                    bf(&d_stb, n),
+                    bf(&self.d_coef, nk * ne * 12),
+                    bf(&self.d_ccoef, ne * 6),
+                    bf(&self.d_ecos, nth),
+                    bf(&self.d_esin, nth),
+                    bf(&self.d_dtk, nspec),
+                    bf(&self.d_iter, nspec),
+                    bf(&self.d_si_inv, np),
+                    bf(&self.d_mlo, np),
+                    bf(&self.d_mhi, np),
+                    bf(&self.d_start, np + 1),
+                    bf(&self.d_slot, 3 * ne),
+                    bf(&self.d_bidx, np),
+                    np,
+                    ne,
+                    ik,
+                    sub,
+                    nth,
+                );
+                geo_adj_tri::launch_unchecked::<F>(
+                    &self.client,
+                    ct.clone(),
+                    dt,
+                    bf(&d_stb, n),
+                    bf(&d_utb, ne * nth),
+                    bf(&self.d_coef, nk * ne * 12),
+                    bf(&self.d_ccoef, ne * 6),
+                    bf(&self.d_ecos, nth),
+                    bf(&self.d_esin, nth),
+                    bf(&self.d_ine, 3 * ne),
+                    ne,
+                    ik,
+                    nth,
+                );
+                geo_adj_node2::launch_unchecked::<F>(
+                    &self.client,
+                    cn.clone(),
+                    dn,
+                    bf(&d_ub, n),
+                    bf(&d_utb, ne * nth),
+                    bf(&d_ab, n),
+                    bf(&self.d_coef, nk * ne * 12),
+                    bf(&self.d_ccoef, ne * 6),
+                    bf(&self.d_ecos, nth),
+                    bf(&self.d_esin, nth),
+                    bf(&self.d_start, np + 1),
+                    bf(&self.d_slot, 3 * ne),
+                    np,
+                    ne,
+                    ik,
+                    nth,
+                );
+            }
+        };
+        let time = |f: &dyn Fn()| -> f64 {
+            f();
+            self.sync();
+            let t0 = std::time::Instant::now();
+            for _ in 0..reps {
+                f();
+            }
+            self.sync();
+            t0.elapsed().as_secs_f64() / reps as f64
+        };
+        let tv = time(&value);
+        let tt = time(&tangent);
+        let ta = time(&adjoint);
+        let out = self.download_f64(&d_out);
+        let out2 = self.download_f64(&d_out2);
+        let dout = self.download_f64(&d_dout);
+        let ab = self.download_f64(&d_ab);
+        let lhs = dot(&dout, &ybar);
+        let rhs = dot(&du, &ab);
+        let same = out.iter().zip(&out2).all(|(a, b)| a == b);
+        println!(
+            "one geographic sub-step of frequency {ik} ({} nodes, {} triangles, {} directions, {}), ITER max {}:",
+            np,
+            ne,
+            nth,
+            <F as crate::backend::Scalar>::NAME,
+            self.max_iter(ik)
+        );
+        println!(
+            "  time per sub-step (mean of {reps}): value {:.3} ms, tangent {:.3} ms, hand-written adjoint {:.3} ms (adjoint / value {:.2}, tangent / value {:.2})",
+            tv * 1e3,
+            tt * 1e3,
+            ta * 1e3,
+            ta / tv,
+            tt / tv
+        );
+        println!("  value of the tangent kernel identical to the bit to the value kernel: {same}");
+        println!(
+            "  dot-product test: <L x, y> = {lhs:.15e}, <x, Lt y> = {rhs:.15e}, relative difference {:.3e}",
+            (lhs - rhs).abs() / lhs.abs().max(1e-300)
+        );
+        let mut rep = serde_json::json!({
+            "ik": ik, "np": np, "ne": ne, "reps": reps,
+            "ms": {"value": tv * 1e3, "tangent": tt * 1e3, "adjoint": ta * 1e3},
+            "dot": {"lhs": lhs, "rhs": rhs, "rel": (lhs - rhs).abs() / lhs.abs().max(1e-300)},
+            "global_scratch_bytes_adjoint": (3 * n + ne * nth) * fb,
+        });
+        {
+            let rdu = |h: &Handle| -> Vec<u32> { u32::from_bytes(&self.client.read_one(h.clone()).expect("device read")).to_vec() };
+            let host = crate::burn_m4::GeoHost {
+                np,
+                ne,
+                nth,
+                u: u.clone(),
+                coef: self.download_f64(&self.d_coef)[ik * ne * 12..(ik + 1) * ne * 12].to_vec(),
+                ccoef: self.download_f64(&self.d_ccoef),
+                ecos: self.download_f64(&self.d_ecos),
+                esin: self.download_f64(&self.d_esin),
+                dtk: self.download_f64(&self.d_dtk)[ik * nth..(ik + 1) * nth].to_vec(),
+                iter: rdu(&self.d_iter)[ik * nth..(ik + 1) * nth].to_vec(),
+                si_inv: self.download_f64(&self.d_si_inv),
+                mlo: rdu(&self.d_mlo),
+                mhi: rdu(&self.d_mhi),
+                start: rdu(&self.d_start),
+                slot: rdu(&self.d_slot),
+                ine: rdu(&self.d_ine),
+                bidx: rdu(&self.d_bidx),
+                out: out.clone(),
+            };
+            #[cfg(feature = "cuda-c")]
+            {
+                let (abc, tc, regs) = crate::cuda_m4::geo_adjoint_cuda(&host, &ybar, reps)?;
+                let mx = ab.iter().fold(0f64, |m, x| m.max(x.abs())).max(1e-300);
+                let rl = abc.iter().zip(&ab).fold(0f64, |m, (x, y)| m.max((x - y).abs())) / mx;
+                let rc = dot(&du, &abc);
+                println!(
+                    "  CUDA C adjoint (registers {regs:?}): {:.3} ms per sub-step (adjoint / CubeCL value {:.2}); against the CubeCL adjoint {rl:.3e}; dot-product test {:.3e}",
+                    tc * 1e3,
+                    tc / tv,
+                    (lhs - rc).abs() / lhs.abs().max(1e-300)
+                );
+                rep["cuda_c"] = serde_json::json!({"ms": tc * 1e3, "regs": regs, "rel_vs_cubecl": rl, "dot_rel": (lhs - rc).abs() / lhs.abs().max(1e-300)});
+            }
+            if only != "cubecl" {
+                rep["burn"] = crate::burn_m4::geo_burn(&host, &ybar, &du, &dout, &ab, reps)?;
+            }
+        }
+        Ok(rep)
+    }
+
     /// Geographic step of frequency `ik` on the GPU against the CPU
     /// transcription of `PDLIB_W3XYPUG` (call after [`Model::prepare`]).
     /// Returns (max |gpu - cpu| / max |cpu|, rms ratio, directions whose ITER differs).
