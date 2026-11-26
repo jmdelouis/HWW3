@@ -2772,7 +2772,7 @@ where round-off is amplified as described for M2b. The cost and all the
 scores are identical on both windows.
 \end{itemize}
 
-\paragraph{Optimisation (in progress).} The GPU model is profiled with
+\paragraph{Optimisation (done).} The GPU model is profiled with
 Nsight Systems on one A100 of the hpc cluster, from the restart of
 1 January 00:10 on grid v5 $K=4$ with the full ST4 (job 4415688), before
 anything is changed.
@@ -2905,6 +2905,36 @@ $9\times10^{9}$ at some nodes, the altimeter column of the Jacobian is
 26\,\% off in relative $L_2$, and $\partial J/\partial\ln\beta_{\max}$
 is $1.921\times10^{4}$ against $1.797\times10^{4}$ in double precision
 (job 4460585). It is not used.
+\end{itemize}
+\item \emph{Final build} (commit \texttt{eb769eb}), identical bit for
+bit to the second checkpoint.
+\begin{itemize}
+\item Parallel reductions of the value source kernel (the sums of W3SIN4
+over the directions and of W3SPR4 over the frequencies, the minimum of
+the dynamic step) are an option, \texttt{--par-red}, off by default.
+They take 48 hours in double precision from 245.3 to \SI{228.6}{s} per
+model day ($-6.8\,\%$) and gain nothing in single precision, at
+round-off (\SI{7.6e-12}{m} at most on $H_s$, the costs of the
+calibration windows within $4\times10^{-3}$, every score the same to the
+printed digits).
+\item The geographic sub-step as one kernel was slower (0.649 against
+\SI{0.560}{ms} per sub-step in single precision, 1.435 against 1.043 in
+double precision, 2.393 against 1.919 for the tangent) and not identical
+bit for bit, so it is not kept. The vector tangent is dropped in favour
+of the adjoint of M4: with the value path shared it would be at best 1.3
+times faster for two directions and 1.75 times for nine, and only if the
+nodes per multiprocessor stayed the same, which the 11 to 15\,KB of
+shared memory per further direction does not allow. Asynchronous outputs
+are skipped (under 1\,\%).
+\item One A100 now takes \SI{98.3}{s} per model day for the
+single-precision week, \SI{245.3}{s} in double precision and
+\SI{508.5}{s} for the double-precision tangent, against 124.1, 505.1 and
+931.4 before. Over the same days it is 7.3 times faster than WW3 on 64
+cores of the hpc cluster (\SI{717.1}{s} per model day), and over 8--10
+January 14.7 times faster in single precision and 6.9 times in double
+precision than WW3 on 32 ranks (\SI{1491}{s}). Against the runs on 112
+cores of Datarmor (other days) it is 26 times faster than the explicit
+scheme and 10.8 times faster than the implicit one.
 \end{itemize}
 \end{itemize}
 
