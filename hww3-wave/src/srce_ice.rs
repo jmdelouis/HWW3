@@ -626,7 +626,7 @@ use anyhow::{bail, ensure, Result};
 use cubecl::client::Client;
 use cubecl::server::Handle;
 
-/// The device buffers [`ice_ref`] reads and writes for one node set of `np`
+/// The device buffers [`ice_ref()`] reads and writes for one node set of `np`
 /// nodes: spectra `va` (`[(ik np + i) nth + ith]`, updated), wavenumbers and
 /// group speeds `wn`, `cg` (`[(ik + 1) np + i]`, `ik = 0 .. NK - 1`), node
 /// flags `nflag` (bit 2: `MAPSTA = 1`); for the ice terms the depth `depth`
@@ -669,7 +669,7 @@ pub struct IceRefArgs<'a> {
 
 /// The parameters and tables of the ice terms ([`IceParams`]) and of the
 /// reflection ([`Ref1Params`]) on the device, and the launcher of
-/// [`ice_ref`].
+/// [`ice_ref()`].
 pub struct IceRefKernel<F: Real> {
     par: Handle,
     ktab: Handle,
@@ -859,7 +859,7 @@ impl<F: Real> IceRefKernel<F> {
         })
     }
 
-    /// Launch [`ice_ref`] on `np` nodes for the global step `dtg`; nothing
+    /// Launch [`ice_ref()`] on `np` nodes for the global step `dtg`; nothing
     /// is launched when neither the ice step nor the reflection runs.
     #[allow(clippy::too_many_arguments)]
     pub fn launch(&self, client: &Client, s: &IceRefArgs, np: usize, nk: usize, nth: usize, dtg: f32) -> Result<()> {
