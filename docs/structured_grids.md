@@ -93,7 +93,7 @@ The IRI configuration (`IRIGLOB-7M`, `ARC-15KM`, `ANTARC-15KM` under
 | WW3 | IRI setting | GPU model |
 |---|---|---|
 | propagation | `PR3` (`UQ`, third order, with GSE correction `WDTHCG = WDTHTH = 1.5`) | first-order N scheme on triangles (`PDLIB_W3XYPFSN2`) |
-| whitecapping | `SDSBCHOICE = 3` with the isotropic cumulative term `SDSCUM = 0.3` | `SDSBCHOICE = 1`, `SDSCUM = 0` (the HWW3 variant of ST4); the rest of `&SDS4` and `&SIN4` kept (`BETAMAX 1.57`, `SDSC2 -3.8`, ...) |
+| whitecapping | `SDSBCHOICE = 3` with the isotropic cumulative term `SDSCUM = 0.3` | ported since (see below); the runs above used `SDSBCHOICE = 1`, `SDSCUM = 0` (the HWW3 variant of ST4), the rest of `&SDS4` and `&SIN4` kept (`BETAMAX 1.57`, `SDSC2 -3.8`, ...) |
 | ice | `IC2` (under-ice boundary layer) and `IS2` (ice scattering and break-up), ice from ERA5 | not ported: ice only as WW3 masks it without these terms |
 | reflection | `REF1` (coast and iceberg reflection) | not ported |
 | obstructions | `OBST%FILENAME` (sub-grid blocking) | not used by the triangle scheme |
@@ -184,3 +184,39 @@ earlier, so the GPU run lacks the swell at first):
 The WW3 reference took 137,953 s of wall time on 252 MPI processes of
 Datarmor for the 140 days (`log.mww3`), 985 s per model day for the three
 grids together (2,077,465 sea points).
+
+## Romero's whitecapping (`SDSBCHOICE = 3`)
+
+`W3SDS4` with `SDSBCHOICE = 3` (Romero 2019) and the isotropic cumulative
+term (`SDSCUM > 0`), as the IRI configuration sets them, is ported to the
+CPU reference (`sources::sds4`), the value kernel (`sds4_romero` in
+`srce`) and the tangent kernel (`sds4_romero_tl` in `srce_tl`): the
+breaking-crest density from the directional saturation, modulated by the
+cumulative mean square slope in the direction of the long waves
+(`SDSFACMTF`, `SDSNMTF`, `SPMSS`, with `DLWMEAN` of `W3SPR4`), the
+breaking strength from `SDSBT`, the pseudo-diagonal, and the isotropic
+cumulative rate summed over the longer waves (`DIKCUMUL = NINT(SDSBRF1 /
+(XFR - 1))`, set by `W3SDS4` itself). The kernels choose the branch at
+compile time from the parameters (`SourceKernel::romero`), so the kernels
+of `SDSBCHOICE = 1` are generated as before.
+
+Checks (`scripts/st4_romero_ref_hpc.slurm`, `scripts/st4_romero_gpu_hpc.slurm`):
+a `mod_def.ww3` of grid v5 K=4 with the `&SIN4`, `&SDS4` and `&SNL1` of the
+IRI namelists, and the source-term harness of M2 on 1,864 nodes of the
+restart of 8 January 2026.
+
+| Check | Result |
+|---|---|
+| CPU against WW3, `W3SDS4` | S max 8.6e-6, RMS 3.9e-7 (relative, per node) |
+| CPU against WW3, whole `W3SRCE` | spectrum max 4.7e-6; same dynamic sub-steps (1 to 60, mean 3.72), `LLWS`, `LBREAK`, `SHAVE` identical |
+| GPU against CPU and WW3, f32 and f64 | spectrum max 7.5e-5 at one node (ISEA 9401), mean 3.3e-7; H_s within 8.8e-5 m |
+| tangent against central differences (M3 check, h 1e-4) | no smooth node above 1e-4 in any direction (largest 9.9e-6) |
+| the default path (`SDSBCHOICE = 1`) | 2 h of v5 K=4 identical to the bit to main in f32 and f64; the M3 check prints the same numbers |
+
+The largest GPU difference is at a node where the source integration takes
+the `DTMIN` floor: with the same `&SIN4` and `SDSBCHOICE = 1`, the
+established kernel differs there by 1.6e-3 from the CPU, and the CPU by
+2.8e-3 from WW3. The tangent is not defined where the breaking strength
+vanishes (`BTOVER = 0`, where Lambda jumps to zero, so that the cumulative
+rate of the shorter waves jumps too) and at the floor of the saturation
+(`1e-14`); it takes the one-sided derivative there.

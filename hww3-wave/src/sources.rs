@@ -10,7 +10,8 @@
 //! So far: `W3SPR4` (mean parameters and u*), `CALC_USTAR` (u* by Newton
 //! iterations, `SINTABLE = 0`), `W3SIN4` (wind input with swell damping and
 //! the tail stress integrated in line), `W3SDS4` (saturation-based
-//! whitecapping, `SDSBCHOICE = 1`, without the cumulative term), `W3SLN1`,
+//! whitecapping, `SDSBCHOICE = 1`, or Romero's `SDSBCHOICE = 3`, with the
+//! directional or isotropic cumulative term), `W3SLN1`,
 //! `W3SDB1`, `W3SBT4`, `W3SNL1` (discrete interaction approximation,
 //! [`Dia`]) and the explicit integration of `W3SRCE` ([`srce`]).
 
@@ -90,6 +91,16 @@ pub struct St4 {
     pub ssdsc: Vec<f64>,
     /// Saturation threshold, exponent and angular width of `W3SDS4`.
     pub ssdsbr: f64,
+    /// `SSDSBT`: saturation threshold of the breaking strength
+    /// (`SDSBCHOICE = 3`).
+    pub ssdsbt: f64,
+    /// `SSDSBRF1`: frequency ratio of the cumulative term, and `XFR`
+    /// (`DIKCUMUL = NINT(SSDSBRF1 / (XFR - 1))`, as `W3SDS4` sets it).
+    pub ssdsbrf1: f64,
+    /// See [`St4::ssdsbrf1`].
+    pub xfr: f64,
+    /// `DSIP(0..NK+1)`: band widths in sigma.
+    pub dsip: Vec<f64>,
     /// See [`St4::ssdsbr`].
     pub ssdsp: f64,
     /// See [`St4::ssdsbr`].
@@ -273,6 +284,10 @@ impl St4 {
             abmin: p.r1("ABMIN")? as f64,
             ssdsc: v64(p.r("SSDSC")?),
             ssdsbr: p.r1("SSDSBR")? as f64,
+            ssdsbt: p.r1("SSDSBT")? as f64,
+            ssdsbrf1: p.r1("SSDSBRF1")? as f64,
+            xfr: p.r1("XFR")? as f64,
+            dsip: v64(p.r("DSIP")?),
             ssdsp: p.r1("SSDSP")? as f64,
             ssdsdth: p.r1("SSDSDTH")? as f64,
             ssdsbm: a5("SSDSBM")?,
@@ -940,24 +955,38 @@ pub struct Sds4Out {
     pub brlambda: Vec<f64>,
 }
 
+/// `DIKCUMUL` as `W3SDS4` sets it at each call: `NINT(SSDSBRF1 / (XFR - 1))`
+/// in single precision.
+pub fn dikcumul_sds4(p: &St4) -> i32 {
+    let r = p.ssdsbrf1 as f32 / (p.xfr as f32 - 1.0f32);
+    r.round() as i32
+}
+
 /// `W3SDS4` with `SDSBCHOICE = 1` (directional saturation of Ardhuin et
-/// al. 2010), with the directional cumulative term through `CUMULW`
-/// (`SDSCUM < 0`, full ST4), the turbulent term (`SSDSC(5)`) and the
-/// viscous term (`SSDSC(21)`); `ustar`, `usdir` are u* and its direction,
-/// `drat` the air/water density ratio. The whitecap outputs are not
-/// computed (they are off in the HWW3 runs).
-pub fn sds4(p: &St4, a: &[f64], k: &[f64], depth: f64, ustar: f64, usdir: f64, drat: f64) -> Result<Sds4Out> {
+/// al. 2010) or `SDSBCHOICE = 3` (Romero 2019: breaking-crest density from
+/// the directional saturation, with the modulation by the cumulative mean
+/// square slope when `SDSFACMTF > 0`, and breaking strength from
+/// `SDSBT`), with the cumulative term (directional through `CUMULW` when
+/// `SDSCUM < 0`, isotropic when `SDSCUM > 0`), the turbulent term
+/// (`SSDSC(5)`) and the viscous term (`SSDSC(21)`); `ustar`, `usdir` are u*
+/// and its direction, `drat` the air/water density ratio, `cg` the group
+/// speeds and `dlwmean` the mean direction of the long waves of `W3SPR4`
+/// (both used by `SDSBCHOICE = 3` only). The whitecap outputs are not
+/// computed (they are off in the HWW3 and IRI runs).
+#[allow(clippy::too_many_arguments)]
+pub fn sds4(p: &St4, a: &[f64], k: &[f64], cg: &[f64], depth: f64, ustar: f64, usdir: f64, drat: f64, dlwmean: f64) -> Result<Sds4Out> {
     let (nk, nth) = (p.nk, p.nth);
     let nspec = nk * nth;
     let c = &p.ssdsc;
-    if c[0].round() as i32 != 1 {
-        bail!("W3SDS4: only SDSBCHOICE = 1 is ported");
-    }
-    if c[2] > 0.0 {
-        bail!("W3SDS4: the isotropic cumulative term (SDSCUM > 0) is not ported");
+    let choice = c[0].round() as i32;
+    if choice != 1 && choice != 3 {
+        bail!("W3SDS4: SDSBCHOICE = {choice} not ported (1 and 3 are)");
     }
     if c[2] < 0.0 && p.cumulw.is_empty() {
         bail!("W3SDS4: SDSCUM < 0 needs CUMULW in the harness file");
+    }
+    if choice == 3 {
+        return Ok(sds4_romero(p, a, k, cg, ustar, usdir, drat, dlwmean));
     }
     let epsr = p.ssdsbr.sqrt();
     let mut bth = vec![0f64; nspec];
@@ -1005,15 +1034,16 @@ pub fn sds4(p: &St4, a: &[f64], k: &[f64], depth: f64, ustar: f64, usdir: f64, d
     let sdsc21 = c.get(20).copied().unwrap_or(0.0);
     if c[2] != 0.0 || c[4] != 0.0 || sdsc21 != 0.0 {
         let facturb = c[4] * ustar * ustar / p.grav * drat;
-        let dik = p.dikcumul.max(0) as usize;
+        let dik = if c[2] > 0.0 { dikcumul_sds4(p).max(0) as usize } else { p.dikcumul.max(0) as usize };
         let (cu, su) = (usdir.cos(), usdir.sin());
         for ik in 0..nk {
             let facturb2 = -2.0 * p.s(ik + 1) * k[ik] * facturb;
             let dvisc = -4.0 * sdsc21 * k[ik] * k[ik];
+            let iso = if c[2] > 0.0 { renewal_iso(p, k, &brlambda, ik, dik) } else { 0.0 };
             for ith in 0..nth {
                 let is = ith + ik * nth;
                 // IK > DIKCUMUL in WW3's 1-based count
-                let mut renewalfreq = 0.0;
+                let mut renewalfreq = iso;
                 if c[2] < 0.0 && ik + 1 > dik {
                     for ik2 in 0..(ik + 1 - dik) {
                         if bth0[ik2] > p.ssdsbr {
@@ -1036,6 +1066,138 @@ pub fn sds4(p: &St4, a: &[f64], k: &[f64], depth: f64, ustar: f64, usdir: f64, d
         }
     }
     Ok(Sds4Out { s, d, brlambda })
+}
+
+/// The isotropic cumulative rate of `W3SDS4` (`SDSCUM > 0`) at frequency
+/// `ik` (0-based): minus the sum over `IK2 <= IK - DIKCUMUL` of
+/// `|C2 - C| DSIP(IK2) / (C2 / 2) DTH` times the sum of Lambda over the
+/// directions of `IK2`, with the phase speeds `sigma / k`.
+fn renewal_iso(p: &St4, k: &[f64], brlambda: &[f64], ik: usize, dik: usize) -> f64 {
+    let nth = p.nth;
+    let mut r = 0.0;
+    if ik + 1 > dik {
+        let cph = p.s(ik + 1) / k[ik];
+        for ik2 in 0..(ik + 1 - dik) {
+            let c2 = p.s(ik2 + 1) / k[ik2];
+            let w = (c2 - cph).abs() * p.dsip[ik2 + 1] / (0.5 * c2) * p.dth;
+            let sl: f64 = brlambda[ik2 * nth..(ik2 + 1) * nth].iter().sum();
+            r -= w * sl;
+        }
+    }
+    r
+}
+
+/// `W3SDS4` with `SDSBCHOICE = 3` (Romero 2019), then the cumulative,
+/// turbulent and viscous terms as for `SDSBCHOICE = 1` (see [`sds4`]).
+#[allow(clippy::too_many_arguments)]
+fn sds4_romero(p: &St4, a: &[f64], k: &[f64], cg: &[f64], ustar: f64, usdir: f64, drat: f64, dlwmean: f64) -> Sds4Out {
+    let (nk, nth) = (p.nk, p.nth);
+    let nspec = nk * nth;
+    let c = &p.ssdsc;
+    let grav = p.grav;
+    // 1.b cumulative mean square slope and its direction (MSSSUM(IK, 1..2))
+    let mut mss = vec![0f64; nk];
+    let mut mssd = vec![0f64; nk];
+    if c[7] > 0.0 || c[10] > 0.0 || c[17] > 0.0 {
+        let (mut sp, mut sc2, mut ss2) = (0.0f64, 0.0f64, 0.0f64);
+        for ik in 0..nk {
+            let (mut msp, mut mpc2, mut mps2) = (0.0, 0.0, 0.0);
+            for ith in 0..nth {
+                let is = ith + ik * nth;
+                let ml = k[ik].powf(c[19]) * a[is] * p.dden[ik] / cg[ik];
+                mpc2 += ml * p.ecos[ith];
+                mps2 += ml * p.esin[ith];
+                msp += ml;
+            }
+            sp += msp;
+            sc2 += mpc2;
+            ss2 += mps2;
+            mss[ik] = sp;
+            let mut d = ss2.atan2(sc2);
+            if d < 0.0 {
+                d += std::f64::consts::PI;
+            }
+            mssd[ik] = d;
+        }
+    }
+    // 2.c Romero (GRL 2019)
+    let ko = (grav / (ustar * ustar)) / (28.0 / c[15]).powi(2);
+    let mut d = vec![0f64; nspec];
+    let mut s = vec![0f64; nspec];
+    let mut brlambda = vec![0f64; nspec];
+    let mut bth = vec![0f64; nth];
+    let mut lmod = vec![1f64; nth];
+    for ik in 0..nk {
+        let is0 = ik * nth;
+        let sg = p.s(ik + 1);
+        let kloc = k[ik].powf(2.0 - c[19]);
+        for ith in 0..nth {
+            bth[ith] = (a[is0 + ith] * sg * k[ik].powi(3)).max(1e-14);
+        }
+        let dirforcum = if c[10] > 0.0 { mssd[ik] } else { dlwmean };
+        let cph = sg / k[ik];
+        let bth0: f64 = bth.iter().map(|b| b * p.dth).sum();
+        if c[17] > 0.0 {
+            let (cd, sd) = (dirforcum.cos(), dirforcum.sin());
+            for ith in 0..nth {
+                let cosd = p.ecos[ith] * cd + p.esin[ith] * sd;
+                let facstrainl = 1.0 + c[17] * ((mss[ik] * kloc).powf(c[13]) * cosd * cosd);
+                lmod[ith] = facstrainl.powf(c[18]);
+            }
+        }
+        let btover = bth0.sqrt() - p.ssdsbt.sqrt();
+        let brm12 = c[1] * btover.max(0.0).powf(2.5);
+        let fk = (1.0 + c[12] * (k[ik] / ko).max(1.0).powf(c[14])) / (c[12] + 1.0);
+        for ith in 0..nth {
+            let is = is0 + ith;
+            let l = c[8] * (-p.ssdsbr / bth[ith]).exp() * fk * lmod[ith];
+            // MAX(0, SIGN(L, BTOVER)): L when BTOVER >= 0, else 0
+            let l = if btover >= 0.0 { l.abs() } else { 0.0 };
+            brlambda[is] = l;
+            s[is] = brm12 / (grav * grav) * l * cph.powi(5) / sg;
+            d[is] = s[is] * p.ssdsbr / bth[ith].max(1e-20) / a[is].max(1e-20);
+        }
+    }
+    // cumulative (isotropic or directional), turbulent and viscous terms
+    let sdsc21 = c.get(20).copied().unwrap_or(0.0);
+    if c[2] != 0.0 || c[4] != 0.0 || sdsc21 != 0.0 {
+        // BTH0 of SDSBCHOICE 3 (integrated saturation), for the directional term
+        let bth0: Vec<f64> = (0..nk)
+            .map(|ik| (0..nth).map(|ith| (a[ik * nth + ith] * p.s(ik + 1) * k[ik].powi(3)).max(1e-14) * p.dth).sum())
+            .collect();
+        let facturb = c[4] * ustar * ustar / grav * drat;
+        let dik = if c[2] > 0.0 { dikcumul_sds4(p).max(0) as usize } else { p.dikcumul.max(0) as usize };
+        let (cu, su) = (usdir.cos(), usdir.sin());
+        for ik in 0..nk {
+            let facturb2 = -2.0 * p.s(ik + 1) * k[ik] * facturb;
+            let dvisc = -4.0 * sdsc21 * k[ik] * k[ik];
+            let iso = if c[2] > 0.0 { renewal_iso(p, k, &brlambda, ik, dik) } else { 0.0 };
+            for ith in 0..nth {
+                let is = ith + ik * nth;
+                let mut renewalfreq = iso;
+                if c[2] < 0.0 && ik + 1 > dik {
+                    renewalfreq = 0.0;
+                    for ik2 in 0..(ik + 1 - dik) {
+                        if bth0[ik2] > p.ssdsbr {
+                            let is2 = ik2 * nth;
+                            let col = &p.cumulw[is * nspec..(is + 1) * nspec];
+                            let mut dot = 0.0;
+                            for ith2 in 0..nth {
+                                dot += col[is2 + ith2] * brlambda[is2 + ith2];
+                            }
+                            renewalfreq += dot;
+                        }
+                    }
+                }
+                let coswind = p.ecos[ith] * cu + p.esin[ith] * su;
+                let dturb = facturb2 * coswind.max(0.0);
+                let diag2 = c[2] * renewalfreq + dturb + dvisc;
+                d[is] += diag2;
+                s[is] += a[is] * diag2;
+            }
+        }
+    }
+    Sds4Out { s, d, brlambda }
 }
 
 /// Tables of the discrete interaction approximation (`W3SNL1`), as `INSNL1`
@@ -1469,7 +1631,7 @@ pub fn srce(q: &SrcePar, inp: &SrceIn, spec: &mut [f64], wn: &[f64], cg: &[f64],
         let mut vsln = sln1(p, wn, fhigh, sp.ustar, u10dir);
         let mut si = sin4(p, spec, cg, &wn2, u10, sp.ustar, drat, u10dir, sp.z0);
         let (mut vsnl, mut vdnl) = snl1(&q.dia, spec, cg, sp.wnmean * depth);
-        let ds = sds4(p, spec, wn, depth, sp.ustar, sp.usdir, drat).expect("W3SDS4 configuration checked by the caller");
+        let ds = sds4(p, spec, wn, cg, depth, sp.ustar, sp.usdir, drat, sp.dlwmean).expect("W3SDS4 configuration checked by the caller");
         let (mut vsds, mut vdds) = (ds.s, ds.d);
         let (vsdb, vddb, _lbreak) = sdb1(p, spec, depth, sp.emean, sp.fmean, sp.wnmean);
         let bt = sbt4(p, spec, cg, wn, depth, inp.d50, inp.psic);
@@ -1831,8 +1993,19 @@ pub const P_TLNLCUT: usize = 155;
 /// not meet the criterion themselves (young wind seas at the ice edge,
 /// `hww3-prop run --tl-nlnode`).
 pub const P_TLNLNODE: usize = 156;
+/// `W3SDS4` with `SDSBCHOICE = 3` (Romero 2019): `SSDSBT`, `SSDSC(9)`
+/// (`SDSL`), `SSDSC(13..16)` (`SDSMWD`, `SPMSS`, `SDSMWPOW`, `SDKOF`),
+/// `SSDSC(18..20)` (`SDSFACMTF`, `SDSNMTF`, `SDSCUMP`), `SSDSC(8)`,
+/// `SSDSC(11)`, `SSDSC(12)` (`CUMSIGP`) and `DIKCUMUL` of the isotropic
+/// cumulative term (`NINT(SSDSBRF1 / (XFR - 1))`); zero otherwise.
+pub const P_RO: usize = 157;
+/// `DSIP(1..NK)` (band widths in sigma) for the isotropic cumulative term,
+/// at most [`MAX_DSIP`] frequencies.
+pub const P_DSIP: usize = 173;
+/// Largest `NK` of [`P_DSIP`].
+pub const MAX_DSIP: usize = 64;
 /// Number of scalar parameters.
-pub const NPAR: usize = 157;
+pub const NPAR: usize = P_DSIP + MAX_DSIP;
 
 /// The parameters and tables of [`SrcePar`] laid out for the GPU source
 /// kernel: scalars at the `P_*` indices, per-frequency factors, the
@@ -2050,8 +2223,12 @@ impl SrceTables {
         if p.ssdsdth >= 180.0 || p.nsat == 0 {
             bail!("the GPU source kernel needs the saturation tables of W3SDS4 (SSDSDTH < 180)");
         }
-        if p.ssdsc[0].round() as i32 != 1 || p.ssdsc[2] > 0.0 {
-            bail!("the GPU source kernel needs SDSBCHOICE = 1 and SDSCUM <= 0");
+        let choice = p.ssdsc[0].round() as i32;
+        if !((choice == 1 && p.ssdsc[2] <= 0.0) || (choice == 3 && p.ssdsc[2] >= 0.0)) {
+            bail!("the GPU source kernel needs SDSBCHOICE = 1 with SDSCUM <= 0, or SDSBCHOICE = 3 with SDSCUM >= 0");
+        }
+        if choice == 3 && nk > MAX_DSIP {
+            bail!("the GPU source kernel with SDSBCHOICE = 3 holds at most {MAX_DSIP} frequencies");
         }
         let mut par = vec![0f64; NPAR];
         let mut put = |i: usize, v: &[f64]| par[i..i + v.len()].copy_from_slice(v);
@@ -2087,6 +2264,11 @@ impl SrceTables {
             };
         }
         put(P_SDSC3, &[p.ssdsc[2], p.ssdsc[4], p.ssdsc.get(20).copied().unwrap_or(0.0), p.dikcumul as f64]);
+        if choice == 3 {
+            let c = &p.ssdsc;
+            put(P_RO, &[p.ssdsbt, c[8], c[12], c[13], c[14], c[15], c[17], c[18], c[19], c[7], c[10], c[11], dikcumul_sds4(p) as f64]);
+            put(P_DSIP, &p.dsip[1..=nk]);
+        }
         let mut cumw = vec![0.0];
         if p.ssdsc[2] < 0.0 {
             // CUMULW(IS2, IS) as a function of (IK2, IK, |ITH2 - ITH|), checked

@@ -1354,6 +1354,307 @@ fn sds4_tl<F: Float>(
     sync_cube();
 }
 
+/// `W3SDS4` with `SDSBCHOICE = 3` (Romero 2019) and the isotropic
+/// cumulative term, with the turbulent and viscous terms, and its tangent
+/// (the value is [`crate::srce`]'s `sds4_romero`); `dsdsc2` is the
+/// derivative of `SDSC2`. `b1`, `b2` hold the per-frequency values and
+/// their tangents at `R_* nk + ik`; the unit of each bin keeps the
+/// spectrum and its tangent in `sa`, `sad` while `a`, `ad` hold the
+/// breaking-crest densities and their tangent; they are put back at the
+/// end. Not differentiable where the breaking strength vanishes
+/// (`BTOVER = 0`, where Lambda jumps to zero) and at the floor `1e-14` of
+/// the saturation; the tangent takes the one-sided derivative there.
+#[cube]
+#[allow(clippy::too_many_arguments)]
+fn sds4_romero_tl<F: Float>(
+    par: &[F],
+    sig: &[F],
+    ecos: &[F],
+    esin: &[F],
+    a: &mut Shared<[F]>,
+    ad: &mut Shared<[F]>,
+    kb: &Shared<[F]>,
+    b1: &mut Shared<[F]>,
+    b2: &mut Shared<[F]>,
+    sa: &mut Array<F>,
+    sad: &mut Array<F>,
+    vs: &mut Array<F>,
+    vsd: &mut Array<F>,
+    vd: &mut Array<F>,
+    vdd: &mut Array<F>,
+    ustar: F,
+    dustar: F,
+    usdir: F,
+    dusdir: F,
+    dsdsc2: F,
+    scale: F,
+    #[comptime] nk: usize,
+    #[comptime] nth: usize,
+    #[comptime] nu: usize,
+) {
+    let t = UNIT_POS as usize;
+    let zero = F::new(0.0f32);
+    let one = F::new(1.0f32);
+    let two = F::new(2.0f32);
+    let nspec = nk * nth;
+    let dth = par[P_DTH];
+    let tiny = F::new(1.0e-14f32);
+    if t < nk {
+        let k = kb[K_WN * nk + t];
+        let s = sig[t + 1];
+        let k3 = k * k * k;
+        let wml = k.powf(par[P_RO + 8]) * kb[K_DCG * nk + t];
+        let sigfac = s.powf(par[P_RO + 11]) * kb[K_DCG * nk + t];
+        let mut msp = zero;
+        let mut mc2 = zero;
+        let mut ms2 = zero;
+        let mut elc = zero;
+        let mut els = zero;
+        let mut b0 = zero;
+        let mut dmsp = zero;
+        let mut dmc2 = zero;
+        let mut dms2 = zero;
+        let mut delc = zero;
+        let mut dels = zero;
+        let mut db0 = zero;
+        for th in 0..nth {
+            let av = a[t * nth + th];
+            let dav = ad[t * nth + th];
+            let ml = wml * av;
+            let dml = wml * dav;
+            mc2 += ml * ecos[th];
+            ms2 += ml * esin[th];
+            msp += ml;
+            dmc2 += dml * ecos[th];
+            dms2 += dml * esin[th];
+            dmsp += dml;
+            elc += av * ecos[th] * sigfac;
+            els += av * esin[th] * sigfac;
+            delc += dav * ecos[th] * sigfac;
+            dels += dav * esin[th] * sigfac;
+            let bv = av * s * k3;
+            b0 += max(bv, tiny) * dth;
+            db0 += select(bv > tiny, dav * s * k3, zero) * dth;
+        }
+        b1[R_MSS * nk + t] = msp;
+        b1[R_MC2 * nk + t] = mc2;
+        b1[R_MS2 * nk + t] = ms2;
+        b1[R_ELC * nk + t] = elc;
+        b1[R_ELS * nk + t] = els;
+        b1[R_BTH0 * nk + t] = b0;
+        b2[R_MSS * nk + t] = dmsp;
+        b2[R_MC2 * nk + t] = dmc2;
+        b2[R_MS2 * nk + t] = dms2;
+        b2[R_ELC * nk + t] = delc;
+        b2[R_ELS * nk + t] = dels;
+        b2[R_BTH0 * nk + t] = db0;
+    }
+    for r in 0..(nspec + nu - 1) / nu {
+        let is = r * nu + t;
+        if is < nspec {
+            sa[r] = a[is];
+            sad[r] = ad[is];
+        }
+    }
+    sync_cube();
+    if t == 0 {
+        let mut sp = zero;
+        let mut sc2 = zero;
+        let mut ss2 = zero;
+        let mut elcs = zero;
+        let mut elsn = zero;
+        let mut dsp = zero;
+        let mut dsc2 = zero;
+        let mut dss2 = zero;
+        let mut delcs = zero;
+        let mut delsn = zero;
+        let pi = F::new(3.1415927f32);
+        for ik in 0..nk {
+            sp += b1[R_MSS * nk + ik];
+            sc2 += b1[R_MC2 * nk + ik];
+            ss2 += b1[R_MS2 * nk + ik];
+            elcs += b1[R_ELC * nk + ik];
+            elsn += b1[R_ELS * nk + ik];
+            dsp += b2[R_MSS * nk + ik];
+            dsc2 += b2[R_MC2 * nk + ik];
+            dss2 += b2[R_MS2 * nk + ik];
+            delcs += b2[R_ELC * nk + ik];
+            delsn += b2[R_ELS * nk + ik];
+            b1[R_MSS * nk + ik] = sp;
+            b2[R_MSS * nk + ik] = dsp;
+            let d = ss2.atan2(sc2);
+            b1[R_MSSD * nk + ik] = select(d < zero, d + pi, d);
+            let r2 = sc2 * sc2 + ss2 * ss2;
+            b2[R_MSSD * nk + ik] = select(r2 > zero, (sc2 * dss2 - ss2 * dsc2) / r2, zero);
+        }
+        b1[R_N * nk] = elsn.atan2(elcs);
+        let r2 = elcs * elcs + elsn * elsn;
+        b2[R_N * nk] = select(r2 > zero, (elcs * delsn - elsn * delcs) / r2, zero);
+    }
+    sync_cube();
+    let grav = par[P_GRAV];
+    let br = par[P_SSDSBR];
+    let c2 = par[P_SDSC2];
+    let sdsl = par[P_RO + 1];
+    let mwd = par[P_RO + 2];
+    let spmss = par[P_RO + 3];
+    let mwpow = par[P_RO + 4];
+    let kof = par[P_RO + 5];
+    let facmtf = par[P_RO + 6];
+    let nmtf = par[P_RO + 7];
+    let cump = par[P_RO + 8];
+    let strain2 = par[P_RO + 10];
+    let kf = F::new(28.0f32) / kof;
+    let ko = (grav / (ustar * ustar)) / (kf * kf);
+    let dko = F::new(-2.0f32) * ko * dustar / ustar;
+    let dlw = b1[R_N * nk];
+    let ddlw = b2[R_N * nk];
+    // breaking-crest densities and their tangent in a, ad
+    for r in 0..(nspec + nu - 1) / nu {
+        let is = r * nu + t;
+        if is < nspec {
+            let ik = is / nth;
+            let th = is - ik * nth;
+            let k = kb[K_WN * nk + ik];
+            let s = sig[ik + 1];
+            let k3 = k * k * k;
+            let bv = sa[r] * s * k3;
+            let bth = max(bv, tiny);
+            let dbth = select(bv > tiny, sad[r] * s * k3, zero);
+            let mut lmod = one;
+            let mut dlmod = zero;
+            if facmtf > zero {
+                let dirf = select(strain2 > zero, b1[R_MSSD * nk + ik], dlw);
+                let ddirf = select(strain2 > zero, b2[R_MSSD * nk + ik], ddlw);
+                let cf = dirf.cos();
+                let sf = dirf.sin();
+                let cosd = ecos[th] * cf + esin[th] * sf;
+                let dcosd = (esin[th] * cf - ecos[th] * sf) * ddirf;
+                let kloc = k.powf(two - cump);
+                let m = b1[R_MSS * nk + ik] * kloc;
+                let dm = b2[R_MSS * nk + ik] * kloc;
+                let mp = select(m > zero, m.powf(spmss), zero);
+                let dmp = select(m > zero, spmss * mp / m * dm, zero);
+                let fs = one + facmtf * (mp * (cosd * cosd));
+                let dfs = facmtf * (dmp * (cosd * cosd) + mp * two * cosd * dcosd);
+                lmod = fs.powf(nmtf);
+                dlmod = nmtf * lmod / fs * dfs;
+            }
+            let x = k / ko;
+            let dx = -x / ko * dko;
+            let xm = max(one, x);
+            let xp = xm.powf(mwpow);
+            let fk = (one + mwd * xp) / (mwd + one);
+            let dfk = select(x > one, mwd * mwpow * xp / x * dx, zero) / (mwd + one);
+            let b0 = b1[R_BTH0 * nk + ik];
+            let btover = b0.sqrt() - par[P_RO].sqrt();
+            let e = sdsl * (-br / bth).exp();
+            let de = e * br / (bth * bth) * dbth;
+            let on = btover >= zero;
+            a[is] = select(on, e * fk * lmod, zero);
+            ad[is] = select(on, de * fk * lmod + e * dfk * lmod + e * fk * dlmod, zero);
+        }
+    }
+    sync_cube();
+    let c3 = par[P_SDSC3];
+    let c5 = par[P_SDSC5];
+    let c21 = par[P_SDSC21];
+    let dik = u32::cast_from(par[P_RO + 12]) as usize;
+    if t < nk {
+        let mut sl = zero;
+        let mut dsl = zero;
+        for th in 0..nth {
+            sl += a[t * nth + th];
+            dsl += ad[t * nth + th];
+        }
+        b1[R_SL * nk + t] = sl;
+        b2[R_SL * nk + t] = dsl;
+    }
+    sync_cube();
+    if t < nk {
+        let mut ren = zero;
+        let mut dren = zero;
+        if c3 > zero && t + 1 > dik {
+            let cph = sig[t + 1] / kb[K_WN * nk + t];
+            for ik2 in 0..(t + 1 - dik) {
+                let cc2 = sig[ik2 + 1] / kb[K_WN * nk + ik2];
+                let w = (cc2 - cph).abs() * par[P_DSIP + ik2] / (F::new(0.5f32) * cc2) * dth;
+                ren -= w * b1[R_SL * nk + ik2];
+                dren -= w * b2[R_SL * nk + ik2];
+            }
+        }
+        b1[R_ISO * nk + t] = ren;
+        b2[R_ISO * nk + t] = dren;
+    }
+    sync_cube();
+    let facturb = c5 * ustar * ustar / grav * par[P_DRAT];
+    let dfacturb = c5 * two * ustar * dustar / grav * par[P_DRAT];
+    let cu = usdir.cos();
+    let su = usdir.sin();
+    let tiny20 = F::new(1.0e-20f32);
+    for r in 0..(nspec + nu - 1) / nu {
+        let is = r * nu + t;
+        if is < nspec {
+            let ik = is / nth;
+            let th = is - ik * nth;
+            let k = kb[K_WN * nk + ik];
+            let s = sig[ik + 1];
+            let k3 = k * k * k;
+            let x = sa[r];
+            let dxa = sad[r];
+            let bv = x * s * k3;
+            let bth = max(bv, tiny);
+            let dbth = select(bv > tiny, dxa * s * k3, zero);
+            let b0 = b1[R_BTH0 * nk + ik];
+            let db0 = b2[R_BTH0 * nk + ik];
+            let sq0 = b0.sqrt();
+            let btover = sq0 - par[P_RO].sqrt();
+            let dbtover = db0 / (two * sq0);
+            let q = max(zero, btover);
+            let dq = select(btover > zero, dbtover, zero);
+            let q25 = q * q * q.sqrt();
+            let brm12 = c2 * q25;
+            let dbrm12 = dsdsc2 * q25 + c2 * F::new(2.5f32) * q * q.sqrt() * dq;
+            let cph = s / k;
+            let c5p = cph * cph * cph * cph * cph / (grav * grav * s);
+            let l = a[is];
+            let dl = ad[is];
+            let srhs = brm12 * l * c5p;
+            let dsrhs = (dbrm12 * l + brm12 * dl) * c5p;
+            let bb = max(tiny20, bth);
+            let dbb = select(bth > tiny20, dbth, zero);
+            let aa = max(tiny20, x);
+            let daa = select(x > tiny20, dxa, zero);
+            let ddiag = srhs * br / bb / aa;
+            let dddiag = br * (dsrhs / (bb * aa) - srhs * dbb / (bb * bb * aa) - srhs * daa / (bb * aa * aa));
+            let facturb2 = F::new(-2.0f32) * s * k * facturb;
+            let dfacturb2 = F::new(-2.0f32) * s * k * dfacturb;
+            let dvisc = F::new(-4.0f32) * c21 * k * k;
+            let cwv = ecos[th] * cu + esin[th] * su;
+            let dcwv = -ecos[th] * su * dusdir + esin[th] * cu * dusdir;
+            let cw = max(zero, cwv);
+            let dcw = select(cwv > zero, dcwv, zero);
+            let dturb = facturb2 * cw;
+            let ddturb = dfacturb2 * cw + facturb2 * dcw;
+            let diag2 = c3 * b1[R_ISO * nk + ik] + dturb + dvisc;
+            let ddiag2 = c3 * b2[R_ISO * nk + ik] + ddturb;
+            vs[r] += scale * (srhs + x * diag2);
+            vsd[r] += scale * (dsrhs + dxa * diag2 + x * ddiag2);
+            vd[r] += scale * (ddiag + diag2);
+            vdd[r] += scale * (dddiag + ddiag2);
+        }
+    }
+    sync_cube();
+    for r in 0..(nspec + nu - 1) / nu {
+        let is = r * nu + t;
+        if is < nspec {
+            a[is] = sa[r];
+            ad[is] = sad[r];
+        }
+    }
+    sync_cube();
+}
+
 /// `W3SDB1` and its tangent, on unit 0: writes `D` and its tangent to
 /// `sc[S_SCALE + 1]`, `sd[S_SCALE + 1]`; `dsdbc2` is the derivative of
 /// `BJGAM`.
@@ -1685,6 +1986,7 @@ pub fn srce_tl<F: Float>(
     #[comptime] nspecy: usize,
     #[comptime] nsat: usize,
     #[comptime] nu: usize,
+    #[comptime] romero: bool,
 ) {
     let i = CUBE_POS as usize;
     let t = UNIT_POS as usize;
@@ -1951,10 +2253,17 @@ pub fn srce_tl<F: Float>(
                     }
                     sync_cube();
                 }
-                sds4_tl::<F>(
-                    par, sig, ecos, esin, satw, sati, cumw, &mut a, &mut ad, &mut kb, &mut kd, &mut b1, &mut b2, &mut sa, &mut sad, &mut vs, &mut vsd, &mut vd,
-                    &mut vdd, depth, ustar, dustar, udir, dudir, dsdsc2, isc_ds, nk, nth, nsat, nu,
-                );
+                if romero {
+                    sds4_romero_tl::<F>(
+                        par, sig, ecos, esin, &mut a, &mut ad, &kb, &mut b1, &mut b2, &mut sa, &mut sad, &mut vs, &mut vsd, &mut vd, &mut vdd, ustar, dustar, udir,
+                        dudir, dsdsc2, isc_ds, nk, nth, nu,
+                    );
+                } else {
+                    sds4_tl::<F>(
+                        par, sig, ecos, esin, satw, sati, cumw, &mut a, &mut ad, &mut kb, &mut kd, &mut b1, &mut b2, &mut sa, &mut sad, &mut vs, &mut vsd, &mut vd,
+                        &mut vdd, depth, ustar, dustar, udir, dudir, dsdsc2, isc_ds, nk, nth, nsat, nu,
+                    );
+                }
                 if (fz & 8u32) != 0u32 {
                     sync_cube();
                     for r in 0..(nspec + nu - 1) / nu {
@@ -2283,6 +2592,7 @@ impl<F: Real> SourceKernel<F> {
                 self.nspecy,
                 self.nsat,
                 self.nu,
+                self.romero,
             );
         }
     }

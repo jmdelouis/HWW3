@@ -1135,6 +1135,199 @@ fn sds4<F: Float>(
     sync_cube();
 }
 
+// Offsets in `b2` of the per-frequency values of `sds4_romero`.
+pub(crate) const R_MSS: usize = 0;
+pub(crate) const R_MSSD: usize = 1;
+pub(crate) const R_MC2: usize = 2;
+pub(crate) const R_MS2: usize = 3;
+pub(crate) const R_ELC: usize = 4;
+pub(crate) const R_ELS: usize = 5;
+pub(crate) const R_BTH0: usize = 6;
+pub(crate) const R_SL: usize = 7;
+pub(crate) const R_ISO: usize = 8;
+pub(crate) const R_N: usize = 9;
+
+/// `W3SDS4` with `SDSBCHOICE = 3` (Romero 2019) and the isotropic
+/// cumulative term (`SDSCUM >= 0`), the turbulent and viscous terms,
+/// added as `scale S`, `scale D` (the transcription is
+/// [`crate::sources::sds4`]). The mean direction of the long waves
+/// (`DLWMEAN` of `W3SPR4`) is computed here from the same spectrum. `b2`
+/// (free after the DIA) holds the per-frequency sums at `R_* nk + ik` and
+/// `DLWMEAN` at `R_N nk`, `b1` the source and `dn` the breaking-crest
+/// densities. Ends with a cube synchronisation.
+#[cube]
+#[allow(clippy::too_many_arguments)]
+fn sds4_romero<F: Float>(
+    par: &[F],
+    sig: &[F],
+    ecos: &[F],
+    esin: &[F],
+    a: &Shared<[F]>,
+    kb: &Shared<[F]>,
+    b1: &mut Shared<[F]>,
+    b2: &mut Shared<[F]>,
+    dn: &mut Shared<[F]>,
+    vs: &mut Shared<[F]>,
+    vd: &mut Shared<[F]>,
+    ustar: F,
+    usdir: F,
+    scale: F,
+    #[comptime] nk: usize,
+    #[comptime] nth: usize,
+    #[comptime] nu: usize,
+) {
+    let t = UNIT_POS as usize;
+    let zero = F::new(0.0f32);
+    let one = F::new(1.0f32);
+    let nspec = nk * nth;
+    let dth = par[P_DTH];
+    let tiny = F::new(1.0e-14f32);
+    // per frequency: slope sums (MSSLONG), DLWMEAN sums, integrated saturation
+    if t < nk {
+        let k = kb[K_WN * nk + t];
+        let s = sig[t + 1];
+        let k3 = k * k * k;
+        let wml = k.powf(par[P_RO + 8]) * kb[K_DCG * nk + t];
+        let sigfac = s.powf(par[P_RO + 11]) * kb[K_DCG * nk + t];
+        let mut msp = zero;
+        let mut mc2 = zero;
+        let mut ms2 = zero;
+        let mut elc = zero;
+        let mut els = zero;
+        let mut b0 = zero;
+        for th in 0..nth {
+            let av = a[t * nth + th];
+            let ml = wml * av;
+            mc2 += ml * ecos[th];
+            ms2 += ml * esin[th];
+            msp += ml;
+            elc += av * ecos[th] * sigfac;
+            els += av * esin[th] * sigfac;
+            b0 += max(av * s * k3, tiny) * dth;
+        }
+        b2[R_MSS * nk + t] = msp;
+        b2[R_MC2 * nk + t] = mc2;
+        b2[R_MS2 * nk + t] = ms2;
+        b2[R_ELC * nk + t] = elc;
+        b2[R_ELS * nk + t] = els;
+        b2[R_BTH0 * nk + t] = b0;
+    }
+    sync_cube();
+    // cumulative slope and its direction, DLWMEAN (unit 0, in WW3's order of the frequencies)
+    if t == 0 {
+        let mut sp = zero;
+        let mut sc2 = zero;
+        let mut ss2 = zero;
+        let mut elcs = zero;
+        let mut elsn = zero;
+        let pi = F::new(3.1415927f32);
+        for ik in 0..nk {
+            sp += b2[R_MSS * nk + ik];
+            sc2 += b2[R_MC2 * nk + ik];
+            ss2 += b2[R_MS2 * nk + ik];
+            elcs += b2[R_ELC * nk + ik];
+            elsn += b2[R_ELS * nk + ik];
+            b2[R_MSS * nk + ik] = sp;
+            let d = ss2.atan2(sc2);
+            b2[R_MSSD * nk + ik] = select(d < zero, d + pi, d);
+        }
+        b2[R_N * nk] = elsn.atan2(elcs);
+    }
+    sync_cube();
+    let grav = par[P_GRAV];
+    let br = par[P_SSDSBR];
+    let c2 = par[P_SDSC2];
+    let sdsl = par[P_RO + 1];
+    let mwd = par[P_RO + 2];
+    let spmss = par[P_RO + 3];
+    let mwpow = par[P_RO + 4];
+    let kof = par[P_RO + 5];
+    let facmtf = par[P_RO + 6];
+    let nmtf = par[P_RO + 7];
+    let cump = par[P_RO + 8];
+    let strain2 = par[P_RO + 10];
+    let ko = (grav / (ustar * ustar)) / ((F::new(28.0f32) / kof) * (F::new(28.0f32) / kof));
+    let dlwmean = b2[R_N * nk];
+    for r in 0..(nspec + nu - 1) / nu {
+        let is = r * nu + t;
+        if is < nspec {
+            let ik = is / nth;
+            let th = is - ik * nth;
+            let k = kb[K_WN * nk + ik];
+            let s = sig[ik + 1];
+            let bth = max(a[is] * s * (k * k * k), tiny);
+            let mut lmod = one;
+            if facmtf > zero {
+                let dirf = select(strain2 > zero, b2[R_MSSD * nk + ik], dlwmean);
+                let cosd = ecos[th] * dirf.cos() + esin[th] * dirf.sin();
+                let kloc = k.powf(F::new(2.0f32) - cump);
+                let fs = one + facmtf * ((b2[R_MSS * nk + ik] * kloc).powf(spmss) * (cosd * cosd));
+                lmod = fs.powf(nmtf);
+            }
+            let fk = (one + mwd * max(one, k / ko).powf(mwpow)) / (mwd + one);
+            let btover = b2[R_BTH0 * nk + ik].sqrt() - par[P_RO].sqrt();
+            let q = max(zero, btover);
+            let brm12 = c2 * (q * q * q.sqrt());
+            let l = select(btover >= zero, sdsl * (-br / bth).exp() * fk * lmod, zero);
+            dn[is] = l;
+            let cph = s / k;
+            let c5 = cph * cph * cph * cph * cph;
+            b1[is] = brm12 / (grav * grav) * l * c5 / s;
+        }
+    }
+    sync_cube();
+    let c3 = par[P_SDSC3];
+    let c5 = par[P_SDSC5];
+    let c21 = par[P_SDSC21];
+    let dik = u32::cast_from(par[P_RO + 12]) as usize;
+    // per frequency: sum of Lambda over the directions, then the isotropic rate
+    if t < nk {
+        let mut sl = zero;
+        for th in 0..nth {
+            sl += dn[t * nth + th];
+        }
+        b2[R_SL * nk + t] = sl;
+    }
+    sync_cube();
+    if t < nk {
+        let mut renewal = zero;
+        if c3 > zero && t + 1 > dik {
+            let cph = sig[t + 1] / kb[K_WN * nk + t];
+            for ik2 in 0..(t + 1 - dik) {
+                let cc2 = sig[ik2 + 1] / kb[K_WN * nk + ik2];
+                let w = (cc2 - cph).abs() * par[P_DSIP + ik2] / (F::new(0.5f32) * cc2) * dth;
+                renewal -= w * b2[R_SL * nk + ik2];
+            }
+        }
+        b2[R_ISO * nk + t] = renewal;
+    }
+    sync_cube();
+    let facturb = c5 * ustar * ustar / grav * par[P_DRAT];
+    let cu = usdir.cos();
+    let su = usdir.sin();
+    for r in 0..(nspec + nu - 1) / nu {
+        let is = r * nu + t;
+        if is < nspec {
+            let ik = is / nth;
+            let th = is - ik * nth;
+            let k = kb[K_WN * nk + ik];
+            let s = sig[ik + 1];
+            let bth = max(a[is] * s * (k * k * k), tiny);
+            let tiny20 = F::new(1.0e-20f32);
+            let srhs = b1[is];
+            let ddiag = srhs * br / max(tiny20, bth) / max(tiny20, a[is]);
+            let facturb2 = F::new(-2.0f32) * s * k * facturb;
+            let dvisc = F::new(-4.0f32) * c21 * k * k;
+            let coswind = ecos[th] * cu + esin[th] * su;
+            let dturb = facturb2 * max(zero, coswind);
+            let diag2 = c3 * b2[R_ISO * nk + ik] + dturb + dvisc;
+            vs[is] += scale * (srhs + a[is] * diag2);
+            vd[is] += scale * (ddiag + diag2);
+        }
+    }
+    sync_cube();
+}
+
 /// `W3SDB1`: the coefficient `D` of depth-induced breaking (`S = D A`),
 /// from the mean parameters of `W3SPR4`.
 #[cube]
@@ -1373,6 +1566,7 @@ pub fn srce<F: Float>(
     #[comptime] nsat: usize,
     #[comptime] nu: usize,
     #[comptime] parred: bool,
+    #[comptime] romero: bool,
 ) {
     let i = CUBE_POS as usize;
     let t = UNIT_POS as usize;
@@ -1481,9 +1675,13 @@ pub fn srce<F: Float>(
                 snl1::<F>(
                     par, sig, dia_ip, dia_ic, af11, &a, &kb, &mut ue, &mut b1, &mut b2, &mut dn, &mut vs, &mut vd, wnmean * depth, isc_nl, nk, nth, nspecx, nspecy, nu,
                 );
-                sds4::<F>(
-                    par, sig, ecos, esin, satw, sati, cumw, &a, &mut kb, &mut b1, &mut dn, &mut vs, &mut vd, depth, ustar, udir, isc_ds, nk, nth, nsat, nu,
-                );
+                if romero {
+                    sds4_romero::<F>(par, sig, ecos, esin, &a, &kb, &mut b1, &mut b2, &mut dn, &mut vs, &mut vd, ustar, udir, isc_ds, nk, nth, nu);
+                } else {
+                    sds4::<F>(
+                        par, sig, ecos, esin, satw, sati, cumw, &a, &mut kb, &mut b1, &mut dn, &mut vs, &mut vd, depth, ustar, udir, isc_ds, nk, nth, nsat, nu,
+                    );
+                }
                 let dbd = sdb1::<F>(par, emean, fmean, wnmean, depth);
                 sbt4::<F>(par, sig, dden, ecos, esin, fwtab, erftab, &a, &mut kb, &mut sc, &mut vs, &mut vd, depth, sd50, spsic, nk, nth, nu);
                 // dynamic step: NKH from the FHIGH of the previous step
@@ -1757,6 +1955,9 @@ pub struct SourceKernel<F: Real> {
     /// additions, so results that differ at round-off (off by default; the
     /// value kernel only).
     pub parred: bool,
+    /// `W3SDS4` with `SDSBCHOICE = 3` and the isotropic cumulative term
+    /// (`sds4_romero`), from the parameters; the value kernel only.
+    pub romero: bool,
     _f: std::marker::PhantomData<F>,
 }
 
@@ -1797,6 +1998,7 @@ impl<F: Real> SourceKernel<F> {
             nsat: t.nsat,
             nu,
             parred: false,
+            romero: t.par[P_RO] != 0.0,
             _f: std::marker::PhantomData,
         }
     }
@@ -1850,6 +2052,7 @@ impl<F: Real> SourceKernel<F> {
                 self.nsat,
                 self.nu,
                 self.parred,
+                self.romero,
             );
         }
     }

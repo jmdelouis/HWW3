@@ -159,7 +159,7 @@ fn check(path: PathBuf) -> Result<()> {
         r.vector("snl1 S", &nls, &n.snl1.s, n.isea);
         r.vector("snl1 D", &nld, &n.snl1.d, n.isea);
         // W3SDS4
-        let ds = sds4(st, &a, &wn, depth, ustar2, udir, drat)?;
+        let ds = sds4(st, &a, &wn, &cg, depth, ustar2, udir, drat, n.spr4b.v[13] as f64)?;
         r.vector("sds4 S", &ds.s, &n.sds4.s, n.isea);
         r.vector("sds4 D", &ds.d, &n.sds4.d, n.isea);
         // W3SDB1 with the mean parameters of the second W3SPR4
