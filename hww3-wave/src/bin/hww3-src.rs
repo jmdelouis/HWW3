@@ -7,6 +7,7 @@
 //! hww3-src check-ice HARNESS2 --params ST4.params --nml NAMELISTS.nml --grid-nml WW3_GRID.nml [--data DIR]
 //! hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red]
 //! hww3-src check-ice-gpu HARNESS2 --params ST4.params --nml NAMELISTS.nml --grid-nml WW3_GRID.nml --data DIR [--f64] [--units N]
+//! hww3-src check-ice-tl HARNESS2 --params ST4.params --nml NAMELISTS.nml --grid-nml WW3_GRID.nml --data DIR [--h H] [--units N]
 //! hww3-src check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]
 //! hww3-src adj-src HARNESS [--replicate R] [--betau KNOTS:COEFS [--betau-grid B0:DB:N]] [--masks M1,M2,...]
 //! hww3-src adj-dia HARNESS [--units N] [--replicate R] [--burn-replicate RB] [--reps K] [--only cubecl|burn]
@@ -1274,75 +1275,14 @@ fn check_ice(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, da
 fn check_ice_gpu<F: hww3_wave::device::Real>(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, data: PathBuf, nu: usize) -> Result<()> {
     use burn::tensor::Device;
     use cubecl::prelude::CubeElement;
-    use hww3_wave::ice::ice_after_loop;
-    use hww3_wave::ref1::{is_called, reflec, sref};
     use hww3_wave::srce_ice::{IceRefArgs, IceRefKernel};
     let IceSetup { h, q, ip, refl } = ice_setup(&path, &params, &nml, &grid_nml, Some(&data))?;
     let (rp, geo) = refl.expect("reflection geometry");
+    let IceGpuIn { va, wn, cg, depth, ice, icef, reflc, refld, delx, dely, trnx, trny, berg, cpu, cpu_icef, kind } = ice_gpu_inputs(&h, &q, &ip, &rp, &geo)?;
     let (nk, nth) = (h.nk, h.nth);
     let nspec = nk * nth;
     let n = h.nodes.len();
     let dtg = h.dtg;
-    let f = |v: &[f32]| -> Vec<f64> { v.iter().map(|&x| x as f64).collect() };
-    // inputs and the CPU result of every node
-    let mut va = vec![0f64; nspec * n];
-    let mut wn = vec![0f64; (nk + 2) * n];
-    let mut cg = vec![0f64; (nk + 2) * n];
-    let (mut depth, mut ice, mut icef) = (vec![0f64; n], vec![0f64; n], vec![0f64; n]);
-    let (mut reflc, mut refld) = (vec![0f64; 4 * n], vec![0u32; 6 * n]);
-    let (mut delx, mut dely, mut trnx, mut trny, mut berg) = (vec![0f64; n], vec![0f64; n], vec![0f64; n], vec![0f64; n], vec![0f64; n]);
-    let mut cpu = Vec::with_capacity(n);
-    let mut cpu_icef = vec![0f64; n];
-    let mut kind = vec![0usize; n];
-    let mut off_const = 0usize;
-    for (j, nd) in h.nodes.iter().enumerate() {
-        let k = nd.isea as usize - 1;
-        let (a, wnk, cgk) = (f(&nd.spec0), f(&nd.wn), f(&nd.cg));
-        let si = srce_in2(nd, dtg, nd.ice as f64);
-        let mut s1 = a.clone();
-        srce(&q, &si, &mut s1, &wnk, &cgk, nd.ust as f64);
-        for ik in 0..nk {
-            for th in 0..nth {
-                va[(ik * n + j) * nth + th] = s1[ik * nth + th];
-            }
-            wn[(ik + 1) * n + j] = wnk[ik];
-            cg[(ik + 1) * n + j] = cgk[ik];
-        }
-        depth[j] = nd.depth as f64;
-        ice[j] = nd.ice as f64;
-        icef[j] = nd.icef as f64;
-        let lc = reflec(&geo.reflc[k], nd.berg as f64);
-        reflc[4 * j..4 * j + 4].copy_from_slice(&lc);
-        for (m, &v) in geo.refld[k].iter().enumerate() {
-            anyhow::ensure!(v >= 0, "negative REFLD at ISEA {}", nd.isea);
-            refld[6 * j + m] = v as u32;
-        }
-        delx[j] = geo.delx[k];
-        dely[j] = geo.dely[k];
-        trnx[j] = geo.trnx[k];
-        trny[j] = geo.trny[k];
-        berg[j] = nd.berg as f64;
-        // the CPU reference: ice_after_loop then W3SREF
-        let inp = ice_in2(nd);
-        if nd.ice > 0.0 && (nd.iceh as f64 != ip.iicehinit || nd.icedmax != 1000.0) {
-            off_const += 1;
-        }
-        let mut ic = nd.icef as f64;
-        ice_after_loop(&ip, &mut s1, &inp, &mut ic, &wnk, &cgk, dtg as f64)?;
-        let called = is_called(&lc, nd.berg as f64);
-        if called {
-            let v = sref(&rp, &s1, &cgk, &lc, &geo.refld[k], geo.delx[k], geo.dely[k], geo.trnx[k], geo.trny[k], nd.berg as f64);
-            for (x, d) in s1.iter_mut().zip(&v) {
-                *x += dtg as f64 * d;
-            }
-        }
-        kind[j] = (nd.ice > 0.0) as usize + 2 * called as usize;
-        cpu.push(s1);
-        cpu_icef[j] = ic;
-    }
-    if off_const > 0 {
-        println!("warning: {off_const} ice nodes with ICEH or ICEDMAX unlike the kernel's constants (ICEHINIT = {}, 1000 m)", ip.iicehinit);
-    }
     // the kernel
     let device = Device::cuda(0);
     let client = hww3_wave::burn_ext::client(&device)?;
@@ -1422,6 +1362,308 @@ fn check_ice_gpu<F: hww3_wave::device::Real>(path: PathBuf, params: PathBuf, nml
     Ok(())
 }
 
+/// The inputs of the GPU kernel of the ice step and the reflection for
+/// every node of the second harness (laid out as on the device, in f64),
+/// with the CPU result of each node and its kind (bit 0: ice, bit 1:
+/// reflection).
+#[cfg(feature = "cubecl")]
+struct IceGpuIn {
+    va: Vec<f64>,
+    wn: Vec<f64>,
+    cg: Vec<f64>,
+    depth: Vec<f64>,
+    ice: Vec<f64>,
+    icef: Vec<f64>,
+    reflc: Vec<f64>,
+    refld: Vec<u32>,
+    delx: Vec<f64>,
+    dely: Vec<f64>,
+    trnx: Vec<f64>,
+    trny: Vec<f64>,
+    berg: Vec<f64>,
+    cpu: Vec<Vec<f64>>,
+    cpu_icef: Vec<f64>,
+    kind: Vec<usize>,
+}
+
+/// Build [`IceGpuIn`]: the spectrum of each node is the CPU spectrum after
+/// `srce` with ice (as in [`check_ice`]), the CPU result `ice_after_loop`
+/// then `W3SREF`.
+#[cfg(feature = "cubecl")]
+fn ice_gpu_inputs(
+    h: &hww3_wave::harness2::Harness2,
+    q: &SrcePar,
+    ip: &hww3_wave::ice::IceParams,
+    rp: &hww3_wave::ref1::Ref1Params,
+    geo: &hww3_wave::ref1::Ref1Geometry,
+) -> Result<IceGpuIn> {
+    use hww3_wave::ice::ice_after_loop;
+    use hww3_wave::ref1::{is_called, reflec, sref};
+    let (nk, nth) = (h.nk, h.nth);
+    let nspec = nk * nth;
+    let n = h.nodes.len();
+    let dtg = h.dtg;
+    let f = |v: &[f32]| -> Vec<f64> { v.iter().map(|&x| x as f64).collect() };
+    // inputs and the CPU result of every node
+    let mut va = vec![0f64; nspec * n];
+    let mut wn = vec![0f64; (nk + 2) * n];
+    let mut cg = vec![0f64; (nk + 2) * n];
+    let (mut depth, mut ice, mut icef) = (vec![0f64; n], vec![0f64; n], vec![0f64; n]);
+    let (mut reflc, mut refld) = (vec![0f64; 4 * n], vec![0u32; 6 * n]);
+    let (mut delx, mut dely, mut trnx, mut trny, mut berg) = (vec![0f64; n], vec![0f64; n], vec![0f64; n], vec![0f64; n], vec![0f64; n]);
+    let mut cpu = Vec::with_capacity(n);
+    let mut cpu_icef = vec![0f64; n];
+    let mut kind = vec![0usize; n];
+    let mut off_const = 0usize;
+    for (j, nd) in h.nodes.iter().enumerate() {
+        let k = nd.isea as usize - 1;
+        let (a, wnk, cgk) = (f(&nd.spec0), f(&nd.wn), f(&nd.cg));
+        let si = srce_in2(nd, dtg, nd.ice as f64);
+        let mut s1 = a.clone();
+        srce(&q, &si, &mut s1, &wnk, &cgk, nd.ust as f64);
+        for ik in 0..nk {
+            for th in 0..nth {
+                va[(ik * n + j) * nth + th] = s1[ik * nth + th];
+            }
+            wn[(ik + 1) * n + j] = wnk[ik];
+            cg[(ik + 1) * n + j] = cgk[ik];
+        }
+        depth[j] = nd.depth as f64;
+        ice[j] = nd.ice as f64;
+        icef[j] = nd.icef as f64;
+        let lc = reflec(&geo.reflc[k], nd.berg as f64);
+        reflc[4 * j..4 * j + 4].copy_from_slice(&lc);
+        for (m, &v) in geo.refld[k].iter().enumerate() {
+            anyhow::ensure!(v >= 0, "negative REFLD at ISEA {}", nd.isea);
+            refld[6 * j + m] = v as u32;
+        }
+        delx[j] = geo.delx[k];
+        dely[j] = geo.dely[k];
+        trnx[j] = geo.trnx[k];
+        trny[j] = geo.trny[k];
+        berg[j] = nd.berg as f64;
+        // the CPU reference: ice_after_loop then W3SREF
+        let inp = ice_in2(nd);
+        if nd.ice > 0.0 && (nd.iceh as f64 != ip.iicehinit || nd.icedmax != 1000.0) {
+            off_const += 1;
+        }
+        let mut ic = nd.icef as f64;
+        ice_after_loop(&ip, &mut s1, &inp, &mut ic, &wnk, &cgk, dtg as f64)?;
+        let called = is_called(&lc, nd.berg as f64);
+        if called {
+            let v = sref(&rp, &s1, &cgk, &lc, &geo.refld[k], geo.delx[k], geo.dely[k], geo.trnx[k], geo.trny[k], nd.berg as f64);
+            for (x, d) in s1.iter_mut().zip(&v) {
+                *x += dtg as f64 * d;
+            }
+        }
+        kind[j] = (nd.ice > 0.0) as usize + 2 * called as usize;
+        cpu.push(s1);
+        cpu_icef[j] = ic;
+    }
+    if off_const > 0 {
+        println!("warning: {off_const} ice nodes with ICEH or ICEDMAX unlike the kernel's constants (ICEHINIT = {}, 1000 m)", ip.iicehinit);
+    }
+    Ok(IceGpuIn { va, wn, cg, depth, ice, icef, reflc, refld, delx, dely, trnx, trny, berg, cpu, cpu_icef, kind })
+}
+
+/// The tangent kernel of the ice step and the reflection
+/// (`hww3_wave::srce_ice::ice_ref_tl`) in double precision against the
+/// central differences `(f(x + h dx) - f(x - h dx)) / 2h` of the value
+/// kernel, from the spectra of `check_ice_gpu`, along two directions: a
+/// random tangent of the spectrum scaled by the spectrum (fixed seed), then
+/// a random tangent of `ICEF` scaled by `ICEF`. Per kind of node, the
+/// relative L2 error of the spectrum tangent over the nodes where the
+/// differences with `h` and `h / 10` agree to 1e-6 ("smooth", as in
+/// `check_tl`), and the same for the tangent of `ICEF` at the ice nodes.
+#[cfg(feature = "cubecl")]
+#[allow(clippy::too_many_arguments)]
+fn check_ice_tl(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, data: PathBuf, nu: usize, h1: f64) -> Result<()> {
+    use burn::tensor::Device;
+    use cubecl::prelude::CubeElement;
+    use hww3_wave::srce_ice::{IceRefArgs, IceRefKernel, IceRefTangent};
+    let IceSetup { h, q, ip, refl } = ice_setup(&path, &params, &nml, &grid_nml, Some(&data))?;
+    let (rp, geo) = refl.expect("reflection geometry");
+    let g = ice_gpu_inputs(&h, &q, &ip, &rp, &geo)?;
+    let (nk, nth) = (h.nk, h.nth);
+    let nspec = nk * nth;
+    let n = h.nodes.len();
+    let dtg = h.dtg;
+    let device = Device::cuda(0);
+    let client = hww3_wave::burn_ext::client(&device)?;
+    let kern = IceRefKernel::<f64>::new(&client, Some(&ip), Some(&rp), nu)?;
+    let up = |v: &[f64]| client.create_from_slice(f64::as_bytes(v));
+    let sync = || futures_lite::future::block_on(client.sync()).expect("device sync");
+    let down = |hd: &cubecl::server::Handle| -> Vec<f64> { f64::from_bytes(&client.read_one(hd.clone()).expect("device read")).to_vec() };
+    let (d_wn, d_cg, d_depth, d_ice) = (up(&g.wn), up(&g.cg), up(&g.depth), up(&g.ice));
+    let (d_reflc, d_delx, d_dely, d_trnx, d_trny, d_berg) = (up(&g.reflc), up(&g.delx), up(&g.dely), up(&g.trnx), up(&g.trny), up(&g.berg));
+    let d_refld = client.create_from_slice(u32::as_bytes(&g.refld));
+    let d_nflag = client.create_from_slice(u32::as_bytes(&vec![4u32; n]));
+    type Out = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, f64);
+    // one launch of the value kernel (tl = None) or of the tangent kernel
+    let run = |v: &[f64], f: &[f64], tl: Option<(&[f64], &[f64])>| -> Result<Out> {
+        let (d_va, d_icef) = (up(v), up(f));
+        let args = IceRefArgs {
+            va: &d_va,
+            wn: &d_wn,
+            cg: &d_cg,
+            nflag: &d_nflag,
+            depth: Some(&d_depth),
+            ice: Some(&d_ice),
+            icef: Some(&d_icef),
+            reflc: Some(&d_reflc),
+            refld: Some(&d_refld),
+            delx: Some(&d_delx),
+            dely: Some(&d_dely),
+            trnx: Some(&d_trnx),
+            trny: Some(&d_trny),
+            berg: Some(&d_berg),
+        };
+        let dt = tl.map(|(dv, df)| (up(dv), up(df)));
+        sync();
+        let t = std::time::Instant::now();
+        match &dt {
+            None => kern.launch(&client, &args, n, nk, nth, dtg)?,
+            Some((d_vad, d_icefd)) => {
+                let d = IceRefTangent { vad: d_vad, icefd: Some(d_icefd) };
+                kern.launch_tl(&client, &args, &d, n, nk, nth, dtg)?;
+            }
+        }
+        sync();
+        let s = t.elapsed().as_secs_f64();
+        let out = match &dt {
+            None => (vec![], vec![]),
+            Some((d_vad, d_icefd)) => (down(d_vad), down(d_icefd)),
+        };
+        Ok((down(&d_va), down(&d_icef), out.0, out.1, s))
+    };
+    // the first launches compile the kernels
+    let zs = vec![0f64; nspec * n];
+    let zf = vec![0f64; n];
+    let (v_first, ..) = run(&g.va, &g.icef, None)?;
+    let (v_base, f_base, _, _, t_val) = run(&g.va, &g.icef, None)?;
+    if v_first != v_base {
+        println!("  two launches of the value kernel differ");
+    }
+    run(&g.va, &g.icef, Some((&zs, &zf)))?;
+    let at = |v: &[f64], j: usize, isp: usize| v[((isp / nth) * n + j) * nth + isp % nth];
+    let l2 = |v: &[f64], w: Option<&[f64]>, j: usize| -> f64 { (0..nspec).map(|i| (at(v, j, i) - w.map_or(0.0, |w| at(w, j, i))).powi(2)).sum::<f64>().sqrt() };
+    let pct = |v: &mut Vec<f64>, p: f64| -> f64 {
+        if v.is_empty() {
+            return f64::NAN;
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[((v.len() - 1) as f64 * p).round() as usize]
+    };
+    let nice = (0..n).filter(|&j| g.ice[j] > 0.0).count();
+    println!("value kernel {:.5} s per launch; {nice} ice nodes; relative steps h = {h1:e} and {:e}; relative L2 errors", t_val, h1 / 10.0);
+    let rnd: Vec<f64> = (0..nspec * n).map(|i| ((i * 7919 + 13) % 2001) as f64 / 1000.0 - 1.0).collect();
+    let rndf: Vec<f64> = (0..n).map(|j| ((j * 104729 + 7) % 2001) as f64 / 1000.0 - 1.0).collect();
+    let names = ["open", "ice", "ref", "ice+ref"];
+    println!(
+        "{:<9} {:<8} {:>6} {:>9} {:>7} {:>10} {:>10} {:>10} {:>6} {:>10} {:>10}",
+        "direction", "nodes", "count", "sensitive", "smooth", "tl median", "tl p99", "tl max", ">1e-4", "rough med", "worst ISEA"
+    );
+    for dir in ["spectrum", "ICEF"] {
+        let (dv, df): (Vec<f64>, Vec<f64>) = match dir {
+            "spectrum" => (g.va.iter().zip(&rnd).map(|(a, r)| a * r).collect(), zf.clone()),
+            _ => (zs.clone(), (0..n).map(|j| if g.ice[j] > 0.0 { g.icef[j] * rndf[j] } else { 0.0 }).collect()),
+        };
+        let pert = |s: f64| -> Result<(Vec<f64>, Vec<f64>)> {
+            let v: Vec<f64> = g.va.iter().zip(&dv).map(|(a, d)| a + s * d).collect();
+            let f: Vec<f64> = g.icef.iter().zip(&df).map(|(a, d)| a + s * d).collect();
+            let (a, b, ..) = run(&v, &f, None)?;
+            Ok((a, b))
+        };
+        let fd = |hh: f64| -> Result<(Vec<f64>, Vec<f64>)> {
+            let ((pv, pf), (mv, mf)) = (pert(hh)?, pert(-hh)?);
+            let c = |p: &[f64], m: &[f64]| -> Vec<f64> { p.iter().zip(m).map(|(a, b)| (a - b) / (2.0 * hh)).collect() };
+            Ok((c(&pv, &mv), c(&pf, &mf)))
+        };
+        let ((fv1, ff1), (fv2, ff2)) = (fd(h1)?, fd(h1 / 10.0)?);
+        let (val, valf, tl, tlf, t_tl) = run(&g.va, &g.icef, Some((&dv, &df)))?;
+        // the values of the tangent kernel against those of the value kernel
+        let mut vdiff = 0f64;
+        let mut fdiff = 0f64;
+        for j in 0..n {
+            let vmax = (0..nspec).map(|i| at(&v_base, j, i).abs()).fold(0f64, f64::max).max(1e-300);
+            vdiff = vdiff.max((0..nspec).map(|i| (at(&val, j, i) - at(&v_base, j, i)).abs()).fold(0f64, f64::max) / vmax);
+            fdiff = fdiff.max((valf[j] - f_base[j]).abs());
+        }
+        // per kind of node (row 4: the ICEF tangent at the ice nodes)
+        let mut es: Vec<Vec<f64>> = vec![vec![]; 5];
+        let mut er: Vec<Vec<f64>> = vec![vec![]; 5];
+        let mut cnt = [0usize; 5];
+        let mut sens = [0usize; 5];
+        let mut worst = [(0f64, 0usize); 5];
+        let mut moved = 0usize;
+        for j in 0..n {
+            let k = g.kind[j];
+            let isea = h.nodes[j].isea as usize;
+            cnt[k] += 1;
+            let vn = l2(&v_base, None, j).max(1e-300);
+            let (fn2, tn) = (l2(&fv2, None, j), l2(&tl, None, j));
+            if fn2 >= 1e-9 * vn || tn >= 1e-9 * vn {
+                sens[k] += 1;
+                let fm = fn2.max(1e-9 * vn);
+                let e = l2(&tl, Some(&fv2), j) / fm;
+                let rough = l2(&fv1, Some(&fv2), j) / fm;
+                if rough <= 1e-6 {
+                    es[k].push(e);
+                    if e > worst[k].0 {
+                        worst[k] = (e, isea);
+                    }
+                } else {
+                    er[k].push(e);
+                }
+            }
+            if g.ice[j] > 0.0 {
+                cnt[4] += 1;
+                let fs = g.icef[j].abs().max(1e-300);
+                if tlf[j] != df[j] {
+                    moved += 1;
+                }
+                if ff2[j].abs() >= 1e-9 * fs || tlf[j].abs() >= 1e-9 * fs {
+                    sens[4] += 1;
+                    let fm = ff2[j].abs().max(1e-9 * fs);
+                    let e = (tlf[j] - ff2[j]).abs() / fm;
+                    let rough = (ff1[j] - ff2[j]).abs() / fm;
+                    if rough <= 1e-6 {
+                        es[4].push(e);
+                        if e > worst[4].0 {
+                            worst[4] = (e, isea);
+                        }
+                    } else {
+                        er[4].push(e);
+                    }
+                }
+            }
+        }
+        for k in 0..5 {
+            let label = if k < 4 { names[k] } else { "ICEF" };
+            let above = es[k].iter().filter(|&&e| e > 1e-4).count();
+            println!(
+                "{:<9} {:<8} {:>6} {:>9} {:>7} {:>10.2e} {:>10.2e} {:>10.2e} {:>6} {:>10.2e} {:>10}",
+                dir,
+                label,
+                cnt[k],
+                sens[k],
+                es[k].len(),
+                pct(&mut es[k].clone(), 0.5),
+                pct(&mut es[k].clone(), 0.99),
+                worst[k].0,
+                above,
+                pct(&mut er[k], 0.5),
+                worst[k].1
+            );
+        }
+        println!(
+            "          values of the tangent kernel against the value kernel: SPEC {vdiff:.1e} (relative), ICEF {fdiff:.1e} m; ICEF tangent changed at {moved} ice nodes; tangent kernel {t_tl:.5} s ({:.2} times the value kernel)",
+            t_tl / t_val
+        );
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let a: Vec<String> = std::env::args().collect();
     let opt = |k: &str| a.iter().position(|x| x == k).and_then(|i| a.get(i + 1)).cloned();
@@ -1496,6 +1738,14 @@ fn main() -> Result<()> {
             }
         }
         #[cfg(feature = "cubecl")]
+        (Some("check-ice-tl"), Some(f)) => {
+            let usage = "check-ice-tl HARNESS2 --params ST4.params --nml NAMELISTS.nml --grid-nml WW3_GRID.nml --data DIR [--h H] [--units N]";
+            let need = |k: &str| opt(k).map(PathBuf::from).ok_or_else(|| anyhow::anyhow!(usage));
+            let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
+            let h: f64 = opt("--h").map(|s| s.parse()).transpose()?.unwrap_or(1e-4);
+            check_ice_tl(PathBuf::from(f), need("--params")?, need("--nml")?, need("--grid-nml")?, need("--data")?, nu, h)
+        }
+        #[cfg(feature = "cubecl")]
         (Some("check-tl"), Some(f)) => {
             let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
             let h: f64 = opt("--h").map(|s| s.parse()).transpose()?.unwrap_or(1e-4);
@@ -1503,7 +1753,7 @@ fn main() -> Result<()> {
             check_tl(PathBuf::from(f), nu, h, cut, a.iter().any(|x| x == "--tl-nlnode"))
         }
         _ => bail!(
-            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml F] [--check BASE.params] | check-ice-gpu HARNESS2 --params P --nml N --grid-nml G --data D [--f64] [--units N] | check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red] | check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]] | adj-src HARNESS [--replicate R] [--betau KNOTS:COEFS [--betau-grid B0:DB:N]] [--masks M,...] | adj-dia HARNESS [--units N] [--replicate R] [--burn-replicate RB] [--reps K] [--only cubecl|burn]"
+            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml F] [--check BASE.params] | check-ice-gpu HARNESS2 --params P --nml N --grid-nml G --data D [--f64] [--units N] | check-ice-tl HARNESS2 --params P --nml N --grid-nml G --data D [--h H] [--units N] | check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red] | check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]] | adj-src HARNESS [--replicate R] [--betau KNOTS:COEFS [--betau-grid B0:DB:N]] [--masks M,...] | adj-dia HARNESS [--units N] [--replicate R] [--burn-replicate RB] [--reps K] [--only cubecl|burn]"
         ),
     }
 }

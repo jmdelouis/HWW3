@@ -27,6 +27,10 @@
 //!
 //! Shared arrays of a cube: the spectrum `a`, per-frequency values `kb`
 //! (`kb[slot nk + ik]`) and scalars `sc`.
+//!
+//! [`ice_ref_tl()`] is the same step with its tangent with respect to the
+//! spectrum (and the floe diameter `ICEF` it carries), for the tangent
+//! runs of the model.
 
 // The `#[cube]` macro generates, for every kernel, a launch struct and
 // functions that carry no documentation; the kernel itself is documented
@@ -615,6 +619,716 @@ pub fn ice_ref<F: Float>(
 }
 
 // ---------------------------------------------------------------------------
+// Tangent-linear kernel
+// ---------------------------------------------------------------------------
+
+// Per-frequency slots of the shared `kd` of the tangent kernel: the
+// tangents of the `kb` values that depend on the spectrum.
+const KD_VDIR: usize = 0;
+const KD_CS: usize = 1;
+const KD_CURV: usize = 2;
+const KD_EB: usize = 3;
+const KD_VDIR2: usize = 4;
+const KD_SMD: usize = 5;
+const KD_EBR: usize = 6;
+const NKD: usize = 7;
+
+/// Derivative of [`crate::srce::table()`] at `x` along `dx` (that of the
+/// linear interpolation on the segment the value uses, zero beyond the
+/// last node of the table).
+#[cube]
+fn table_d<F: Float>(tab: &[F], n: usize, x: F, dx: F) -> F {
+    let size = n - 1;
+    let xi = u32::cast_from(max(x.trunc(), F::new(0.0f32))) as usize;
+    let ind = select(xi < size - 1, xi, size - 1);
+    let f = x - F::cast_from(ind as u32);
+    select(f < F::new(1.0f32), (tab[ind + 1] - tab[ind]) * dx, F::new(0.0f32))
+}
+
+/// Derivative of [`fsd_dave()`] with respect to `dmax` along `ddmax`, `dmin`
+/// fixed (one-sided at `dmax = 1.01 dmin`, where the floor of `dmax`
+/// takes over).
+#[cube]
+fn fsd_dave_d<F: Float>(par: &[F], dmin: F, dmax: F, ddmax: F) -> F {
+    let gam = par[P_GAM];
+    let one = F::new(1.0f32);
+    let lo = dmin * par[P_C + 7];
+    let dmaxl = max(lo, dmax);
+    let ddl = select(dmax > lo, ddmax, F::new(0.0f32));
+    let mut r = ddl;
+    if dmin != F::new(0.0f32) {
+        let nn = dmaxl.powf(-gam + one) - dmin.powf(-gam + one);
+        let dd = dmaxl.powf(-gam) - dmin.powf(-gam);
+        let dnn = (-gam + one) * dmaxl.powf(-gam) * ddl;
+        let ddd = -gam * dmaxl.powf(-gam - one) * ddl;
+        r = gam / (gam - one) * ((dnn * dd - nn * ddd) / (dd * dd));
+    }
+    r
+}
+
+/// Derivative of the frequency factor `max(0.75 TPI FMEANA / sig, 1)^
+/// REFPARS(10)` of the ramps of `W3SREF` along `dfm` (zero on the floor 1).
+#[cube]
+fn rampf_d<F: Float>(par: &[F], fmeana: F, dfm: F, sig: F) -> F {
+    let c = par[P_C + 6] * par[P_TPI];
+    let q = c * fmeana / sig;
+    let p = par[P_REF + 9];
+    let mut r = F::new(0.0f32);
+    if q > F::new(1.0f32) {
+        r = p * q.powf(p - F::new(1.0f32)) * (c * dfm / sig);
+    }
+    r
+}
+
+/// Derivative of the ramp `max(c (log10 MICHEFAC + 4.5) + 1.5 MICHEFAC,
+/// 0.005)` of `W3SREF` (`c` is 0.07 for the shoreline, 0.007 for the
+/// icebergs) along the tangents `dem`, `dfm` of `EMEANA` and `FMEANA`, the
+/// slope fixed; one-sided at the floors of `EMEANA`, `FMEANA` and of the
+/// ramp.
+#[cube]
+#[allow(clippy::too_many_arguments)]
+fn miche_d<F: Float>(par: &[F], c: F, slope: F, emeana: F, dem: F, fmeana: F, dfm: F) -> F {
+    let zero = F::new(0.0f32);
+    let g = par[P_GRAV];
+    let em = max(emeana, par[P_C + 2]);
+    let dem2 = select(emeana > par[P_C + 2], dem, zero);
+    let fm = max(fmeana, par[P_C + 4]);
+    let dfm2 = select(fmeana > par[P_C + 4], dfm, zero);
+    let m = par[P_C + 2] * g * g * (pow4::<F>(slope) * slope) / (em * pow4::<F>(fm));
+    let dm = -m * (dem2 / em + F::new(4.0f32) * dfm2 / fm);
+    let inner = c * (m.ln() * par[P_INVLN10] + F::new(4.5f32)) + F::new(1.5f32) * m;
+    select(inner > par[P_C + 3], c * par[P_INVLN10] * (dm / m) + F::new(1.5f32) * dm, zero)
+}
+
+/// [`ice_ref()`] with its tangent: the same values (every line of the value
+/// kernel is kept, with its derivative next to it), and the tangent of the
+/// spectrum `vad` (laid out as `va`) updated in place, linearised about the
+/// spectrum of `va`. None of the ice and reflection parameters is a
+/// tangent direction; the tangent of the floe diameter `icefd` (per node,
+/// read and updated where `ICEF` is) is carried: `ICEF` enters the mean
+/// floe diameter of the scattering and the floe factors of the dissipation,
+/// and the break-up sets it from the spectrum (the CURVSPEC-weighted
+/// average of the wavelengths around `IKBREAK`), so that its tangent is
+/// nonzero where that average is taken, zero where the break-up sets it to
+/// a half wavelength or `IS2DUPDATE = F` sets it to `ICEDMAX`.
+///
+/// The discrete choices are taken from the values and their derivative is
+/// that of the branch taken (one-sided where the function is continuous):
+/// - the choice of the mean floe diameter of `W3SIS2` (`DMAX > 500`, the
+///   table `ICEDAVE` with `IS2DAMP > 0`, whose derivative is zero, or
+///   `W3FSD_DAVE` and its floor `1.01 DMIN`);
+/// - the `IS2CONC` window of the concentration (a parameter of the node,
+///   not a tangent direction);
+/// - the break-up criterion (`WAMP > STRAIN_C` and the half-wavelength
+///   bounds), the choice of `IKBREAK` by `CURVSPEC >= CURVSPEC(IKBREAK)` and
+///   the weighted average when both neighbours break: the new `DMAX` is
+///   either a half wavelength (zero derivative) or the weighted average
+///   (differentiated);
+/// - `IS2CREEPC * WLG < DMAX` of the creep and anelastic dissipation
+///   (continuous there, `SMOOTHDMAX = 0`, one-sided derivative);
+/// - the square roots of the orbital sums of `W3SIC2` (derivative taken as
+///   zero where a sum vanishes), `max(AORB / IC2ROUGH, 3)` and the end of
+///   the friction-factor table; the laminar-turbulent blend is a smooth
+///   `tanh`;
+/// - `max(DTURB SIG^2, DVISC)` of the attenuation;
+/// - in `W3SREF`, the floors of `FMEANA` (`1e-7` of the sum and `SIG(1)`),
+///   of `EMEANA` and `FMEANA` in `MICHEFAC`, of the ramps (`0.005`), the
+///   frequency factor `max(..., 1)` and the caps `min(REFPARS(9), ...)`, and
+///   the tests `REFLEC SPEC > 0` and `SPEC > 0` on the incident bins (the
+///   contribution vanishes there, so these are continuous).
+///
+/// Tangents sit next to the values: `ad` for the spectrum, `kd` for the
+/// per-frequency values of `kb` that depend on the spectrum, `sd` for the
+/// scalars of `sc`.
+#[cube(launch_unchecked)]
+#[allow(clippy::too_many_arguments)]
+pub fn ice_ref_tl<F: Float>(
+    va: &mut [F],
+    vad: &mut [F],
+    wn: &[F],
+    cg: &[F],
+    _depth: &[F],
+    icec: &[F],
+    icef: &mut [F],
+    icefd: &mut [F],
+    reflc: &[F],
+    refld: &[u32],
+    delx: &[F],
+    dely: &[F],
+    trnx: &[F],
+    trny: &[F],
+    berg: &[F],
+    nflag: &[u32],
+    par: &[F],
+    ktab: &[F],
+    rsig: &[F],
+    recos: &[F],
+    resin: &[F],
+    idave: &[F],
+    fwtab: &[F],
+    dtg_: f32,
+    np: usize,
+    #[comptime] nk: usize,
+    #[comptime] nth: usize,
+    #[comptime] nu: usize,
+    #[comptime] nfw: usize,
+    #[comptime] ice: bool,
+    #[comptime] refl: bool,
+) {
+    if ice || refl {
+        let i = CUBE_POS as usize;
+        let t = UNIT_POS as usize;
+        let nspec = nk * nth;
+        if i < np {
+            if (nflag[i] & 4u32) != 0u32 {
+                let zero = F::new(0.0f32);
+                let one = F::new(1.0f32);
+                let two = F::new(2.0f32);
+                let half = F::new(0.5f32);
+                let dtg = F::cast_from(dtg_);
+                let tpi = par[P_TPI];
+                let mut a = Shared::<[F]>::new_slice(nk * nth);
+                let mut ad = Shared::<[F]>::new_slice(nk * nth);
+                let mut kb = Shared::<[F]>::new_slice(NKB * nk);
+                let mut kd = Shared::<[F]>::new_slice(NKD * nk);
+                let mut sc = Shared::<[F]>::new_slice(NSC);
+                let mut sd = Shared::<[F]>::new_slice(NSC);
+                for r in 0..(nspec + nu - 1) / nu {
+                    let is = r * nu + t;
+                    if is < nspec {
+                        let ik = is / nth;
+                        let th = is - ik * nth;
+                        a[is] = va[(ik * np + i) * nth + th];
+                        ad[is] = vad[(ik * np + i) * nth + th];
+                    }
+                }
+                if t < nk {
+                    kb[K_WN * nk + t] = wn[(t + 1) * np + i];
+                    kb[K_CG * nk + t] = cg[(t + 1) * np + i];
+                }
+                sync_cube();
+                if ice {
+                    let cice = icec[i];
+                    if cice > zero {
+                        let icef0 = icef[i];
+                        let icef0d = icefd[i];
+                        // W3SIS2, 1-3: scattering coefficient and R per frequency
+                        if t < nk {
+                            let w = kb[K_WN * nk + t];
+                            let c = kb[K_CG * nk + t];
+                            let mut suma = zero;
+                            let mut sumad = zero;
+                            for th in 0..nth {
+                                suma += a[t * nth + th];
+                                sumad += ad[t * nth + th];
+                            }
+                            let dmax = icef0;
+                            let mut icedave = dmax;
+                            let mut icedaved = icef0d;
+                            if dmax > F::new(500.0f32) {
+                                icedave = dmax;
+                            } else if par[P_IS2 + 8] > zero {
+                                let ir = u32::cast_from((dmax + half).trunc());
+                                let ir = select(ir < 1u32, 1u32, ir);
+                                icedave = idave[(ir - 1u32) as usize];
+                                icedaved = zero;
+                            } else if par[P_IS2 + 13] * (tpi / w) < dmax {
+                                icedave = fsd_dave::<F>(par, (tpi / w) * par[P_IS2 + 13], dmax);
+                                icedaved = fsd_dave_d::<F>(par, (tpi / w) * par[P_IS2 + 13], dmax, icef0d);
+                            }
+                            let cg_eff = cice * c + (one - cice) * c;
+                            let mut alpha = -one * (ktab[T_ALPH * nk + t] / icedave + zero) * cice;
+                            let mut alphad = ktab[T_ALPH * nk + t] / (icedave * icedave) * icedaved * cice;
+                            alpha = par[P_IS2 + 0] * alpha - ktab[T_SQ * nk + t];
+                            alphad *= par[P_IS2 + 0];
+                            if par[P_IS2 + 10] > zero {
+                                let lo = par[P_C + 8];
+                                let hi = par[P_C + 9];
+                                if cice < lo {
+                                    alpha = zero;
+                                    alphad = zero;
+                                }
+                                if cice > hi {
+                                    alpha = zero;
+                                    alphad = zero;
+                                }
+                                if cice >= lo && cice <= hi {
+                                    alpha *= (cice - lo) * (hi - cice);
+                                    alphad *= (cice - lo) * (hi - cice);
+                                }
+                            }
+                            kb[K_VDIR * nk + t] = alpha * cice * cg_eff;
+                            kd[KD_VDIR * nk + t] = alphad * cice * cg_eff;
+                            let wlg = tpi / w;
+                            let r = one + par[P_RC] * pow4::<F>(par[P_PI] / wlg);
+                            let sume = suma * ktab[T_DDEN * nk + t] / c / (r * one);
+                            let sumed = sumad * ktab[T_DDEN * nk + t] / c / (r * one);
+                            kb[K_CS * nk + t] = sume * pow4::<F>(two * par[P_PI] / wlg);
+                            kd[KD_CS * nk + t] = sumed * pow4::<F>(two * par[P_PI] / wlg);
+                            kb[K_WLG * nk + t] = wlg;
+                            kb[K_R * nk + t] = r;
+                            kb[K_EB * nk + t] = suma;
+                            kd[KD_EB * nk + t] = sumad;
+                        }
+                        sync_cube();
+                        // curvature summed over the window of NSUM frequencies
+                        let nsum = u32::cast_from(par[P_NSUM]) as usize;
+                        if t < nk {
+                            let lo = select(t >= nsum, t - nsum, 0usize);
+                            let hi = select(t + nsum < nk - 1, t + nsum, nk - 1);
+                            let mut s = zero;
+                            let mut s_d = zero;
+                            for j in 0..nk {
+                                if j >= lo && j <= hi {
+                                    s += kb[K_CS * nk + j];
+                                    s_d += kd[KD_CS * nk + j];
+                                }
+                            }
+                            kb[K_CURV * nk + t] = s;
+                            kd[KD_CURV * nk + t] = s_d;
+                        }
+                        sync_cube();
+                        // 4. floe size and break-up (serial)
+                        if t == 0 {
+                            let mut dmax = icef0;
+                            let mut dmaxd = icef0d;
+                            let mut nicef = icef0;
+                            let mut nicefd = icef0d;
+                            if par[P_IS2 + 9] < half {
+                                dmax = par[P_ICEDMAX];
+                                dmaxd = zero;
+                                nicef = par[P_ICEDMAX];
+                                nicefd = zero;
+                            }
+                            if par[P_IS2 + 2] > half {
+                                let dff = par[P_DFF];
+                                let mut icedmin = par[P_ICEDMIN];
+                                let mut ikbreak = 0usize;
+                                let mut brk = false;
+                                for ik in 0..nk {
+                                    let strain = kb[K_CURV * nk + ik] * par[P_CTS];
+                                    let mut bw = zero;
+                                    if dff < dmax {
+                                        let wamp = par[P_IS2 + 16] * strain.sqrt();
+                                        if par[P_IS2 + 8] == zero {
+                                            icedmin = (tpi / kb[K_WN * nk + ik]) * par[P_IS2 + 13];
+                                        }
+                                        let hw = kb[K_WLG * nk + ik] / two;
+                                        if wamp > par[P_STRC] && hw > icedmin && hw < dmax && hw > dff {
+                                            bw = one;
+                                            ikbreak = ik;
+                                            brk = true;
+                                        }
+                                    }
+                                    kb[K_BRK * nk + ik] = bw;
+                                }
+                                if brk {
+                                    let lo = select(ikbreak >= nsum, ikbreak - nsum, 0usize);
+                                    let hi = ikbreak;
+                                    for ik in 0..nk {
+                                        if ik >= lo && ik <= hi {
+                                            if kb[K_CS * nk + ik] >= kb[K_CS * nk + ikbreak] && dmax >= kb[K_WLG * nk + ik] / two {
+                                                ikbreak = ik;
+                                            }
+                                        }
+                                    }
+                                    dmax = kb[K_WLG * nk + ikbreak] / two;
+                                    dmaxd = zero;
+                                    let ikp1 = select(ikbreak + 1 < nk - 1, ikbreak + 1, nk - 1);
+                                    let ikm1 = select(ikbreak >= 1, ikbreak - 1, 0usize);
+                                    if kb[K_BRK * nk + ikp1] > zero && kb[K_BRK * nk + ikm1] > zero {
+                                        let cs0 = kb[K_CS * nk + ikbreak];
+                                        let csp = kb[K_CS * nk + ikp1];
+                                        let csm = kb[K_CS * nk + ikm1];
+                                        let w0 = kb[K_WLG * nk + ikbreak];
+                                        let wp = kb[K_WLG * nk + ikp1];
+                                        let wm = kb[K_WLG * nk + ikm1];
+                                        dmax = (w0 * cs0 + wp * csp + wm * csm) / (two * (cs0 + csm + csp));
+                                        let cs0d = kd[KD_CS * nk + ikbreak];
+                                        let cspd = kd[KD_CS * nk + ikp1];
+                                        let csmd = kd[KD_CS * nk + ikm1];
+                                        dmaxd = (w0 * cs0d + wp * cspd + wm * csmd - dmax * (two * (cs0d + csmd + cspd))) / (two * (cs0 + csm + csp));
+                                    }
+                                    nicef = dmax;
+                                    nicefd = dmaxd;
+                                }
+                            }
+                            sc[S_DMAX] = dmax;
+                            sd[S_DMAX] = dmaxd;
+                            sc[S_ICEF] = nicef;
+                            sd[S_ICEF] = nicefd;
+                            icef[i] = nicef;
+                            icefd[i] = nicefd;
+                        }
+                        sync_cube();
+                        // 5. dissipation (VDIR2) and the floe factor of W3SIC2
+                        if t < nk {
+                            let dmax = sc[S_DMAX];
+                            let dmaxd = sd[S_DMAX];
+                            let wlg = kb[K_WLG * nk + t];
+                            let r = kb[K_R * nk + t];
+                            let mut v = zero;
+                            let mut vd = zero;
+                            if par[P_IS2 + 11] > zero {
+                                if par[P_IS2 + 13] * wlg < dmax {
+                                    let x = (dmax - par[P_IS2 + 13] * wlg) / (dmax * par[P_IS2 + 12]);
+                                    let xd = (dmaxd - x * par[P_IS2 + 12] * dmaxd) / (dmax * par[P_IS2 + 12]);
+                                    let smoothd = ((dmax - par[P_IS2 + 13] * wlg) / (dmax * par[P_IS2 + 12])).tanh();
+                                    let smoothdd = (one - smoothd * smoothd) * xd;
+                                    if par[P_IS2 + 22] <= half {
+                                        let f = (two * par[P_PI] / wlg).powf(par[P_IS2 + 14] + one) / (one * r * r);
+                                        v = par[P_CREEP] * F::new(4.0f32) * kb[K_CURV * nk + t] * (two * par[P_PI] / wlg).powf(par[P_IS2 + 14] + one) / (one * r * r) * smoothd;
+                                        vd = par[P_CREEP] * F::new(4.0f32) * (kd[KD_CURV * nk + t] * smoothd + kb[K_CURV * nk + t] * smoothdd) * f;
+                                    } else {
+                                        v = ktab[T_ANEL * nk + t] * pow4::<F>(kb[K_WN * nk + t]) * smoothd / (r * r * one);
+                                        vd = ktab[T_ANEL * nk + t] * pow4::<F>(kb[K_WN * nk + t]) * smoothdd / (r * r * one);
+                                    }
+                                }
+                            }
+                            kb[K_VDIR2 * nk + t] = v;
+                            kd[KD_VDIR2 * nk + t] = vd;
+                            let mut smd = one;
+                            let mut smdd = zero;
+                            if par[P_IC2 + 7] > zero {
+                                let nf = sc[S_ICEF];
+                                let nfd = sd[S_ICEF];
+                                let wlg_r = tpi / kb[K_WN * nk + t];
+                                let y = (nf - par[P_IC2 + 7] * wlg_r) / (nf * half);
+                                let yd = (nfd - y * half * nfd) / (nf * half);
+                                let th_ = ((nf - par[P_IC2 + 7] * wlg_r) / (nf * half)).tanh();
+                                let x = half * (one + th_);
+                                let xd = half * (one - th_ * th_) * yd;
+                                smd = x * x;
+                                smdd = two * x * xd;
+                            }
+                            kb[K_SMD * nk + t] = smd;
+                            kd[KD_SMD * nk + t] = smdd;
+                        }
+                        sync_cube();
+                        // W3SIC2: orbital velocity and amplitude (serial)
+                        if t == 0 {
+                            let mut pturb = zero;
+                            let mut pvisc = one;
+                            let mut dturb = zero;
+                            let mut pturbd = zero;
+                            let mut pviscd = zero;
+                            let mut dturbd = zero;
+                            if par[P_IC2 + 1] > zero {
+                                let mut uorb = zero;
+                                let mut aorb = zero;
+                                let mut uorbd = zero;
+                                let mut aorbd = zero;
+                                for ik in 0..nk {
+                                    let eb = kb[K_EB * nk + ik];
+                                    let smd = kb[K_SMD * nk + ik];
+                                    let ebd = kd[KD_EB * nk + ik];
+                                    let smdd = kd[KD_SMD * nk + ik];
+                                    let esd = ebd * smd + eb * smdd;
+                                    let sg = ktab[T_SIG * nk + ik];
+                                    let dd = ktab[T_DDEN * nk + ik];
+                                    let c = kb[K_CG * nk + ik];
+                                    let r = kb[K_R * nk + ik];
+                                    if r > one {
+                                        uorb += eb * smd * sg * sg * dd / c / (r * c / c);
+                                        aorb += eb * smd * dd / c / (r * c / c);
+                                        uorbd += esd * sg * sg * dd / c / (r * c / c);
+                                        aorbd += esd * dd / c / (r * c / c);
+                                    } else {
+                                        uorb += eb * smd * sg * sg * dd / c;
+                                        aorb += eb * smd * dd / c;
+                                        uorbd += esd * sg * sg * dd / c;
+                                        aorbd += esd * dd / c;
+                                    }
+                                }
+                                // d(2 sqrt(x)) = dx / sqrt(x), zero where x = 0
+                                let aorbd = select(aorb > zero, aorbd / aorb.sqrt(), zero);
+                                let uorbd = select(uorb > zero, uorbd / uorb.sqrt(), zero);
+                                let aorb = two * aorb.sqrt();
+                                let uorb = two * uorb.sqrt();
+                                let re = uorb * aorb / par[P_VISCM];
+                                let red = (uorbd * aorb + uorb * aorbd) / par[P_VISCM];
+                                let th_ = ((re - par[P_IC2 + 3]) / par[P_IC2 + 4]).tanh();
+                                let smooth = half * ((re - par[P_IC2 + 3]) / par[P_IC2 + 4]).tanh();
+                                let smoothd = half * (one - th_ * th_) * (red / par[P_IC2 + 4]);
+                                pturb = half + smooth;
+                                pvisc = half - smooth;
+                                pturbd = smoothd;
+                                pviscd = -smoothd;
+                                let xi = (max(aorb / par[P_IC2 + 2], F::new(3.0f32)).ln() * par[P_INVLN10] - par[P_ABMIN]) / par[P_DELAB];
+                                let xid = select(aorb / par[P_IC2 + 2] > F::new(3.0f32), aorbd / aorb, zero) * par[P_INVLN10] / par[P_DELAB];
+                                let fw = crate::srce::table::<F>(fwtab, nfw, xi);
+                                let fwd = table_d::<F>(fwtab, nfw, xi, xid);
+                                dturb = par[P_IC2 + 1] * fw * uorb / par[P_GRAV];
+                                dturbd = par[P_IC2 + 1] * (fwd * uorb + fw * uorbd) / par[P_GRAV];
+                            }
+                            sc[S_PTURB] = pturb;
+                            sc[S_PVISC] = pvisc;
+                            sc[S_DTURB] = dturb;
+                            sd[S_PTURB] = pturbd;
+                            sd[S_PVISC] = pviscd;
+                            sd[S_DTURB] = dturbd;
+                        }
+                        sync_cube();
+                        // 10.1 attenuation and isotropic scattering of band t
+                        if t < nk {
+                            let sg = ktab[T_SIG * nk + t];
+                            let mut vdic = zero;
+                            let mut vdicd = zero;
+                            if par[P_NOICE] == zero {
+                                let dvisc = par[P_IC2 + 5] * kb[K_WN * nk + t] * (par[P_VISCM] * sg / two).sqrt();
+                                let mt = max(sc[S_DTURB] * sg * sg, dvisc);
+                                let mtd = select(sc[S_DTURB] * sg * sg > dvisc, sd[S_DTURB] * sg * sg, zero);
+                                vdic = -one * (sc[S_PTURB] * max(sc[S_DTURB] * sg * sg, dvisc) + sc[S_PVISC] * dvisc) * kb[K_SMD * nk + t];
+                                vdicd = -one
+                                    * ((sd[S_PTURB] * mt + sc[S_PTURB] * mtd + sd[S_PVISC] * dvisc) * kb[K_SMD * nk + t]
+                                        + (sc[S_PTURB] * mt + sc[S_PVISC] * dvisc) * kd[KD_SMD * nk + t]);
+                            }
+                            let vdir = kb[K_VDIR * nk + t];
+                            let vdird = kd[KD_VDIR * nk + t];
+                            let mut att = (cice * vdic * dtg).exp();
+                            att *= (cice * kb[K_VDIR2 * nk + t] * dtg).exp();
+                            let mut darg = cice * dtg * (vdicd + kd[KD_VDIR2 * nk + t]);
+                            if par[P_IS2 + 1] == zero {
+                                att *= (cice * vdir * dtg).exp();
+                                darg += cice * dtg * vdird;
+                            }
+                            let attd = att * darg;
+                            for th in 0..nth {
+                                let x = a[t * nth + th];
+                                ad[t * nth + th] = attd * x + att * ad[t * nth + th];
+                                a[t * nth + th] = att * x;
+                            }
+                            if par[P_IS2 + 1] >= zero {
+                                let scf = (vdir * par[P_IS2 + 1] * dtg).exp();
+                                let scfd = scf * (vdird * par[P_IS2 + 1] * dtg);
+                                let mut s = zero;
+                                let mut s_d = zero;
+                                for th in 0..nth {
+                                    s += a[t * nth + th];
+                                    s_d += ad[t * nth + th];
+                                }
+                                let iso = s / F::cast_from(nth as u32);
+                                let isod = s_d / F::cast_from(nth as u32);
+                                for th in 0..nth {
+                                    let x = a[t * nth + th];
+                                    ad[t * nth + th] = isod + (ad[t * nth + th] - isod) * scf + (x - iso) * scfd;
+                                    a[t * nth + th] = iso + (x - iso) * scf;
+                                }
+                            }
+                        }
+                        sync_cube();
+                    } else {
+                        if t == 0 && par[P_IS2 + 9] < half {
+                            icef[i] = zero;
+                            icefd[i] = zero;
+                        }
+                    }
+                }
+                // W3SREF
+                let mut called = false;
+                let mut lc0 = zero;
+                let mut lc1 = zero;
+                let mut lc3 = zero;
+                let mut bg = zero;
+                if refl {
+                    lc0 = reflc[4 * i];
+                    lc1 = reflc[4 * i + 1];
+                    lc3 = reflc[4 * i + 3];
+                    bg = berg[i];
+                    called = lc0 > zero || lc1 > zero || (lc3 > zero && bg > zero);
+                    if called {
+                        if t < nk {
+                            let mut eb = zero;
+                            let mut ebd = zero;
+                            for th in 0..nth {
+                                eb += a[t * nth + th];
+                                ebd += ad[t * nth + th];
+                            }
+                            kb[K_EBR * nk + t] = eb * ktab[T_RDDEN * nk + t] / kb[K_CG * nk + t];
+                            kd[KD_EBR * nk + t] = ebd * ktab[T_RDDEN * nk + t] / kb[K_CG * nk + t];
+                        }
+                        sync_cube();
+                        if t == 0 {
+                            let mut emeana = zero;
+                            let mut fmeana = zero;
+                            let mut dem = zero;
+                            let mut dfs = zero;
+                            for ik in 0..nk {
+                                let eb = kb[K_EBR * nk + ik];
+                                let ebd = kd[KD_EBR * nk + ik];
+                                emeana += eb;
+                                fmeana += eb / rsig[ik + 1];
+                                dem += ebd;
+                                dfs += ebd / rsig[ik + 1];
+                            }
+                            let mx = max(fmeana, par[P_C + 5]);
+                            let dmx = select(fmeana > par[P_C + 5], dfs, zero);
+                            let mut dfm = par[P_TPIINV] * (dem / mx - emeana * dmx / (mx * mx));
+                            fmeana = par[P_TPIINV] * (emeana / max(fmeana, par[P_C + 5]));
+                            dfm = select(fmeana > rsig[1], dfm, zero);
+                            fmeana = max(fmeana, rsig[1]);
+                            let mut ramp0 = one;
+                            let mut ramp0d = zero;
+                            if par[P_REF + 5] > zero {
+                                // max() also takes 0.001 for a NaN slope
+                                let slope = max(reflc[4 * i + 2], par[P_C + 4]);
+                                let g = par[P_GRAV];
+                                let fm = max(fmeana, par[P_C + 4]);
+                                let michefac = par[P_C + 2] * g * g * (pow4::<F>(slope) * slope) / (max(emeana, par[P_C + 2]) * pow4::<F>(fm));
+                                ramp0 = max(par[P_C] * (michefac.ln() * par[P_INVLN10] + F::new(4.5f32)) + F::new(1.5f32) * michefac, par[P_C + 3]);
+                                ramp0d = miche_d::<F>(par, par[P_C], slope, emeana, dem, fmeana, dfm);
+                            }
+                            sc[S_EMEANA] = emeana;
+                            sc[S_FMEANA] = fmeana;
+                            sc[S_RAMP0] = ramp0;
+                            sd[S_EMEANA] = dem;
+                            sd[S_FMEANA] = dfm;
+                            sd[S_RAMP0] = ramp0d;
+                        }
+                        sync_cube();
+                    }
+                }
+                // write back, with DTG VREF on the bins of this unit
+                for r in 0..(nspec + nu - 1) / nu {
+                    let is = r * nu + t;
+                    if is < nspec {
+                        let ik = is / nth;
+                        let th = is - ik * nth;
+                        let mut v = a[is];
+                        let mut vd = ad[is];
+                        if refl {
+                            if called {
+                                let fmeana = sc[S_FMEANA];
+                                let emeana = sc[S_EMEANA];
+                                let ramp0 = sc[S_RAMP0];
+                                let dfm = sd[S_FMEANA];
+                                let dem = sd[S_EMEANA];
+                                let ramp0d = sd[S_RAMP0];
+                                let cgk = kb[K_CG * nk + ik];
+                                let dx = delx[i];
+                                let dy = dely[i];
+                                let nthu = nth as u32;
+                                let ith2 = th as u32 + 1u32;
+                                let mut s = zero;
+                                let mut s_d = zero;
+                                // 2. shoreline reflection
+                                if lc0 > zero {
+                                    let mut ramp1 = ramp0 * lc0;
+                                    let mut ramp1d = ramp0d * lc0;
+                                    if par[P_REF + 5] > zero {
+                                        let rf = max(par[P_C + 6] * tpi * fmeana / rsig[ik + 1], one).powf(par[P_REF + 9]);
+                                        let ramp = rf * ramp0;
+                                        let rampd = rampf_d::<F>(par, fmeana, dfm, rsig[ik + 1]) * ramp0 + rf * ramp0d;
+                                        ramp1 = min(par[P_REF + 8], lc0 * ramp);
+                                        ramp1d = select(lc0 * ramp < par[P_REF + 8], lc0 * rampd, zero);
+                                    }
+                                    let r1d = refld[6 * i];
+                                    let rd2 = refld[6 * i + 1];
+                                    let rd3 = F::cast_from(refld[6 * i + 2]);
+                                    let rd4 = F::cast_from(refld[6 * i + 3]);
+                                    let ith2x = 1u32 + (nthu + ith2 - refld[6 * i + 4] - 1u32) % nthu;
+                                    let ith2y = 1u32 + (nthu + ith2 - refld[6 * i + 5] - 1u32) % nthu;
+                                    let r3 = recos[dmod(ith2, r1d, nthu) as usize];
+                                    if r3 < zero {
+                                        let cx = (recos[(ith2x - 1u32) as usize] / dx).abs();
+                                        let cy = (resin[(ith2y - 1u32) as usize] / dy).abs();
+                                        let nrs = u32::cast_from(par[P_NRS]);
+                                        for th1 in 0..nth {
+                                            let ith = th1 as u32 + 1u32;
+                                            let r1 = recos[dmod(ith, r1d, nthu) as usize];
+                                            let r2 = ramp1 * a[ik * nth + th1];
+                                            let r2d = ramp1d * a[ik * nth + th1] + ramp1 * ad[ik * nth + th1];
+                                            if r1 > zero && r2 > zero {
+                                                let ith3 = 1u32 + (nthu / 2u32 + nthu + 2u32 * r1d - ith - 1u32) % nthu;
+                                                let r4 = recos[dmod(ith2, ith3, nthu) as usize];
+                                                if r4 > zero {
+                                                    if rd2 == 0u32 {
+                                                        s += rd3 * r2 * cgk * cx * par[P_FAC1] + rd4 * r2 * cgk * cy * par[P_FAC1];
+                                                        s_d += rd3 * r2d * cgk * cx * par[P_FAC1] + rd4 * r2d * cgk * cy * par[P_FAC1];
+                                                    } else if rd2 == 1u32 {
+                                                        s += rd3 * r2 * cgk * cx * r4.abs() * par[P_FAC2] + rd4 * r2 * cgk * cy * r4.abs() * par[P_FAC2];
+                                                        s_d += rd3 * r2d * cgk * cx * r4.abs() * par[P_FAC2] + rd4 * r2d * cgk * cy * r4.abs() * par[P_FAC2];
+                                                    } else if rd2 == 2u32 {
+                                                        let mut r4n = one;
+                                                        let mut k = 0u32;
+                                                        loop {
+                                                            if k >= nrs {
+                                                                break;
+                                                            }
+                                                            r4n *= r4;
+                                                            k += 1u32;
+                                                        }
+                                                        s += rd3 * r2 * cgk * cx * r4n * par[P_FAC3] + rd4 * r2 * cgk * cy * r4n * par[P_FAC3];
+                                                        s_d += rd3 * r2d * cgk * cx * r4n * par[P_FAC3] + rd4 * r2d * cgk * cy * r4n * par[P_FAC3];
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // diffuse reflection by sub-grid islands and icebergs
+                                let tx = trnx[i];
+                                let ty = trny[i];
+                                if (par[P_REF + 1] > zero && tx + ty < two) || (par[P_REF + 3] > zero && bg > zero) {
+                                    let sigk = rsig[nk + 1];
+                                    let mut ramp2 = ramp0 * lc1;
+                                    let mut ramp4 = ramp0 * lc3;
+                                    let mut ramp2d = ramp0d * lc1;
+                                    let mut ramp4d = ramp0d * lc3;
+                                    if par[P_REF + 5] > zero {
+                                        let rf = max(par[P_C + 6] * tpi * fmeana / sigk, one).powf(par[P_REF + 9]);
+                                        let rfd = rampf_d::<F>(par, fmeana, dfm, sigk);
+                                        let ramp = rf * ramp0;
+                                        let rampd = rfd * ramp0 + rf * ramp0d;
+                                        ramp2 = min(par[P_REF + 8], lc1 * ramp);
+                                        ramp2d = select(lc1 * ramp < par[P_REF + 8], lc1 * rampd, zero);
+                                        let slope = max(lc3, par[P_C + 4]);
+                                        let g = par[P_GRAV];
+                                        let fm = max(fmeana, par[P_C + 4]);
+                                        let michefac = par[P_C + 2] * g * g * (pow4::<F>(slope) * slope) / (max(emeana, par[P_C + 2]) * pow4::<F>(fm));
+                                        let ramp0b = max(par[P_C + 1] * (michefac.ln() * par[P_INVLN10] + F::new(4.5f32)) + F::new(1.5f32) * michefac, par[P_C + 3]);
+                                        let ramp0bd = miche_d::<F>(par, par[P_C + 1], slope, emeana, dem, fmeana, dfm);
+                                        let rampb = rf * ramp0b;
+                                        let rampbd = rfd * ramp0b + rf * ramp0bd;
+                                        ramp4 = min(par[P_REF + 8], rampb);
+                                        ramp4d = select(rampb < par[P_REF + 8], rampbd, zero);
+                                    }
+                                    let ex = max(min(one - (-bg * dx * par[P_C + 2]).exp(), one), zero);
+                                    let ey = max(min(one - (-bg * dy * par[P_C + 2]).exp(), one), zero);
+                                    let fx = max(min(one - tx, one), zero);
+                                    let fy = max(min(one - ty, one), zero);
+                                    let r2x = ramp2 * par[P_REF + 1] * max(min(one - tx, one), zero) + ramp4 * par[P_REF + 3] * ex;
+                                    let r2y = ramp2 * par[P_REF + 1] * max(min(one - ty, one), zero) + ramp4 * par[P_REF + 3] * ey;
+                                    let r2xd = ramp2d * par[P_REF + 1] * fx + ramp4d * par[P_REF + 3] * ex;
+                                    let r2yd = ramp2d * par[P_REF + 1] * fy + ramp4d * par[P_REF + 3] * ey;
+                                    let cx = (recos[th] / dx).abs();
+                                    let cy = (resin[th] / dy).abs();
+                                    for th1 in 0..nth {
+                                        let r2 = a[ik * nth + th1];
+                                        let r2d = ad[ik * nth + th1];
+                                        if r2 > zero {
+                                            let r3 = recos[((nthu + ith2 - (th1 as u32 + 1u32)) % nthu) as usize];
+                                            if r3 < zero {
+                                                s += cgk * r2x * r2 * cx * par[P_FAC1] + cgk * r2y * r2 * cy * par[P_FAC1];
+                                                s_d += cgk * (r2xd * r2 + r2x * r2d) * cx * par[P_FAC1] + cgk * (r2yd * r2 + r2y * r2d) * cy * par[P_FAC1];
+                                            }
+                                        }
+                                    }
+                                }
+                                v += dtg * s;
+                                vd += dtg * s_d;
+                            }
+                        }
+                        va[(ik * np + i) * nth + th] = v;
+                        vad[(ik * np + i) * nth + th] = vd;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Host side
 // ---------------------------------------------------------------------------
 
@@ -925,6 +1639,89 @@ impl<F: Real> IceRefKernel<F> {
         }
         Ok(())
     }
+
+    /// Launch [`ice_ref_tl()`] on `np` nodes for the global step `dtg`: the
+    /// values as [`IceRefKernel::launch`], and the tangent of the spectrum
+    /// `d.vad` (laid out as `s.va`) and of the floe diameter `d.icefd`
+    /// (needed with the ice step) updated in place; nothing is launched
+    /// when neither the ice step nor the reflection runs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn launch_tl(&self, client: &Client, s: &IceRefArgs, d: &IceRefTangent, np: usize, nk: usize, nth: usize, dtg: f32) -> Result<()> {
+        if !self.ice && !self.refl {
+            return Ok(());
+        }
+        ensure!(nk == self.nk && nth == self.nth, "kernel built for {}x{}, launched on {nk}x{nth}", self.nk, self.nth);
+        let nspec = nk * nth;
+        let need = |h: Option<&Handle>, on: bool, name: &str| -> Result<(Handle, usize)> {
+            match (h, on) {
+                (Some(h), true) => Ok((h.clone(), np)),
+                (None, true) => bail!("ice_ref_tl: buffer {name} missing"),
+                (_, false) => Ok((self.dummy.clone(), 1)),
+            }
+        };
+        let (depth, nd) = need(s.depth, self.ice, "depth")?;
+        let (ice, ni) = need(s.ice, self.ice, "ice")?;
+        let (icef, nf) = need(s.icef, self.ice, "icef")?;
+        let (icefd, nfd) = need(d.icefd, self.ice, "icefd")?;
+        let (reflc, nr) = need(s.reflc, self.refl, "reflc")?;
+        let (refld, nrd) = need(s.refld, self.refl, "refld")?;
+        let (delx, ndx) = need(s.delx, self.refl, "delx")?;
+        let (dely, ndy) = need(s.dely, self.refl, "dely")?;
+        let (trnx, ntx) = need(s.trnx, self.refl, "trnx")?;
+        let (trny, nty) = need(s.trny, self.refl, "trny")?;
+        let (berg, nb) = need(s.berg, self.refl, "berg")?;
+        let r4 = if self.refl { 4 } else { 1 };
+        let r6 = if self.refl { 6 } else { 1 };
+        unsafe {
+            ice_ref_tl::launch_unchecked::<F>(
+                client,
+                CubeCount::Static(np as u32, 1, 1),
+                CubeDim::new_1d(self.nu as u32),
+                bf(s.va, nspec * np),
+                bf(d.vad, nspec * np),
+                bf(s.wn, (nk + 2) * np),
+                bf(s.cg, (nk + 2) * np),
+                bf(&depth, nd),
+                bf(&ice, ni),
+                bf(&icef, nf),
+                bf(&icefd, nfd),
+                bf(&reflc, r4 * nr),
+                bf(&refld, r6 * nrd),
+                bf(&delx, ndx),
+                bf(&dely, ndy),
+                bf(&trnx, ntx),
+                bf(&trny, nty),
+                bf(&berg, nb),
+                bf(s.nflag, np),
+                bf(&self.par, NPAR),
+                bf(&self.ktab, NKT * nk),
+                bf(&self.rsig, nk + 2),
+                bf(&self.recos, nth),
+                bf(&self.resin, nth),
+                bf(&self.idave, self.nidave),
+                bf(&self.fwtab, self.nfw),
+                dtg,
+                np,
+                nk,
+                nth,
+                self.nu,
+                self.nfw,
+                self.ice,
+                self.refl,
+            );
+        }
+        Ok(())
+    }
+}
+
+/// The tangent buffers of [`ice_ref_tl()`]: the tangent of the spectrum `vad`
+/// (laid out as `va`) and of the floe diameter `icefd` (one per node, may
+/// be `None` without the ice step), both updated in place.
+pub struct IceRefTangent<'a> {
+    /// See [`IceRefTangent`].
+    pub vad: &'a Handle,
+    /// See [`IceRefTangent`].
+    pub icefd: Option<&'a Handle>,
 }
 
 /// The ice and reflection inputs of a run (`hww3-prop run --ice-ref
@@ -997,10 +1794,12 @@ impl IceRefInputs {
 /// The ice and reflection step of a run on the device: the kernel, the
 /// floe diameter `ICEF` of every node (initial value 1000 m, as WW3 without
 /// a floe-size field; not in the restart files, as in WW3) and the
-/// reflection inputs.
+/// reflection inputs; for the tangent runs, the tangent of `ICEF` (zero at
+/// the start, as no tangent direction perturbs the floe diameter).
 pub struct IceRefState<F: Real> {
     kernel: IceRefKernel<F>,
     icef: Option<Handle>,
+    icefd: Option<Handle>,
     refl: Option<[Handle; 7]>,
 }
 
@@ -1014,6 +1813,7 @@ impl<F: Real> IceRefState<F> {
             client.create_from_slice(F::as_bytes(&w))
         };
         let icef = inp.ice.as_ref().map(|_| upd(&vec![1000.0; np]));
+        let icefd = inp.ice.as_ref().map(|_| upd(&vec![0.0; np]));
         let refl = inp.refl.as_ref().map(|(_, r)| {
             [
                 upd(&r.reflc),
@@ -1025,7 +1825,41 @@ impl<F: Real> IceRefState<F> {
                 upd(&vec![0.0; np]),
             ]
         });
-        Ok(IceRefState { kernel, icef, refl })
+        Ok(IceRefState { kernel, icef, icefd, refl })
+    }
+
+    /// Set the tangent of `ICEF` back to zero (start of a tangent run).
+    pub fn reset_tl(&mut self, client: &Client, np: usize) {
+        if self.icefd.is_some() {
+            let w: Vec<F> = vec![<F as crate::backend::Scalar>::of_f64(0.0); np];
+            self.icefd = Some(client.create_from_slice(F::as_bytes(&w)));
+        }
+    }
+
+    /// Apply the step and its tangent ([`ice_ref_tl()`]) to the spectra `va`
+    /// and their tangent `vad` after the source integration (and to `ICEF`
+    /// and its tangent, held here).
+    #[allow(clippy::too_many_arguments)]
+    pub fn launch_tl(&self, client: &Client, va: &Handle, vad: &Handle, wn: &Handle, cg: &Handle, nflag: &Handle, dw: &Handle, ice: &Handle, np: usize, nk: usize, nth: usize, dtg: f32) -> Result<()> {
+        let r = self.refl.as_ref();
+        let args = IceRefArgs {
+            va,
+            wn,
+            cg,
+            nflag,
+            depth: Some(dw),
+            ice: self.icef.as_ref().map(|_| ice),
+            icef: self.icef.as_ref(),
+            reflc: r.map(|a| &a[0]),
+            refld: r.map(|a| &a[1]),
+            delx: r.map(|a| &a[2]),
+            dely: r.map(|a| &a[3]),
+            trnx: r.map(|a| &a[4]),
+            trny: r.map(|a| &a[5]),
+            berg: r.map(|a| &a[6]),
+        };
+        let d = IceRefTangent { vad, icefd: self.icefd.as_ref() };
+        self.kernel.launch_tl(client, &args, &d, np, nk, nth, dtg)
     }
 
     /// Apply the step to the spectra `va` after the source integration.
