@@ -1289,11 +1289,31 @@ differences ([GPU model results](wave_results.md)).
   The two value passes before the adjoint (the count of the sub-steps, then
   the tape) now cost 0.13 s, more than half of it. On grid v5 at the start
   of the run, the source adjoint takes 25.7 s per step against 71 s.
-- **The 156 h gradient** (checkpoint d) is run against the derivatives of
-  the training cost along the nine tangents of the `BETAMAX`$(U)$ test.
-  `scripts/cal_obs.py seed` gives the derivatives of the cost with respect
-  to the hourly $H_s$ and $T_{m02}$ fields. Along the tangents of `BETAU3`
-  and `SDSC2` they reproduce the derivatives of `cal_obs.py eval` to 1e-9.
+- **The 156 h gradient (checkpoints c and d).** The setup:
+  - `scripts/cal_obs.py seed` gives the derivatives of the training cost of
+    the `BETAMAX`$(U)$ test with respect to the hourly $H_s$ and $T_{m02}$
+    fields;
+  - one adjoint run takes them back over the 936 steps from the restart of
+    1 January 00:10 (Slurm job 4560379, one A100, 3.6 h);
+  - checkpoints are kept every 31 steps, 62 held at most (259 GB of host
+    memory), with a GPU peak of 57 GB.
+
+  The results:
+  - $dJ/dc_k$ of the seven coefficients and $dJ/d\ln p$ of `SDSC2` and
+    `NLPROP` agree with the derivatives along the nine tangents of the
+    test to between 1.4e-10 and 7.6e-7. The largest relative differences
+    belong to the two smallest derivatives.
+  - The same run gives $dJ/d\ln$ `BETAMAX` (17,971), equal to the sum of
+    the $dJ/dc_k$ as it must be, and $dJ/d\ln$ `BJGAM`.
+  - It costs 1.6 times less than the nine tangents (about 5.7 h), and the
+    cost stays the same for any number of parameters.
+
+  The 3.6 h compare with the 2.1–2.4 h of the plan:
+  - the source adjoint takes 45 % (6.2 s per step on average);
+  - the propagation and forcing adjoint 17 %;
+  - the checkpoint copies through host memory 14 %;
+  - the recomputed steps 12 %;
+  - the value run 11 %.
 - **Not covered.** The ice and reflection step of the IRI configuration
   (`W3SIC2`, `W3SIS2`, `W3SREF`) is refused for now. Its adjoint comes once
   its tangents are in.

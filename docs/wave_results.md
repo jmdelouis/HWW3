@@ -2322,9 +2322,65 @@ with the $dH_s$ and $dT_{m02}$ fields of the tangents of `BETAU3` and
 `SDSC2`, they give the derivatives of `cal_obs.py eval` to 9.6e-10 and
 2.7e-10. The cost at $p_0$ is 35,543.
 
-The GPU time from 23 November 07:27 is 54.6 GPU-hours, of which 1.50
-for the adjoint jobs of this section (4553862, 4555442, 4555775, 4556796,
-4557828, 4559034).
+### The gradient over 156 h (checkpoints c and d, 27–28 November)
+
+The run (`scripts/m4_grad_hpc.slurm`, Slurm job 4560379, one A100, 27
+November 20:24 to 28 November 00:03, the evening Jean-Marc chose):
+- `hww3-prop adj-grad` takes the training cost of the `BETAMAX`$(U)$ test
+  back from 7 January 12:10 to the restart of 1 January 00:10: 936 steps,
+  from the seeds of `cal_obs.py seed` on the 49 hours of the window.
+- The model is the $p_0$ of the test: `BETAMAX` 1.75 and `BETAMAX`$(U)$
+  with zero coefficients on the knots 2, 5, 8, 11, 14, 17 and 20 m/s.
+- The checkpoints are kept every 31 steps, 62 held at most: 4.17 GB each,
+  259 GB of host memory.
+- The GPU peak is 57.0 GB.
+
+The adjoint against the derivatives of the same cost along the nine
+tangents of the test (`cal_obs.py eval` on `bu0_BETAU0..6`, `it0_SDSC2`
+and `it0_NLPROP`):
+
+| Parameter | Adjoint | Tangent | Relative difference |
+|---|---|---|---|
+| $c_0$ (2 m/s) | 24.76572 | 24.76570 | 7.6e-7 |
+| $c_1$ (5 m/s) | −289.4284 | −289.4282 | 6.0e-7 |
+| $c_2$ (8 m/s) | 1,904.873 | 1,904.873 | 2.5e-8 |
+| $c_3$ (11 m/s) | 3,812.951 | 3,812.951 | 9.6e-10 |
+| $c_4$ (14 m/s) | 6,872.482 | 6,872.482 | 3.7e-10 |
+| $c_5$ (17 m/s) | 4,753.442 | 4,753.442 | 1.4e-10 |
+| $c_6$ (20 m/s) | 892.0476 | 892.0476 | 6.2e-10 |
+| `SDSC2` ($d/d\ln$) | −8,176.325 | −8,176.325 | 2.7e-10 |
+| `NLPROP` ($d/d\ln$) | 4,774.765 | 4,774.765 | 6.0e-10 |
+
+The same run gives $dJ/d\ln$ `BETAMAX` = 17,971.13. The hat functions add
+up to 1, so this must be the sum of the $dJ/dc_k$, and it is (17,971.13).
+It also gives $dJ/d\ln$ `BJGAM` = −19.02, for which no tangent was run.
+
+The adjoint takes 12,965 s:
+
+| Part | Time | Share |
+|---|---|---|
+| value run with the checkpoints of the segments | 1,404 s | 11 % |
+| segments run again with the checkpoints of their steps | 1,912 s, of which checkpoint copies 1,859 s | 15 % |
+| adjoint of the source terms | 5,840 s (6.2 s per step) | 45 % |
+| adjoint of the propagation and the forcing | 2,144 s | 17 % |
+| steps recomputed from their checkpoints | 1,501 s | 12 % |
+
+The nine tangents over the same window take about 5.7 h, so the adjoint is
+1.6 times cheaper. It also gives the cotangents of `BETAMAX`, `BJGAM`, the
+initial spectra and the wind of every step, which tangents would need one
+run each to get.
+
+The plan expected 2.1–2.4 h. What is left to gain:
+- the two value passes inside the source adjoint (the count of the
+  sub-steps, then the tape);
+- the copies of the checkpoints, about 1.9 s each, which could overlap the
+  computation;
+- the recomputation of the geographic sub-steps in the adjoint of the
+  propagation.
+
+The GPU time from 23 November 07:27 is 58.7 GPU-hours, of which 5.14 for
+the adjoint jobs of this section (4553862, 4555442, 4555775, 4556796,
+4557828, 4559034, 4560379).
 
 ## Coastal diagnostics of the buoy scores
 
