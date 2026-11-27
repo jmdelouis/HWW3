@@ -49,7 +49,7 @@
 //!     struct) written in WW3's order of the sea points of the structured
 //!     grid (raw/sea_ij.u32), for WW3 programs run on that grid: the points
 //!     left out of the mesh get zero spectra, levels and ice, u* 1e-5 and
-//!     ASF 1; MAPSTA is that of the nodes (1 for the points left out),
+//!     ASF 1; MAPSTA is that of the nodes (that of the grid, 1 or 2, for the points left out),
 //!     written over the whole NX x NY grid as W3IORS does on structured
 //!     grids (0 on land, MAPST2 = 1 on the excluded points), from the
 //!     structured grid of --grid-nml and --data.
@@ -641,7 +641,7 @@ fn restart_struct(a: &Args) -> Result<()> {
             0 => 0,
             3 => 8,
             _ => match node_of_point[i] {
-                usize::MAX => 1,
+                usize::MAX => g.mapsta[i] as i32,
                 k => r.mapsta[k] + 8 * r.mapst2[k],
             },
         })

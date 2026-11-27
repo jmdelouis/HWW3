@@ -146,6 +146,10 @@ pub struct Config {
     /// `NLPROP`, `BJGAM`) or of the spectra of the restart (`INIT`, also
     /// without the source terms).
     pub tangent: Option<String>,
+    /// With the UQ scheme ([`Model::new_uq`]), the global steps of
+    /// `ww3_multi` ([`crate::uqgrid::W3Steps::multi`]) instead of those of
+    /// `ww3_shel`; no effect otherwise.
+    pub steps_multi: bool,
 }
 
 impl Default for Config {
@@ -173,6 +177,7 @@ impl Default for Config {
             tl_nlnode: false,
             par_red: false,
             tangent: None,
+            steps_multi: false,
         }
     }
 }
@@ -522,11 +527,16 @@ impl<F: Real> Model<F> {
     /// of a forcing field) in `1 + INT(DTTST / DTMAX - 0.001)` equal steps,
     /// `DTMAX`, `DTKTH` of the grid's `ww3_grid.nml` and `CFLTM` of its
     /// namelists replacing [`Config::dtg`], [`Config::dtkth`] and
-    /// [`Config::ctmax`] (`Config::dtg` then holds the step being made). Not
-    /// with boundary spectra (`--nest`). The level updates keep the
-    /// wavenumbers of `WAVNU3` of the triangle path.
+    /// [`Config::ctmax`] (`Config::dtg` then holds the step being made). The
+    /// boundary spectra of `--nest` (at the points of `MAPSTA = 2`) enter at
+    /// the end of each sub-step of `W3XYP3`, not at the start of the step;
+    /// without them those points keep their values. The level updates
+    /// (`W3ULEV`, on the host, [`Config::host_level`]) take the wavenumbers
+    /// of `WAVNU1` and WW3's deep-water test `KDCHCK = WN(1) min(DW_old, DW)
+    /// >= 4` instead of `WAVNU3` and the bathymetric test of the triangle
+    /// path.
     pub fn new_uq(client: Client, grid: &Grid, setup: &crate::uqgrid::UqSetup, inp: &Inputs, mut cfg: Config) -> Result<Model<F>> {
-        anyhow::ensure!(inp.nest.is_none(), "the UQ scheme does not take boundary spectra (--nest)");
+        cfg.host_level = true;
         anyhow::ensure!(setup.dtmax > 0.0 && setup.dtkth > 0.0, "DTMAX {} and DTKTH {} of the grid", setup.dtmax, setup.dtkth);
         cfg.dtg = setup.dtmax as f32;
         cfg.dtkth = setup.dtkth as f32;
@@ -906,6 +916,8 @@ impl<F: Real> Model<F> {
                 setup.params.flagtr,
                 (if m.tl.is_some() { 4 } else { 2 } * nth * c * fb) as f64 / 1e9
             );
+            let mut st = st;
+            st.steps.multi = m.cfg.steps_multi;
             m.uq = Some(st);
         }
         if let Some(p) = &inp.current {
@@ -1484,7 +1496,8 @@ impl<F: Real> Model<F> {
     }
 
     fn apply_boundary(&self) {
-        if self.nbnd == 0 {
+        // (on the structured grids, W3XYP3 sets the boundary points)
+        if self.nbnd == 0 || self.uq.is_some() {
             return;
         }
         let (rd10, rd20) = self.boundary_rd();
@@ -1605,6 +1618,9 @@ impl<F: Real> Model<F> {
         }
         let t_host = std::time::Instant::now();
         let np = self.np;
+        // the UQ scheme: WAVNU1 and the deep-water test of W3ULEV on the old
+        // and new depths
+        let uqw = self.uq.as_ref().map(|_| (crate::pro3::DispTable::new(), self.dw.clone()));
         for i in 0..np {
             self.wlv[i] = wlev[i];
             self.dw[i] = (self.wlv[i] - self.zb[i]).max(0.0);
@@ -1628,6 +1644,7 @@ impl<F: Real> Model<F> {
             }
         }
         let (sp, dmin) = (&self.sp, self.dmin);
+        let uqw = uqw.as_ref().map(|(t, d)| (t, d.as_slice()));
         let (wlv, zb, dw, deep) = (&self.wlv, &self.zb, &self.dw, &self.deep);
         let outs: Vec<LevelChunk> = std::thread::scope(|scope| {
             let handles: Vec<_> = wn_parts
@@ -1636,7 +1653,7 @@ impl<F: Real> Model<F> {
                 .zip(self.mapsta.chunks_mut(chunk).zip(self.mapst2.chunks_mut(chunk)))
                 .enumerate()
                 .map(|(t, ((wnp, cgp), (ms, ms2)))| {
-                    scope.spawn(move || level_chunk(sp, dmin, t * chunk, wlv, zb, dw, deep, wnp, cgp, ms, ms2))
+                    scope.spawn(move || level_chunk(sp, dmin, t * chunk, wlv, zb, dw, deep, uqw, wnp, cgp, ms, ms2))
                 })
                 .collect();
             handles.into_iter().map(|h| h.join().expect("level thread")).collect()
@@ -2043,6 +2060,8 @@ impl<F: Real> Model<F> {
     /// `PDLIB_W3XYPUG` for every direction of frequency `ik`.
     pub fn geographic(&mut self, ik: usize) {
         if let Some(u) = self.uq.as_ref() {
+            let (dt0, dtn) = self.boundary_rd();
+            let bnd = (self.nbnd > 0).then(|| crate::prop_uq::UqBoundary { bsea: &self.d_bnode, nbnd: self.nbnd, bb0: &self.d_bb0, bbn: &self.d_bbn, dt0, dtn });
             let secs = (self.time.secs() - Time(self.time.0, 0).secs()) as f64;
             let p = &u.pg.params;
             let n = u.geographic(
@@ -2059,6 +2078,7 @@ impl<F: Real> Model<F> {
                 self.cfg.dtg as f64,
                 self.cfg.flcx && p.flcx,
                 self.cfg.flcx && p.flcy,
+                bnd.as_ref(),
                 self.cfg.block,
             );
             self.timers.sweeps += n as u64;
@@ -2367,6 +2387,31 @@ impl<F: Real> Model<F> {
     /// The UQ scheme of the run, if any ([`Model::new_uq`]).
     pub fn uq(&self) -> Option<&crate::prop_uq::UqState<F>> {
         self.uq.as_ref()
+    }
+
+    /// For the checks of the UQ scheme: boundary spectra `BBPI / CG` at every
+    /// point of `MAPSTA = 2` (`b0`, `bn`, `[b nspec + isp]`, the points in
+    /// the order of the nodes) at the times `t0`, `tn`, in place of those of
+    /// a nest file. Returns the boundary nodes.
+    pub fn set_test_boundary(&mut self, b0: &[f32], bn: &[f32], t0: Time, tn: Time) -> Result<Vec<u32>> {
+        let nspec = self.nk * self.nth;
+        let bnode: Vec<u32> = (0..self.np).filter(|&i| self.iobp[i] == 2).map(|i| i as u32).collect();
+        anyhow::ensure!(!bnode.is_empty() && b0.len() == bnode.len() * nspec && bn.len() == b0.len(), "boundary spectra of {} values for {} points", b0.len(), bnode.len());
+        let mut bidx = vec![u32::MAX; self.np];
+        for (b, &i) in bnode.iter().enumerate() {
+            bidx[i as usize] = b as u32;
+        }
+        self.nbnd = bnode.len();
+        self.d_bnode = self.client.create_from_slice(u32::as_bytes(&bnode));
+        self.d_bidx = self.client.create_from_slice(u32::as_bytes(&bidx));
+        self.bbpi0 = b0.to_vec();
+        self.bbpin = bn.to_vec();
+        self.d_bb0 = self.upf(b0);
+        self.d_bbn = self.upf(bn);
+        self.tbpi0 = Some(t0);
+        self.tbpin = Some(tn);
+        self.bnode = bnode.clone();
+        Ok(bnode)
     }
 
     /// The device buffer of the tangent of the spectra in a tangent run
@@ -3186,6 +3231,10 @@ struct LevelChunk {
 /// speeds (`wn[ik][i - lo]`, `cg[ik][i - lo]`, updated in place), drying and
 /// wetting (`MAPSTA`, `MAPST2` in place, nodes to zero) and the weights of
 /// the spectral remapping of the nodes whose wavenumbers moved by 5 % of a bin.
+/// With `uqw` (the UQ scheme of the structured grids: the table of `WAVNU1`
+/// and the depths before the update), the wavenumbers of `WAVNU1` and the
+/// nodes skipped where `KDCHCK = WN(1) min(DW_old, DW) >= 4`, as `W3ULEV`
+/// without `PDLIB`; otherwise `WAVNU3` and the nodes of `deep` skipped.
 #[allow(clippy::too_many_arguments)]
 fn level_chunk(
     sp: &Spec,
@@ -3195,6 +3244,7 @@ fn level_chunk(
     zb: &[f32],
     dw: &[f32],
     deep: &[bool],
+    uqw: Option<(&crate::pro3::DispTable, &[f32])>,
     mut wn: Vec<&mut [f32]>,
     mut cg: Vec<&mut [f32]>,
     mapsta: &mut [i32],
@@ -3208,8 +3258,11 @@ fn level_chunk(
     let mut cgn = vec![0f32; nk + 2];
     for j in 0..mapsta.len() {
         let i = lo + j;
-        if deep[i] {
-            continue;
+        match uqw {
+            // KDCHCK of W3ULEV
+            Some((_, dwo)) if wn[1][j] * dwo[i].min(dw[i]) >= 4.0 => continue,
+            None if deep[i] => continue,
+            _ => {}
         }
         for ik in 0..nk + 2 {
             wno[ik] = wn[ik][j];
@@ -3217,7 +3270,10 @@ fn level_chunk(
         }
         let depth = dmin.max(dw[i]);
         for ik in 0..nk + 2 {
-            let (k, c) = crate::spec::wavnu3(sp.sig[ik], depth);
+            let (k, c) = match uqw {
+                Some((tab, _)) => tab.wavnu1(sp.sig[ik], depth),
+                None => crate::spec::wavnu3(sp.sig[ik], depth),
+            };
             wnn[ik] = k;
             cgn[ik] = c;
             wn[ik][j] = k;

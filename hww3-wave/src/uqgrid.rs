@@ -422,11 +422,18 @@ pub fn yfirst(secs_of_day: f64, dtg: f64) -> bool {
 /// The global steps of `W3WAVE` (section 2): each call, from `TIME` to
 /// `TCALC` (the end of the call, an output or input time), in `NT = 1 +
 /// INT(DTTST / DTMAX - 0.001)` equal steps rounded to the second with the
-/// remainder carried, in single precision as in WW3.
+/// remainder carried, in single precision as in WW3 (`ww3_shel`: the calls
+/// end at the output and input times, 2 x 1,800 s per hour for `DTMAX =
+/// 2,520` s). With [`W3Steps::multi`], the calls of `ww3_multi` instead
+/// (`WMWAVE`): each call ends at `TIME + DTMAX` or at the next output or
+/// input time if sooner, so a step of `DTMAX` then the remainder (2,520 s
+/// then 1,080 s per hour).
 #[derive(Clone, Debug)]
 pub struct W3Steps {
     /// `DTMAX` (s).
     pub dtmax: f64,
+    /// The calls of `ww3_multi`.
+    pub multi: bool,
     left: i64,
     dtga: f32,
     dtres: f32,
@@ -435,13 +442,15 @@ pub struct W3Steps {
 impl W3Steps {
     /// No call started yet.
     pub fn new(dtmax: f64) -> W3Steps {
-        W3Steps { dtmax, left: 0, dtga: 0.0, dtres: 0.0 }
+        W3Steps { dtmax, multi: false, left: 0, dtga: 0.0, dtres: 0.0 }
     }
 
     /// The next global step (s) from `t` (s): when the previous call is
     /// over, a call to `end` (s) starts.
     pub fn next(&mut self, t: i64, end: i64) -> f32 {
         if self.left == 0 {
+            // ww3_multi: the call ends at TIME + NINT(DTMAX) or sooner
+            let end = if self.multi { end.min(t + self.dtmax.round() as i64) } else { end };
             let dttst = (end - t).max(1) as f32;
             self.left = 1 + (dttst / self.dtmax as f32 - 0.001) as i64;
             self.dtga = dttst / self.left as f32;
@@ -748,7 +757,7 @@ mod tests {
             let trnx: Vec<f64> = (0..nx * ny).map(|i| if i % nx == 8 && (i / nx) % 3 == 0 { 0.3 } else { 1.0 }).collect();
             let trny: Vec<f64> = (0..nx * ny).map(|i| if i % nx == 30 { 0.6 } else { 1.0 }).collect();
             let tr = Transparencies { trnx, trny };
-            let params = Pro3Params { dtcfl: 300.0, flagtr: 4, fice0: 0.25, ficen: 1.0, ficel: 40000.0, ..Pro3Params::default() };
+            let params = Pro3Params { dtcfl: 300.0, flagtr: 4, fice0: 0.25, ficen: 1.0, ficel: 40000.0, ic0: true, ..Pro3Params::default() };
             let mut pg = Pro3Grid::new(&g, Some(&tr), &params).unwrap();
             let ice: Vec<f64> = pg.sea_ij.iter().map(|&i| if i % nx == 12 { 0.4 } else { 0.0 }).collect();
             pg.update_maps(None, Some(&ice), None).unwrap();
@@ -789,6 +798,10 @@ mod tests {
         let v: Vec<f32> = (0..3).map(|_| s.next(0, 1000)).collect();
         assert_eq!(v.iter().sum::<f32>(), 1000.0);
         assert_eq!(v, vec![333.0, 334.0, 333.0]);
+        // ww3_multi: DTMAX then the remainder
+        let mut s = W3Steps::new(2520.0);
+        s.multi = true;
+        assert_eq!((s.next(0, 3600), s.next(2520, 3600), s.next(3600, 7200)), (2520.0, 1080.0, 2520.0));
     }
 
     /// W3DZXY of a linear field on a RECT grid away from land: the exact

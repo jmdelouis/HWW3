@@ -14,8 +14,9 @@
 //! The restart is one of `hww3-prop` on the mesh `GRID_DIR` of the grid
 //! (`hww3-pre struct`); its spectra go to the sea points through
 //! `raw/ij.u32` (the points left out of the mesh start at zero), with its
-//! levels and ice (the ice enters the transparencies of `W3UTRN` when
-//! `FLAGTR >= 3`). The group speeds are those of `W3INIT` (`WAVNU1` at
+//! levels, ice and masked points (negative `MAPSTA`; the ice would enter
+//! the transparencies of `W3UTRN` with `FLAGTR >= 3` and the `IC0` switch,
+//! which the IRI build does not have). The group speeds are those of `W3INIT` (`WAVNU1` at
 //! `max(DMIN, WLV - ZB)`, no currents). As in `W3WAVE`, each hour (the
 //! output times) is cut into `NT = 1 + INT(3600 / DTMAX - 0.001)` equal
 //! global steps (1,800 s for `DTMAX = 2520`), and each spectral component
@@ -95,9 +96,19 @@ fn main() -> Result<()> {
         wlv[isea] = rs.wlv[k];
         ice[isea] = rs.ice[k] as f64;
     }
-    // W3UTRN with the ice of the restart, as the first FLMAP update of
-    // W3WAVE (no ice forcing: it stays)
-    pg.update_maps(None, Some(&ice), None)?;
+    // MAPSTA of the restart (negative where the restart masks a point for
+    // ice or drying; the grid's elsewhere), then W3UTRN with the ice of the
+    // restart, as the first FLMAP update of W3WAVE (no ice forcing: it
+    // stays)
+    let mut full: Vec<i32> = (0..nx * ny).map(|i| if g.is_sea(i) { g.mapsta[i] as i32 } else { 0 }).collect();
+    for (k, &p) in ij.iter().enumerate() {
+        if rs.mapsta[k] < 0 {
+            full[p as usize] = -full[p as usize].abs();
+        }
+    }
+    let nneg = full.iter().filter(|&&m| m < 0).count();
+    pg.update_maps(Some(&full), Some(&ice), None)?;
+    println!("MAPSTA of the restart: {nneg} sea points masked");
     // wavenumbers and group speeds of W3INIT (WAVNU1 at max(DMIN, DW),
     // DW = max(0, WLV - ZB), single precision)
     let tab = DispTable::new();

@@ -11,7 +11,8 @@
 //! - `W3UTRN` of `w3updtmd.F90` (the cell transparencies `ATRNX`, `ATRNY`
 //!   from `TRNX`, `TRNY`, at the cell boundaries for `FLAGTR` 1, 3, 5 or
 //!   at the cell centres for `FLAGTR` 2, 4, 6, and the ice and iceberg
-//!   transparencies when `FLAGTR >= 3` and `FICEN - FICE0 >= 1e-6`);
+//!   transparencies when `FLAGTR >= 3` and `FICEN - FICE0 >= 1e-6`, the
+//!   ice part only with the `IC0` switch, [`Pro3Params::ic0`]);
 //! - `W3MAPT` (the map `MAPTRN` of the points where the averaging is
 //!   switched off, any transparency below `TRNMIN = 0.95`);
 //! - `W3XYP3` (one spectral component over one global step `DTG`, [`xyp3`]):
@@ -119,6 +120,12 @@ pub struct Pro3Params {
     pub ficel: f64,
     /// `FFACBERG = FACBERG` of `&MISC` (default 1).
     pub ffacberg: f64,
+    /// The `IC0` switch of the build: the ice concentration enters the
+    /// transparencies of `W3UTRN` (`TRIX`, `TRIY`) only with it. False by
+    /// default and in [`Pro3Params::from_namelists`]: the IRI build has
+    /// `IC2`, with which the ice changes nothing in `W3UTRN` (only the
+    /// icebergs would).
+    pub ic0: bool,
 }
 
 impl Default for Pro3Params {
@@ -137,6 +144,7 @@ impl Default for Pro3Params {
             ficen: 0.5,
             ficel: 0.0,
             ffacberg: 1.0,
+            ic0: false,
         }
     }
 }
@@ -181,6 +189,7 @@ impl Pro3Params {
             ficen,
             ficel: f("MISC", "LICE", 0.0)?,
             ffacberg: f("MISC", "FACBERG", 1.0)?,
+            ic0: false,
         })
     }
 }
@@ -617,7 +626,8 @@ impl Pro3Grid {
             let ic = ice.map_or(0.0, |v| v[isea]);
             let bg = berg.map_or(0.0, |v| v[isea]);
             let k = isl(ixy);
-            if ic > 0.0 {
+            // Fortran: the ice part only with the IC0 switch
+            if ic > 0.0 && p.ic0 {
                 if p.ficel > 0.0 {
                     trix[k] = (-ic * dx / p.ficel).exp();
                     triy[k] = (-ic * dy / p.ficel).exp();

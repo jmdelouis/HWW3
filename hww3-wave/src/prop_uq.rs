@@ -38,8 +38,12 @@
 //! face flux where the transparency of that side is not 1, and the clamps
 //! `MAX(0, ...)` (zero tangent where they act).
 //!
-//! Not in the kernels: the boundary spectra (`FLBPI`), the moving grid
-//! (`VGX`, `VGY`), the tripolar closure, Cartesian grids.
+//! With boundary spectra (`FLBPI`), [`uq_boundary()`] sets the boundary
+//! points at the end of each sub-step from `BBPI0` and `BBPIN` interpolated
+//! in time, as section 3.c of `W3XYP3` does (zero tangent there).
+//!
+//! Not in the kernels: the moving grid (`VGX`, `VGY`), the tripolar
+//! closure, Cartesian grids.
 
 // The `#[cube]` macro generates, for every kernel, a launch struct and
 // functions that carry no documentation; the kernels themselves are
@@ -432,6 +436,63 @@ pub fn uq_sweep<F: Float>(
     }
 }
 
+/// The boundary spectra of `FLBPI` at the end of sub-step `sub` (section
+/// 3.c of `W3XYP3`), one unit per boundary point and direction: `Q = (RD1
+/// BBPI0 + RD2 BBPIN) / CG CLATS` at the sea point `bsea[b]`, with `RD2 =
+/// min(1, max(0, RD1' / dtn))` and `RD1' = dt0 - DTG (NTLOC - sub - 1) /
+/// NTLOC` (`RD1 = 0`, `RD2 = 1` when `dtn <= 0.001`), for the directions
+/// still in their sub-steps. `bb0`, `bbn` hold `BBPI / CG` (`[b nspec +
+/// isp]`). With `zero = 1`, zero instead (the tangent: the boundary
+/// spectra do not depend on the state).
+#[cube(launch_unchecked)]
+#[allow(clippy::too_many_arguments)]
+pub fn uq_boundary<F: Float>(
+    q: &mut [F],
+    bsea: &[u32],
+    ksea: &[u32],
+    bb0: &[F],
+    bbn: &[F],
+    clats: &[F],
+    ptab: &[F],
+    ik: usize,
+    ng: usize,
+    nbnd: usize,
+    sub: u32,
+    dt0_: f32,
+    dtn_: f32,
+    dtg_: f32,
+    zero: u32,
+    #[comptime] nk: usize,
+    #[comptime] nth: usize,
+) {
+    let g = ABSOLUTE_POS;
+    if g < nth * nbnd {
+        let th = g / nbnd;
+        let b = g - th * nbnd;
+        let isp = ik * nth + th;
+        let nt = ptab[isp * 8];
+        if F::cast_from(sub) < nt {
+            let i = bsea[b] as usize;
+            let k = ksea[i] as usize;
+            let mut v = F::new(0.0f32);
+            if zero == 0u32 {
+                let dtn = F::cast_from(dtn_);
+                let mut rd1 = F::cast_from(dt0_) - F::cast_from(dtg_) * (nt - F::cast_from(sub + 1u32)) / nt;
+                let mut rd2 = F::new(1.0f32);
+                if dtn > F::new(0.001f32) {
+                    rd2 = min(F::new(1.0f32), max(F::new(0.0f32), rd1 / dtn));
+                    rd1 = F::new(1.0f32) - rd2;
+                } else {
+                    rd1 = F::new(0.0f32);
+                }
+                let o = b * nk * nth + isp;
+                v = (rd1 * bb0[o] + rd2 * bbn[o]) * clats[i];
+            }
+            q[th * ng + k] = v;
+        }
+    }
+}
+
 /// [`uq_sweep()`] with its tangent: the values exactly as [`uq_sweep()`],
 /// the tangent `dqout` along `dqin`.
 #[cube(launch_unchecked)]
@@ -596,6 +657,22 @@ pub fn write_range<F: Real>(client: &Client, h: &Handle, len: usize, off: usize,
     copy_launch::<F>(client, &tmp, v.len(), h, len, 0, off, v.len());
 }
 
+/// The boundary spectra of a step for [`UqState::geographic`] (`FLBPI`).
+pub struct UqBoundary<'a> {
+    /// Sea point of each boundary point (`ISBPI`).
+    pub bsea: &'a Handle,
+    /// Number of boundary points (`NBI`).
+    pub nbnd: usize,
+    /// `BBPI0 / CG` of each boundary point, `[b nspec + isp]`.
+    pub bb0: &'a Handle,
+    /// `BBPIN / CG`.
+    pub bbn: &'a Handle,
+    /// `DSEC21(TBPI0, TIME)` (s), `TIME` the end of the step.
+    pub dt0: f32,
+    /// `DSEC21(TBPI0, TBPIN)` (s).
+    pub dtn: f32,
+}
+
 /// The UQ scheme of one structured grid on the device: the maps of
 /// `W3MAP3`, `W3UTRN`, `W3MAPT` on the host ([`Pro3Grid`]) and their tables
 /// on the device ([`UqTables`]), the parameters of the step, the global
@@ -730,7 +807,8 @@ impl<F: Real> UqState<F> {
     /// `dtg` ending `secs_of_day` after 00:00, in place in `va` (`[(ik np + i)
     /// nth + ith]`, `np` the sea points) with the group velocities `cg`
     /// (`[ik np + i]`, `ik = 0 .. NK+1`) and, with `flcur`, the currents
-    /// `cx`, `cy`; with `vad`, the tangent too. Returns the number of
+    /// `cx`, `cy`; with `bnd`, the boundary spectra at the end of each
+    /// sub-step; with `vad`, the tangent too. Returns the number of
     /// sub-steps launched.
     #[allow(clippy::too_many_arguments)]
     pub fn geographic(
@@ -748,6 +826,7 @@ impl<F: Real> UqState<F> {
         dtg: f64,
         flcx: bool,
         flcy: bool,
+        bnd: Option<&UqBoundary>,
         block: u32,
     ) -> usize {
         let t = &self.tables;
@@ -860,6 +939,35 @@ impl<F: Real> UqState<F> {
             );
         };
         let nsub = self.max_ntloc(ik);
+        let boundary = |dst: &Handle, sub: u32, zero: bool| {
+            if let Some(bd) = bnd.filter(|bd| bd.nbnd > 0) {
+                let (cb, db) = dims(nth * bd.nbnd);
+                unsafe {
+                    uq_boundary::launch_unchecked::<F>(
+                        client,
+                        cb,
+                        db,
+                        bf(dst, n),
+                        bf(bd.bsea, bd.nbnd),
+                        bf(&self.d_ksea, ns),
+                        bf(bd.bb0, bd.nbnd * nspec),
+                        bf(bd.bbn, bd.nbnd * nspec),
+                        bf(d_cl, ns),
+                        bf(&self.d_ptab, PT * nspec),
+                        ik,
+                        ng,
+                        bd.nbnd,
+                        sub,
+                        bd.dt0,
+                        bd.dtn,
+                        dtg as f32,
+                        zero as u32,
+                        nk,
+                        nth,
+                    );
+                }
+            }
+        };
         let mut yf = yfirst(secs_of_day, dtg);
         let on = |dir: u32| if dir == 1 { flcy } else { flcx };
         // the state in a, the other buffer b; each sub-step leaves its
@@ -876,6 +984,8 @@ impl<F: Real> UqState<F> {
                     let (d1, d2) = if yf { (1u32, 0u32) } else { (0, 1) };
                     sweep_tl(b, db, a, da, sub, d1, on(d1), false);
                     sweep_tl(a, da, b, db, sub, d2, on(d2), true);
+                    boundary(b, sub, false);
+                    boundary(db, sub, true);
                     std::mem::swap(&mut a, &mut b);
                     std::mem::swap(&mut da, &mut db);
                     yf = !yf;
@@ -907,6 +1017,7 @@ impl<F: Real> UqState<F> {
                     let (d1, d2) = if yf { (1u32, 0u32) } else { (0, 1) };
                     sweep(b, a, sub, d1, on(d1), false);
                     sweep(a, b, sub, d2, on(d2), true);
+                    boundary(b, sub, false);
                     std::mem::swap(&mut a, &mut b);
                     yf = !yf;
                 }

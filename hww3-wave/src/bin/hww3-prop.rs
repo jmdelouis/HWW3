@@ -53,12 +53,16 @@
 //!     the global steps of W3WAVE (DTMAX, DTKTH of the grid), the restart
 //!     holds one spectrum per sea point (hww3-pre restart-uq), and H_s,
 //!     T_m02 (and their tangents) are written on the whole NX x NY grid
-//!     (iy NX + ix, UNDEF off the sea points).
-//! hww3-prop check-uq <uq grid dir> --restart FILE [--f64] [--ik K1,K2,..] [--tangent INIT] [--h H]
+//!     (iy NX + ix, UNDEF off the sea points). The global steps are those
+//!     of ww3_shel (each hour in equal steps of at most DTMAX), or with
+//!     --steps multi those of ww3_multi (DTMAX, then the rest of the hour).
+//! hww3-prop check-uq <uq grid dir> --restart FILE [--f64] [--ik K1,K2,..] [--tangent INIT] [--h H] [--bnd-test]
 //!     The UQ scheme after the first step's forcing: the geographic step
 //!     of the frequencies K (default 1, NK/2 and NK, 1-based) on the GPU
 //!     against the CPU transcription of W3XYP3 (hww3_wave::pro3::xyp3) on
-//!     the same inputs, every direction; with --tangent, the tangent of the
+//!     the same inputs, every direction (with --bnd-test, with synthetic
+//!     boundary spectra at the points of MAPSTA = 2 on both sides); with
+//!     --tangent, the tangent of the
 //!     step along the field itself (equal to the stepped field: the scheme
 //!     is positively homogeneous of degree 1) and along a random relative
 //!     perturbation against central differences of steps H (default 1e-7)
@@ -282,6 +286,12 @@ fn run<F: Real>(grid: &Grid, geo: Option<&Geometry>, a: &Args) -> Result<()> {
     cfg.flck = !a.flags.contains("--no-ck");
     cfg.host_level = a.flags.contains("--host-level");
     cfg.bccfl = !a.flags.contains("--no-bccfl");
+    // UQ scheme: the global steps of ww3_multi (--steps multi) or ww3_shel
+    cfg.steps_multi = match a.opts.get("--steps").map(String::as_str) {
+        None | Some("shel") => false,
+        Some("multi") => true,
+        Some(x) => bail!("--steps {x}: shel or multi"),
+    };
     perturbations(a, &mut cfg)?;
     if let Some(u) = a.opts.get("--units") {
         cfg.units = u.parse()?;
@@ -550,7 +560,7 @@ fn run<F: Real>(grid: &Grid, geo: Option<&Geometry>, a: &Args) -> Result<()> {
     });
     let mut summary = summary;
     if let Some(u) = m.uq() {
-        summary["uq"] = json!({"nx": u.tables.nx, "ny": u.tables.ny, "nsea": u.tables.nsea, "dtmax": u.steps.dtmax, "dtkth": u.dtkth, "cfltm": u.cfltm,
+        summary["uq"] = json!({"nx": u.tables.nx, "ny": u.tables.ny, "nsea": u.tables.nsea, "dtmax": u.steps.dtmax, "dtkth": u.dtkth, "cfltm": u.cfltm, "steps_multi": u.steps.multi,
                                "last_dtg": m.cfg.dtg});
     }
     std::fs::write(out.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
@@ -586,6 +596,21 @@ fn check_uq<F: Real>(grid: &Grid, a: &Args) -> Result<()> {
     let prec = <F as hww3_wave::backend::Scalar>::NAME;
     println!("check-uq at {} ({prec}): DTG {dtg} s, {} sea points, {} directions", m.time, np, nth);
     let mut saved = vec![];
+    // --bnd-test: synthetic boundary spectra at the points of MAPSTA = 2,
+    // between records 2,400 s before and 1,200 s after the end of the step
+    let nspec = nk * nth;
+    let bnd = if a.flags.contains("--bnd-test") {
+        let nb = (0..np).filter(|&i| grid.obc.binary_search(&(i as u32)).is_ok()).count();
+        let syn = |b: usize, isp: usize, ph: f64| (1e-3 * (1.2 + (0.7 * b as f64 + 0.3 * isp as f64 + ph).sin())) as f32;
+        let b0: Vec<f32> = (0..nb * nspec).map(|q| syn(q / nspec, q % nspec, 0.0)).collect();
+        let bn: Vec<f32> = (0..nb * nspec).map(|q| syn(q / nspec, q % nspec, 1.3)).collect();
+        let (t0, tn) = (Time::from_secs(m.time.secs() - 2400), Time::from_secs(m.time.secs() + 1200));
+        let bnode = m.set_test_boundary(&b0, &bn, t0, tn)?;
+        println!("  synthetic boundary spectra at {} points of MAPSTA = 2, records at {t0} and {tn}", bnode.len());
+        Some((bnode, b0, bn))
+    } else {
+        None
+    };
     for &ik in &iks {
         let cg: Vec<f64> = cgall[(ik + 1) * np..(ik + 2) * np].iter().map(|&x| x as f64).collect();
         let va0 = read_range::<F>(&m.client, &m.d_va, len, ik * n, n);
@@ -597,7 +622,15 @@ fn check_uq<F: Real>(grid: &Grid, a: &Args) -> Result<()> {
                 for (s, &i) in pg.sea_ij.iter().enumerate() {
                     f[i] = va0[s * nth + th];
                 }
-                xyp3(&pg, ik * nth + th, dtg, secs, &mut f, &cg, None, None);
+                let isp = ik * nth + th;
+                let bv = bnd.as_ref().map(|(bnode, b0, bn)| {
+                    let isb: Vec<usize> = bnode.iter().map(|&i| i as usize).collect();
+                    let v0: Vec<f64> = (0..isb.len()).map(|b| b0[b * nspec + isp] as f64 * cg[isb[b]]).collect();
+                    let vn: Vec<f64> = (0..isb.len()).map(|b| bn[b * nspec + isp] as f64 * cg[isb[b]]).collect();
+                    (isb, v0, vn)
+                });
+                let bi = bv.as_ref().map(|(isb, v0, vn)| hww3_wave::pro3::BoundaryInput { dt0: 2400.0, dtn: 3600.0, isbpi: isb, bbpi0: v0, bbpin: vn });
+                xyp3(&pg, isp, dtg, secs, &mut f, &cg, None, bi.as_ref());
                 pg.sea_ij.iter().map(|&i| f[i]).collect()
             })
             .collect();
