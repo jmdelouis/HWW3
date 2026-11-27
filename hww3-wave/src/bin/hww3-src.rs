@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
+//! hww3-src check-ice HARNESS2 --params ST4.params --nml NAMELISTS.nml --grid-nml WW3_GRID.nml [--data DIR]
 //! hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red]
 //! hww3-src check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]
 //! hww3-src tables BASE.params [OTHER.params ...]
@@ -777,6 +778,169 @@ fn build_params(grid_dir: PathBuf, nml: PathBuf, out: PathBuf, grid_nml: Option<
     Ok(())
 }
 
+/// The ice terms (`hww3_wave::ice`) against the second harness
+/// (`harness/src_harness2.F90`): `W3SIS2`, `W3SIC2` on the restart
+/// spectra, then the full `W3SRCE` without ice and reflection (the ST4 of
+/// `params`, built by `build-params` from the same namelists) and with ice
+/// (`srce` then the ice step after the loop), on the nodes without a
+/// reflection coefficient. With `data` (the directory of the grid files),
+/// also the reflection (`hww3_wave::ref1`): the geometry of `W3SETREF`
+/// against the inputs WW3 passed, `W3SREF`, and the full `W3SRCE` with ice
+/// and reflection on every node.
+fn check_ice(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, data: Option<PathBuf>) -> Result<()> {
+    use hww3_wave::harness2::Harness2;
+    use hww3_wave::ice::{ice_after_loop, sic2, sis2, IceIn, IceParams};
+    use hww3_wave::ww3grid::Namelists;
+    let h = Harness2::read(&path)?;
+    let q = SrcePar::new(&Params::read(&params)?)?;
+    let gs = hww3_wave::structgrid::spectrum(&Namelists::read(&grid_nml)?)?;
+    let sp = hww3_wave::spec::Spec::new(gs.nk, gs.nth, gs.freq1 as f32, gs.xfr as f32, gs.thoff as f32);
+    let ip = IceParams::from_namelists(&Namelists::read(&nml)?, &sp)?;
+    anyhow::ensure!(h.nk == gs.nk && h.nth == gs.nth, "harness {}x{}, grid {}x{}", h.nk, h.nth, gs.nk, gs.nth);
+    let nice = h.nodes.iter().filter(|n| n.ice > 0.0).count();
+    let nref = h.nodes.iter().filter(|n| n.reflec[0] > 0.0 || n.reflec[1] > 0.0).count();
+    println!(
+        "harness {}: {} nodes ({} with ice, {} with reflection), NK {}, NTH {}, restart {:?}, wind {:?}",
+        path.display(),
+        h.nodes.len(),
+        nice,
+        nref,
+        h.nk,
+        h.nth,
+        h.restart_time,
+        h.wind_time
+    );
+    let f = |v: &[f32]| -> Vec<f64> { v.iter().map(|&x| x as f64).collect() };
+    let mut r = Report { rows: vec![] };
+    // reflection: parameters and the geometry of the structured grid
+    let refl = match &data {
+        Some(d) => {
+            use hww3_wave::ref1::{flagtr, read_obstructions, reflection_geometry_trn, Ref1Params};
+            let rn = Namelists::read(&nml)?;
+            let gn = Namelists::read(&grid_nml)?;
+            let g = hww3_wave::structgrid::StructGrid::read(&grid_nml, d)?;
+            let rp = Ref1Params::from_namelists(&rn, &gs)?;
+            let trn = read_obstructions(&gn, flagtr(&rn)?, d, g.nx, g.ny)?;
+            let geo = reflection_geometry_trn(&g, &rp, trn.as_ref())?;
+            println!("reflection geometry of {}: {} sea points", g.name, geo.ij.len());
+            Some((rp, geo))
+        }
+        None => None,
+    };
+    let mut geo_bad = 0usize;
+    for n in &h.nodes {
+        let isea = n.isea as usize;
+        let (a, wn, cg) = (f(&n.spec0), f(&n.wn), f(&n.cg));
+        let (depth, ice) = (n.depth as f64, n.ice as f64);
+        if ice > 0.0 {
+            let o = sis2(&ip, &a, depth, ice, n.iceh as f64, n.icef as f64, n.icedmax as f64, &wn, &cg, &wn, &cg);
+            r.vector("sis2 S", &o.s, &n.sis2_s, isea);
+            r.vector("sis2 D", &o.d, &n.sis2_d, isea);
+            r.vector("sis2 DISSIP", &o.dissip, &n.sis2_dissip, isea);
+            r.vector("sis2 R", &o.r, &n.sis2_r, isea);
+            r.scalar("sis2 ICEF", o.icef, n.sis2_icef, isea);
+            let (s, d) = sic2(&ip, &a, depth, n.iceh as f64, n.icef as f64, &cg, &wn, &wn, &cg, &o.r, Some(ice), false)?;
+            r.vector("sic2 S", &s, &n.sic2_s, isea);
+            r.vector("sic2 D", &d, &n.sic2_d, isea);
+        }
+        let si = hww3_wave::sources::SrceIn {
+            start: false,
+            dtg: h.dtg as f64,
+            depth: n.dw as f64,
+            u10: n.u10 as f64,
+            u10dir: n.u10dir as f64,
+            ice: 0.0,
+            d50: n.d50 as f64,
+            psic: n.psic as f64,
+            coef: n.asf as f64,
+        };
+        let mut s0 = a.clone();
+        let o0 = srce(&q, &si, &mut s0, &wn, &cg, n.ust as f64);
+        r.vector("srce0 SPEC", &s0, &n.srce0_spec, isea);
+        r.scalar("srce0 DTDYN", o0.dtdyn, n.srce0_dtdyn, isea);
+        let has_ref = n.reflec[0] > 0.0 || n.reflec[1] > 0.0;
+        // the reflection inputs and source of this node
+        let mut vref: Option<Vec<f64>> = None;
+        if let Some((rp, geo)) = &refl {
+            let k = isea - 1;
+            let ww3_lc = [n.reflec[0] as f64, n.reflec[1] as f64, n.reflec[2] as f64, n.reflec[3] as f64];
+            let ours_lc = hww3_wave::ref1::reflec(&geo.reflc[k], n.berg as f64);
+            if ours_lc.iter().zip(&ww3_lc).any(|(a, b)| (a - b).abs() > 1e-6 * b.abs().max(1e-6)) || geo.refld[k] != n.refled {
+                geo_bad += 1;
+                if geo_bad <= 5 {
+                    println!("  ISEA {isea}: REFLEC {:?} REFLED {:?} against WW3 {:?} {:?}", ours_lc, geo.refld[k], ww3_lc, n.refled);
+                }
+            }
+            r.scalar("ref1 DELX", geo.delx[k], n.delx, isea);
+            r.scalar("ref1 DELY", geo.dely[k], n.dely, isea);
+            r.scalar("ref1 TRNX", geo.trnx[k], n.trnx, isea);
+            r.scalar("ref1 TRNY", geo.trny[k], n.trny, isea);
+            if has_ref {
+                let v = hww3_wave::ref1::sref(
+                    rp,
+                    &a,
+                    &cg,
+                    &ours_lc,
+                    &geo.refld[k],
+                    geo.delx[k],
+                    geo.dely[k],
+                    geo.trnx[k],
+                    geo.trny[k],
+                    n.berg as f64,
+                );
+                r.vector("sref S", &v, &n.sref, isea);
+                vref = Some(v);
+            }
+        }
+        if has_ref && vref.is_none() {
+            continue;
+        }
+        let si = hww3_wave::sources::SrceIn { ice, ..si };
+        let mut s1 = a.clone();
+        let o1 = srce(&q, &si, &mut s1, &wn, &cg, n.ust as f64);
+        let mut icef = n.icef as f64;
+        let inp = IceIn {
+            ice,
+            iceh: n.iceh as f64,
+            icedmax: n.icedmax as f64,
+            depth,
+            ice_read: true,
+            icei: ice,
+            southern_rlg: false,
+        };
+        let fl = ice_after_loop(&ip, &mut s1, &inp, &mut icef, &wn, &cg, h.dtg as f64)?;
+        if let Some((rp, geo)) = &refl {
+            // W3SREF on the spectrum after the ice terms, SPEC += DTG VREF
+            let k = isea - 1;
+            let lc = hww3_wave::ref1::reflec(&geo.reflc[k], n.berg as f64);
+            if hww3_wave::ref1::is_called(&lc, n.berg as f64) {
+                let v = hww3_wave::ref1::sref(rp, &s1, &cg, &lc, &geo.refld[k], geo.delx[k], geo.dely[k], geo.trnx[k], geo.trny[k], n.berg as f64);
+                for (x, d) in s1.iter_mut().zip(&v) {
+                    *x += h.dtg as f64 * d;
+                }
+            }
+        }
+        let tag = match (ice > 0.0, has_ref) {
+            (true, true) => "srce ice+ref",
+            (true, false) => "srce ice",
+            (false, true) => "srce ref",
+            (false, false) => "srce open",
+        };
+        r.vector(&format!("{tag} SPEC"), &s1, &n.srce_spec, isea);
+        r.scalar(&format!("{tag} DTDYN"), o1.dtdyn, n.srce_dtdyn, isea);
+        if ice > 0.0 {
+            r.scalar("srce ice ICEF", icef, n.srce_icef, isea);
+            r.scalar("srce ice PHICE", fl.phice, n.srce_phice, isea);
+            r.vector("srce ice TAUICE", &fl.tauice, &n.srce_tauice, isea);
+        }
+    }
+    r.print();
+    if refl.is_some() {
+        println!("reflection inputs (REFLEC, REFLED) unlike WW3's at {geo_bad} of {} nodes", h.nodes.len());
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let a: Vec<String> = std::env::args().collect();
     let opt = |k: &str| a.iter().position(|x| x == k).and_then(|i| a.get(i + 1)).cloned();
@@ -788,6 +952,11 @@ fn main() -> Result<()> {
             let nml = a.get(3).ok_or_else(|| anyhow::anyhow!(usage))?;
             let out = a.get(4).ok_or_else(|| anyhow::anyhow!(usage))?;
             build_params(PathBuf::from(gd), PathBuf::from(nml), PathBuf::from(out), opt("--grid-nml").map(PathBuf::from), opt("--check").map(PathBuf::from))
+        }
+        (Some("check-ice"), Some(f)) => {
+            let usage = "check-ice HARNESS2 --params ST4.params --nml NAMELISTS.nml --grid-nml WW3_GRID.nml [--data DIR]";
+            let need = |k: &str| opt(k).map(PathBuf::from).ok_or_else(|| anyhow::anyhow!(usage));
+            check_ice(PathBuf::from(f), need("--params")?, need("--nml")?, need("--grid-nml")?, opt("--data").map(PathBuf::from))
         }
         (Some("tables"), Some(_)) => tables(&a[2..].iter().map(PathBuf::from).collect::<Vec<_>>()),
         (Some("params"), Some(f)) => {

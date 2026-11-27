@@ -227,7 +227,8 @@ impl St4 {
         let nk = p.i1("NK")? as usize;
         let nth = p.i1("NTH")? as usize;
         let tables = if p.r1("SINTAILPAR")? > 0.5 { Some(StressTables::read(p)?) } else { None };
-        let cumulw = if p.r("SSDSC")?[2] != 0.0 { v64(p.r("CUMULW")?) } else { vec![] };
+        // CUMULW (directional cumulative term) is used with SDSCUM < 0 only
+        let cumulw = if p.r("SSDSC")?[2] < 0.0 { v64(p.r("CUMULW")?) } else { vec![] };
         if !cumulw.is_empty() && cumulw.len() != (nk * nth) * (nk * nth) {
             bail!("CUMULW holds {} values for NSPEC {}", cumulw.len(), nk * nth);
         }

@@ -1,0 +1,77 @@
+#!/bin/bash
+#PBS -N hww3_iriarc
+#PBS -q sequentiel
+#PBS -l mem=24g
+#PBS -l walltime=01:00:00
+#PBS -j oe
+#PBS -o /home1/scratch/jmdeloui/HWW3/iri_arc/logs/iri_arc_ref.log
+#
+# WW3 reference of the ice (IC2, IS2) and reflection (REF1) terms of the
+# IRI configuration on its Arctic grid ARC-15KM, with the executables and
+# library of the IRI build (prod_forecast_Ifremer3_20260309_MTAG2, read
+# only), everything written to Datarmor scratch ($D):
+#   grid     mod_def.ww3 of ARC-15KM from the grid files and namelists of the
+#            IRI run (ww3_grid);
+#   prnc     wind.ww3 of ARC-15KM for TSTART..TSTOP from the ERA5 wind of
+#            the IRI forcing (ww3_prnc, namelist version);
+#   harness  the source-term harness of the ice and reflection terms
+#            (hww3-wave/harness/src_harness2.F90, compiled against the IRI
+#            library) on the restart $D/restart.ww3 (written by hww3-pre
+#            restart-struct from a run of hww3-prop on the mesh of the grid)
+#            and that wind, every STEP-th sea point with ice and every
+#            STEP-th point next to the coast.
+#   qsub -v STAGES="grid prnc" scripts/iri_arc_ref.pbs
+set -e
+M=/home/datawork-WW3/MODEL/prod_forecast_Ifremer3_20260309_MTAG2
+I=/home/datawork-WW3/PROJECT/IRI/IRI_15KM_L4SAT_11/bmax157/111901/IRIGLOB-7M/2019-01-01T00_2019-05-01T00
+F=/home/datawork-WW3/FORCING/ERA5/NC4
+D=${D:-/home1/scratch/jmdeloui/HWW3/iri_arc}
+G=${GRID:-ARC-15KM}
+TSTART=${TSTART:-20190101 050000}
+TSTOP=${TSTOP:-20190101 070000}
+STEP=${STEP:-50}
+source /usr/share/Modules/3.2.10/init/bash
+module purge
+module load intel-comp/18 impi/2018.1.163
+NC=/home/datawork-wave/NETCDF2019/INTEL/lib
+export LD_LIBRARY_PATH=$NC:$LD_LIBRARY_PATH
+mkdir -p $D/logs
+cd $D
+for s in ${STAGES:-grid prnc}; do
+  case $s in
+    grid)
+      for f in $G.bot $G.lon $G.lat $G.mask $G.obst; do ln -sf $I/data/$f .; done
+      cp $I/work/ww3_grid.nml.$G ww3_grid.nml
+      cp $I/work/namelists_$G.nml .
+      $M/bin/ww3_grid > ww3_grid.out 2>&1 || { tail -40 ww3_grid.out; exit 1; }
+      grep -E "sea points|excluded|SDSBCHOICE|ISC1|IC2TURB|REFCOAST" ww3_grid.out | head -12
+      ls -la mod_def.ww3 ;;
+    prnc)
+      ln -sf $F/wind_2019.nc wind.nc
+      cat > ww3_prnc.nml <<EOF
+&FORCING_NML
+  FORCING%TIMESTART = '$TSTART'
+  FORCING%TIMESTOP  = '$TSTOP'
+  FORCING%FIELD%WINDS = T
+  FORCING%GRID%LATLON = T
+/
+&FILE_NML
+  FILE%FILENAME  = 'wind.nc'
+  FILE%LONGITUDE = 'longitude'
+  FILE%LATITUDE  = 'latitude'
+  FILE%VAR(1)    = 'u10'
+  FILE%VAR(2)    = 'v10'
+/
+EOF
+      $M/bin/ww3_prnc > ww3_prnc.out 2>&1 || { tail -30 ww3_prnc.out; exit 1; }
+      grep -E "Time :" ww3_prnc.out | head; ls -la wind.ww3 ;;
+    harness)
+      mpiifort -no-fma -g -traceback -i4 -real-size 32 -fp-model precise -assume byterecl -O2 \
+        -I$M/model/src/mod $D/src_harness2.F90 -o $D/ww3_srcharness2 \
+        $M/lib/libww3.a -L$NC -lnetcdff -lnetcdf -Wl,-rpath,$NC -Wl,-rpath-link,$NC
+      SECONDS=0
+      mpirun -np 1 $D/ww3_srcharness2 $D/restart.ww3 $D/wind.ww3 $D/harness2.bin $STEP
+      echo "harness done in $SECONDS s"
+      ls -la harness2.bin* ;;
+  esac
+done

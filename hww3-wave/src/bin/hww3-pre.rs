@@ -27,6 +27,12 @@
 //!     an HWW3 grid directory (hww3_wave::structgrid), with the namelist
 //!     copied as GRID_DIR/ww3_grid.nml. The default rotation (auto) moves
 //!     the pole onto the equator when a sea point lies within 10° of it.
+//! hww3-pre restart-struct <grid dir> --restart IN.ww3 --out OUT.ww3
+//!     A restart of hww3-prop on the mesh of a structured grid (hww3-pre
+//!     struct) written in WW3's order of the sea points of the structured
+//!     grid (raw/sea_ij.u32), for WW3 programs run on that grid: the points
+//!     left out of the mesh get zero spectra, levels and ice, u* 1e-5 and
+//!     ASF 1; MAPSTA is 1, or 2 on the open boundary.
 //! hww3-pre ideal-wind <grid dir> --out wind.ww3 --start YYYYMMDDHHMMSS --hours H [--speed U]
 //!     An idealised hourly wind on the nodes, for runs without forcing:
 //!     westerlies and trade winds of amplitude U (default 10 m/s) with
@@ -407,6 +413,73 @@ fn ideal_wind(a: &Args) -> Result<()> {
     Ok(())
 }
 
+fn restart_struct(a: &Args) -> Result<()> {
+    use hww3_wave::ww3io::Restart;
+    let dir = PathBuf::from(a.pos.first().context("restart-struct needs the grid directory")?);
+    let inp = PathBuf::from(a.opts.get("--restart").context("restart-struct needs --restart")?);
+    let out = PathBuf::from(a.opts.get("--out").context("restart-struct needs --out")?);
+    let t0 = Instant::now();
+    let rd = |n: &str| -> Result<Vec<u32>> {
+        let b = std::fs::read(dir.join("raw").join(n)).with_context(|| n.to_string())?;
+        Ok(b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect())
+    };
+    let (ij, sea_ij, obc) = (rd("ij.u32")?, rd("sea_ij.u32")?, rd("obc.u32")?);
+    let r = Restart::read(&inp)?;
+    anyhow::ensure!(r.nsea == ij.len(), "restart of {} points, mesh of {} nodes", r.nsea, ij.len());
+    let nspec = r.nspec;
+    let nsea = sea_ij.len();
+    let mut is_obc = vec![false; ij.len()];
+    for &o in &obc {
+        is_obc[o as usize] = true;
+    }
+    // node of each sea point (usize::MAX when left out of the mesh)
+    let mut node = vec![usize::MAX; nsea];
+    for (k, &i) in ij.iter().enumerate() {
+        let s = sea_ij.binary_search(&i).map_err(|_| anyhow::anyhow!("node {k} at {i} is not a sea point"))?;
+        node[s] = k;
+    }
+    let pick = |v: &[f32], x: f32| -> Vec<f32> {
+        if v.is_empty() {
+            return vec![];
+        }
+        node.iter().map(|&k| if k == usize::MAX { x } else { v[k] }).collect()
+    };
+    let mut va = vec![0f32; nsea * nspec];
+    for (s, &k) in node.iter().enumerate() {
+        if k != usize::MAX {
+            va[s * nspec..(s + 1) * nspec].copy_from_slice(&r.va[k * nspec..(k + 1) * nspec]);
+        }
+    }
+    let mapsta: Vec<i32> = node.iter().map(|&k| if k != usize::MAX && is_obc[k] { 2 } else { 1 }).collect();
+    let mapst2: Vec<i32> = node.iter().map(|&k| if k == usize::MAX { 0 } else { r.mapst2[k] }).collect();
+    let s = Restart {
+        nsea,
+        va,
+        wlv: pick(&r.wlv, 0.0),
+        ice: pick(&r.ice, 0.0),
+        mapsta,
+        mapst2,
+        ust: pick(&r.ust, 1e-5),
+        ustdir: pick(&r.ustdir, 0.0),
+        asf: pick(&r.asf, 1.0),
+        fpis: pick(&r.fpis, 0.0),
+        tail: vec![],
+        ..r
+    };
+    s.write(&out)?;
+    println!(
+        "{}: {} sea points ({} from the mesh), NSPEC {}, time {}, ice > 0 at {} points, written in {:.1} s",
+        out.display(),
+        nsea,
+        ij.len(),
+        nspec,
+        s.time,
+        s.ice.iter().filter(|&&c| c > 0.0).count(),
+        t0.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let a = parse()?;
     match a.cmd.as_str() {
@@ -416,6 +489,7 @@ fn main() -> Result<()> {
         "cmp-nest" => cmp_nest(&a),
         "struct" => structured(&a),
         "ideal-wind" => ideal_wind(&a),
+        "restart-struct" => restart_struct(&a),
         other => bail!("unknown command {other}"),
     }
 }

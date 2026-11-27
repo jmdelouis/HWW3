@@ -12,9 +12,11 @@
 //!   (negative at sea), and the status map `MAPSTA` from `MASK%FILENAME`
 //!   (0 land, 1 sea, 2 active boundary, 3 excluded) or, without a mask
 //!   file, sea where `ZB <= ZLIM`;
-//! - the sea points of the first and last rows, and of the first and last
-//!   columns when the grid is not closed in longitude (`CLOS = 'NONE'`),
-//!   are excluded, as `ww3_grid` does (it counts 4,304 excluded points on
+//! - with a mask file, the sea points whose `ZB` is above `ZLIM` become
+//!   land, as `ww3_grid` does;
+//! - the sea points (`MAPSTA = 1`) of the first and last rows, and of the
+//!   first and last columns when the grid is not closed in longitude
+//!   (`CLOS = 'NONE'`), are excluded, as `ww3_grid` does (it counts 4,304 excluded points on
 //!   IRIGLOB-7M, the sea points of its two edge rows);
 //! - the files are read in free format (`IDFM = 1`, the default) or as
 //!   Fortran unformatted records (`IDFM = 3`), row by row from the south
@@ -152,6 +154,9 @@ pub struct Mesh {
     pub grid: Grid,
     /// Index `iy nx + ix` of each node in the structured grid.
     pub ij: Vec<u32>,
+    /// Index `iy nx + ix` of every sea point of the structured grid, in
+    /// WW3's order (`ISEA`), those left out of the mesh included.
+    pub sea_ij: Vec<u32>,
     /// Geographic longitude of the nodes (degrees).
     pub lon_geo: Vec<f64>,
     /// Geographic latitude of the nodes (degrees).
@@ -343,7 +348,11 @@ impl StructGrid {
                     m @ 0..=3 => Ok(m as u8),
                     m => Err(anyhow!("{mfile}: mask value {m}")),
                 })
-                .collect::<Result<_>>()?
+                .collect::<Result<Vec<u8>>>()?
+                .into_iter()
+                .zip(&zb)
+                .map(|(m, &z)| if (m == 1 || m == 2) && z > zlim { 0 } else { m })
+                .collect()
         };
         let name = s("GRID_NML", "GRID%NAME", "");
         let mut g = StructGrid { name, gtype, nx, ny, closed, lon, lat, zb, mapsta, spec: spectrum(&nml)? };
@@ -351,12 +360,13 @@ impl StructGrid {
         Ok(g)
     }
 
-    /// Exclude the sea points of the first and last rows, and of the first
-    /// and last columns of a grid not closed in longitude (`ww3_grid`).
+    /// Exclude the sea points (`MAPSTA = 1`) of the first and last rows,
+    /// and of the first and last columns of a grid not closed in longitude
+    /// (`ww3_grid`; active-boundary points stay).
     pub fn exclude_edges(&mut self) {
         let (nx, ny) = (self.nx, self.ny);
         let mut edge = |i: usize| {
-            if self.mapsta[i] == 1 || self.mapsta[i] == 2 {
+            if self.mapsta[i] == 1 {
                 self.mapsta[i] = 3;
             }
         };
@@ -472,6 +482,7 @@ impl StructGrid {
             }
         }
         let dropped = nsea - ij.len();
+        let sea_ij: Vec<u32> = (0..npt).filter(|&i| self.is_sea(i)).map(|i| i as u32).collect();
         let pick = |a: &[f64]| ij.iter().map(|&i| a[i as usize]).collect::<Vec<f64>>();
         let grid = Grid {
             lon: pick(&x),
@@ -484,14 +495,15 @@ impl StructGrid {
         if grid.lat.iter().any(|&v| v.abs() > 85.0) {
             bail!("{}: nodes within 5° of the pole of the mesh coordinates: use a rotation", self.name);
         }
-        Ok(Mesh { grid, lon_geo: pick(&self.lon), lat_geo: pick(&self.lat), angle: pick(&ang), ij, rotation, nsea, dropped })
+        Ok(Mesh { grid, lon_geo: pick(&self.lon), lat_geo: pick(&self.lat), angle: pick(&ang), ij, sea_ij, rotation, nsea, dropped })
     }
 }
 
 impl Mesh {
     /// Write the mesh as an HWW3 grid directory ([`Grid::read`]):
     /// `raw/{lon,lat,depth}.f64`, `raw/tri.u32`, `raw/obc.u32`, plus
-    /// `raw/ij.u32` (structured index of each node), `raw/lon_geo.f64`,
+    /// `raw/ij.u32` (structured index of each node), `raw/sea_ij.u32`
+    /// (structured index of every sea point, in WW3's order), `raw/lon_geo.f64`,
     /// `raw/lat_geo.f64` and `raw/angle.f64` (see [`Mesh::angle`]), and the
     /// namelist text `nml` as `ww3_grid.nml`.
     pub fn write(&self, dir: &Path, nml: &str) -> Result<()> {
@@ -509,6 +521,7 @@ impl Mesh {
         u32s("tri.u32", &self.grid.tri.concat())?;
         u32s("obc.u32", &self.grid.obc)?;
         u32s("ij.u32", &self.ij)?;
+        u32s("sea_ij.u32", &self.sea_ij)?;
         f64s("lon_geo.f64", &self.lon_geo)?;
         f64s("lat_geo.f64", &self.lat_geo)?;
         f64s("angle.f64", &self.angle)?;
@@ -588,6 +601,8 @@ mod tests {
         assert_eq!((m.nsea, m.dropped, m.grid.lon.len()), (4 * nx - 2, 0, 4 * nx - 2));
         // WW3 order: ix fastest
         assert_eq!(&m.ij[..3], &[nx as u32, nx as u32 + 1, nx as u32 + 2]);
+        assert_eq!(m.sea_ij.len(), m.nsea);
+        assert!(m.ij.iter().all(|i| m.sea_ij.binary_search(i).is_ok()));
         // 3 rows of 8 cells (closed), the 8 cells around the two land points
         // keep one triangle each
         let full = 3 * nx;
