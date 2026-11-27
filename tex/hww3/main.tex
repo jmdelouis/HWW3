@@ -2938,6 +2938,32 @@ scheme and 10.8 times faster than the implicit one.
 \end{itemize}
 \end{itemize}
 
+\paragraph{M4: how to write the adjoint (in progress).} Before writing
+the full adjoint, three ways are compared on the DIA (W3SNL1) and on one
+geographic sub-step (commit \texttt{0094e14}, one A100, double
+precision): an adjoint written by hand in CubeCL, the same in CUDA C
+(NVRTC, with a bound on the registers), and Burn tensor operations with
+the gradient from Burn's tape. All three pass the dot-product test
+against the tangent kernels of M3 ($1.2\times10^{-12}$ of $\langle Lx,
+y\rangle$ for the DIA, $4.0\times10^{-15}$ for the sub-step) and agree
+with each other to $4\times10^{-16}$.
+\begin{itemize}
+\item Cost against the value kernel: the DIA adjoint takes 2.32 times
+the value in CubeCL, 1.42 times in CUDA C and 77 times with Burn (about
+0.6\,MB of GPU memory per node). The sub-step adjoint takes 3.60 times
+in CubeCL, 2.92 times in CUDA C and about 4\,000 times with Burn, whose
+gathers become atomic scatter-adds in the backward pass, with 6.1\,GB of
+intermediates.
+\item Burn checkpoints only single operations, not time steps. A
+checkpointing of the steps in two levels, held in host memory (62
+states of 3.9\,GB, 242\,GB), gives an estimated 2.1 to 2.4 hours on one
+A100 for the gradient of a 156-hour cost with respect to all the
+parameters and forcing fields. That is 2.4 to 2.7 times less than the
+nine tangents of the calibration.
+\item The choice between CUDA C, CubeCL, or Burn custom operations
+around the same kernels is left to the author of the study.
+\end{itemize}
+
 \paragraph{WW3 structured grids.} To compare with a global
 multi-grid configuration of WW3 (a regular grid of $0.125^\circ$ from
 $35^\circ$S to $35^\circ$N and two curvilinear polar grids of 15\,km,
