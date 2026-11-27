@@ -677,7 +677,6 @@ impl<F: Real> Model<F> {
         };
         let iceref = match (&inp.ice_ref, &src) {
             (Some(ir), Some(_)) => {
-                anyhow::ensure!(cfg.tangent.is_none(), "the ice and reflection step has no tangent yet");
                 eprintln!(
                     "ice and reflection after the sources: ice terms {}, reflection {}",
                     ir.ice.is_some(),
@@ -1337,10 +1336,16 @@ impl<F: Real> Model<F> {
             Some(tl) => {
                 let targs = TangentArgs { vad: &tl.d_vad, du10: &tl.d_du10, du10d: &tl.d_du10d, dpar: &tl.d_dpar, dtauhf: &tl.d_dtauhf };
                 k.launch_tl(&self.client, &args, &targs, self.cfg.dtg, self.np, self.nk, self.nth);
+                // the ice and reflection step and its tangent (the value
+                // is the value kernel's to the bit)
+                if let Some(ir) = self.iceref.as_ref() {
+                    ir.launch_tl(&self.client, &self.d_va, &tl.d_vad, &self.d_wn, &self.d_cg, &self.d_nflag, &self.d_dw, &self.d_ice, self.np, self.nk, self.nth, self.cfg.dtg)
+                        .expect("ice and reflection step and its tangent");
+                }
             }
             None => k.launch(&self.client, &args, self.cfg.dtg, false, self.np, self.nk, self.nth),
         }
-        if let Some(ir) = self.iceref.as_ref() {
+        if let (Some(ir), None) = (self.iceref.as_ref(), self.tl.as_ref()) {
             ir.launch(&self.client, &self.d_va, &self.d_wn, &self.d_cg, &self.d_nflag, &self.d_dw, &self.d_ice, self.np, self.nk, self.nth, self.cfg.dtg)
                 .expect("ice and reflection step");
         }
