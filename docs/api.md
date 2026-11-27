@@ -54,6 +54,9 @@ documented and the CI builds the documentation with warnings as errors.
 | `adjoint` | CubeCL | M4 prototypes: the DIA alone (`dia_value`, `dia_tangent`) and its hand-written adjoint (`dia_adjoint`, `DiaAdjTables`, `dia_check`), the hand-written adjoint of a geographic sub-step (`geo_adj_node1`, `geo_adj_tri`, `geo_adj_node2`) |
 | `burn_m4` | CubeCL | M4 prototypes with Burn's autodiff: `dia_burn`, `geo_burn`, `GeoHost` |
 | `cuda_m4` | CubeCL and CUDA C | M4 prototypes: the same adjoints in CUDA C (`dia_adjoint_cuda`, `geo_adjoint_cuda`) |
+| `dia_adj` | no | `DiaAdjTables`: the transposed index tables of the DIA, so that its adjoints gather instead of scattering |
+| `cuda_adj` | CUDA C | M4, the adjoint of the source terms in CUDA C: `SrceCuda` (`forward`, the value kernel writing the tape of the dynamic sub-steps; `adjoint`, the adjoint kernel over the tape; `set_par`, `set_dtauhf`), `SrceHost`, `SrceBar`; sources `src/cuda/w3srce*.cu*` |
+| `cuda_prop` | CUDA C | M4, the adjoint of the propagation in CUDA C on raw device pointers: `PropCuda` (`theta`, `kshift`, `geographic_adj`, `zero_nodes`), `Ktp3Ptrs`, `GeoPtrs`; source `src/cuda/w3prop.cu` |
 
 Programs: `hww3-wave` (M0 timings and checks), `hww3-prop` (the model;
 `--tangent` for the M3 tangent) and `hww3-src` (the source terms against
@@ -99,7 +102,7 @@ other values of the calibrated parameters). The Fortran harness
 | `m3_tl_src_hpc.slurm` | the tangent kernel of the source terms against finite differences on the harness nodes (`hww3-src check-tl`) |
 | `m3_tl_run_hpc.slurm`, `m3_tl_compare.py` | a tangent run of `hww3-prop` and, with one or two steps, the perturbed runs and the comparison of the tangent with their central differences (with two steps, on the nodes where they agree) |
 | `m3_tl_cmp_hpc.slurm` | the 48 h tangent runs against the finite-difference runs of M2b |
-| `m4_proto_hpc.slurm` | the M4 prototypes: `hww3-src adj-dia` and `hww3-prop adj-geo` (hand-written adjoints in CubeCL and CUDA C, Burn autodiff), with the peak of the GPU memory of each run |
+| `m4_proto_hpc.slurm` | M4: the prototypes `hww3-src adj-dia` and `hww3-prop adj-geo` (hand-written adjoints in CubeCL and CUDA C, Burn autodiff), the dot-product tests of the CUDA C adjoints (`hww3-src adj-src`, part `src`; `hww3-prop adj-prop`, part `prop`), with the peak of the GPU memory of each run |
 | `cal_run_hpc.slurm` | a run of the calibration: value or tangent run with given `BETAMAX` (Rust stress tables), `SDSC2`, `NLPROP`, `BJGAM`, and `BETAMAX`$(U)$ (`BETAU`, `BETAU_GRID`) |
 | `cal_obs.py`, `cal_py_hpc.slurm` | the observation operators of the calibration (altimeter blocks, buoy hours, as the validation scripts match them), the cost and its gradient from tangent runs |
 | `cal_gn.py` | one Gauss–Newton (Levenberg–Marquardt) step with the posterior covariance; `--smooth` adds the second differences of the `BETAMAX`$(U)$ coefficients to the prior |

@@ -215,6 +215,7 @@ writes the depth and currents of those steps. The job scripts are
 hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
 hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red]
 hww3-src check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]
+hww3-src adj-src HARNESS [--replicate R] [--betau KNOTS:COEFS [--betau-grid B0:DB:N]] [--masks M1,M2,...]
 hww3-src adj-dia HARNESS [--units N] [--replicate R] [--burn-replicate RB] [--reps K] [--only cubecl]
 hww3-src tables BASE.params [OTHER.params ...]
 hww3-src params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...]
@@ -242,6 +243,25 @@ Burn tensor operations on `RB` copies, its gradient through Burn's tape
 against the adjoint; `hww3-prop adj-geo GRID --restart FILE [forcing]
 [--f64] [--ik K] [--reps N] [--only cubecl]` does the same for one
 geographic sub-step of frequency `K`.
+
+`adj-src` (milestone M4, built with the features `cubecl` and `cuda-c`)
+runs the CUDA C source terms (`cuda_adj`) on the harness nodes repeated
+`R` times (default 1) in double precision: the value kernel against the
+CubeCL kernel, then the dot-product tests of the adjoint kernel against
+the tangent kernel `srce_tl`, for each freeze mask of `--masks` (the bits
+of `P_TLFREEZE`: 1 `W3SLN1`, 2 `W3SIN4`, 4 the DIA, 8 `W3SDS4`, 16
+`W3SBT4`, 32 u* and z0 after `W3SPR4`, 64 the denominators of the update,
+128 `W3SDB1`; default `0,158,157,155,151,143,31,159,32,64`, all the terms
+then each term alone) and each class of directions: the spectrum, the
+wind speed and direction, `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM` and, with
+`--betau`, the coefficients of `BETAMAX`$(U)$. It prints
+`<adjoint(y), x>` and `<y, tangent(x)>` over all the nodes and the
+distribution of their relative difference node by node.
+`hww3-prop adj-prop GRID --restart FILE [forcing]` (feature `cuda-c`)
+does the same for the CUDA C adjoint of the propagation (`cuda_prop`)
+after the first step's forcing: the refraction, the frequency shift, the
+geographic propagation of three frequencies and the whole propagation of
+the step.
 
 `tables` computes the stress tables of `INSIN4` for the `BETAMAX` of each
 parameter file and compares them with those WW3 wrote there: `TAUT`

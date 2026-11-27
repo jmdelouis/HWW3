@@ -1233,6 +1233,57 @@ parameters.
 
 (a) is recommended for its speed.
 
+### 9.10 M4: the adjoint in CUDA C (from 27 November 2026)
+
+Jean-Marc chose CUDA C (option a). The plan has four checkpoints:
+- (a) the adjoint of the source terms;
+- (b) the adjoint of the propagation;
+- (c) the adjoint of whole steps, with two levels of checkpoints in host
+  memory for 156 h;
+- (d) $dJ/dp$ on the training window, against the M3 tangents.
+
+Each part is checked by dot products against the M3 tangent kernels, which
+are its reference. All the gradients are true gradients, never finite
+differences ([GPU model results](wave_results.md)).
+
+- **Source terms.** The kernel of `W3SRCE` is ported to CUDA C. Its value
+  pass writes, for each node, the spectrum and the scalars at the start of
+  each dynamic sub-step. The adjoint kernel takes the sub-steps back from
+  that tape, recomputing each one's forward pass so that the discrete
+  choices are those of the values. It covers:
+  - `W3SIN4` with `BETAMAX`$(U)$;
+  - both whitecapping choices of `W3SDS4`;
+  - the DIA, `W3SLN1`, `W3SDB1`, `W3SBT4`, and the step limiter, the FHMAX
+    limit and the tail.
+
+  The freeze mask of the tangent (`P_TLFREEZE`) applies to the adjoint as
+  well, so each term is checked on its own. The dot products agree to
+  3e-14 for the spectrum, the wind, `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM`
+  and the coefficients of `BETAMAX`$(U)$.
+- **Propagation.** The CUDA C kernels run on the device buffers of the
+  CubeCL model through raw pointers: CubeCL and `cudarc` share the primary
+  context of the device. They cover the refraction, the frequency shift,
+  the geographic sub-cycling and the conversions between `VA` and `AC`. On
+  grid v5 the dot products agree to 5e-13 for the whole propagation of a
+  step.
+- **Whole steps.** Each step is recomputed from a checkpoint of the model:
+  the spectra, the wavenumbers and group speeds, the host state, and the
+  times of the forcing records, whose files are reopened. Its adjoint
+  transposes the source terms, the propagation, and the open boundary, the
+  ice transitions, the drying and the level remap. Over six steps of grid v5
+  the dot products agree to 1.5e-12 for the spectrum and to 8e-13 for the
+  parameters. A driver with two levels of checkpoints in host memory
+  (`Model::adjoint_run`) is written. Its run over 156 h comes after the
+  source adjoint is optimised: it now takes 71 s per step at the start of
+  the run.
+- **Cost of the source adjoint.** It is 9.0 times its value kernel, against
+  1.4 for the DIA prototype. It holds one node per SM against two, with
+  more serial work on one thread. It is the first thing to optimise once
+  the whole gradient is checked.
+- **Not covered.** The ice and reflection step of the IRI configuration
+  (`W3SIC2`, `W3SIS2`, `W3SREF`) is refused for now. Its adjoint comes once
+  its tangents are in.
+
 ## 10. Other routes, briefly
 
 | route | effort | why not the main route |

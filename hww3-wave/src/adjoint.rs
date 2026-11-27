@@ -426,64 +426,7 @@ pub fn dia_adjoint<F: Float>(
     }
 }
 
-/// The transposed index tables of [`dia_adjoint()`], built on the host from
-/// `DIA_IP` (`16 nspecx`) and `DIA_IC` (`16 nspec`).
-pub struct DiaAdjTables {
-    pub tb1s: Vec<u32>,
-    pub tb1e: Vec<u32>,
-    pub tb2s: Vec<u32>,
-    pub tb2e: Vec<u32>,
-    pub tps: Vec<u32>,
-    pub tpe: Vec<u32>,
-}
-
-impl DiaAdjTables {
-    pub fn new(dia_ip: &[u32], dia_ic: &[u32], nspec: usize, nspecx: usize, nspecy: usize, nth: usize) -> DiaAdjTables {
-        let csr = |nx: usize, items: Vec<(usize, u32)>| -> (Vec<u32>, Vec<u32>) {
-            let mut cnt = vec![0u32; nx + 1];
-            for &(x, _) in &items {
-                cnt[x + 1] += 1;
-            }
-            for x in 0..nx {
-                cnt[x + 1] += cnt[x];
-            }
-            let mut pos = cnt.clone();
-            let mut ent = vec![0u32; items.len()];
-            for (x, e) in items {
-                ent[pos[x] as usize] = e;
-                pos[x] += 1;
-            }
-            (cnt, ent)
-        };
-        let nb = nspecx + nth;
-        let mut i1 = vec![];
-        let mut i2 = vec![];
-        for j in 0..8 {
-            for is in 0..nspec {
-                i1.push((dia_ic[2 * j * nspec + is] as usize, (is * 8 + j) as u32));
-                i2.push((dia_ic[(2 * j + 1) * nspec + is] as usize, (is * 8 + j) as u32));
-            }
-        }
-        let (tb1s, tb1e) = csr(nb, i1);
-        let (tb2s, tb2e) = csr(nb, i2);
-        let nue = nspecy + nth;
-        let mut tps = vec![];
-        let mut tpe = vec![];
-        for g in 0..4 {
-            let mut items = vec![];
-            for k in 4 * g..4 * g + 4 {
-                for isp in 0..nspecx {
-                    items.push((dia_ip[k * nspecx + isp] as usize, (isp * 16 + k) as u32));
-                }
-            }
-            let (s, e) = csr(nue, items);
-            let off = tpe.len() as u32;
-            tps.extend(s.iter().map(|&v| v + off));
-            tpe.extend(e);
-        }
-        DiaAdjTables { tb1s, tb1e, tb2s, tb2e, tps, tpe }
-    }
-}
+pub use crate::dia_adj::DiaAdjTables;
 
 /// A small generator of reproducible random numbers in `[lo, hi)`.
 pub struct Lcg(pub u64);

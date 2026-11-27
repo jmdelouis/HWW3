@@ -16,6 +16,14 @@
 #   PARTS="dia geo" (default both)
 #   dia: hww3-src adj-dia on the harness of grid v5 K=4 repeated REP times
 #        (default 100) for the CubeCL kernels, RB times (default 4) for Burn;
+#   src: hww3-src adj-src: the CUDA C source terms against the CubeCL
+#        kernels on the harness repeated REPS_SRC times (default 1): the
+#        value kernel, then the dot-product tests of the adjoint kernel
+#        against the tangent kernel per freeze mask and direction, with
+#        BETAMAX(U), and on the harness of the IRI settings (Romero);
+#   prop: hww3-prop adj-prop: the dot-product tests of the CUDA C adjoint
+#        of the propagation against the tangent kernels on grid v5 K=4;
+#   step: hww3-prop adj-step: the same for STEPS whole steps (default 6);
 #   geo: hww3-prop adj-geo on grid v5 K=4 from the restart of 1 January
 #        00:10, one sub-step of frequency IK (default 12).
 #   sbatch --export=ALL,BIN=$S/opt/bin_m4 scripts/m4_proto_hpc.slurm
@@ -53,6 +61,29 @@ for part in ${PARTS:-dia geo}; do
       peak dia_cubecl $B/hww3-src adj-dia $H --replicate ${REP:-100} --reps ${REPS:-3} --only cubecl
       echo "== DIA: CubeCL (small) and Burn autodiff"
       peak dia_burn $B/hww3-src adj-dia $H --replicate ${RB:-4} --burn-replicate ${RB:-4} --reps ${REPS:-3}
+      ;;
+    src)
+      echo "== CUDA C source terms: value against CubeCL, adjoint against the tangent (HWW3 settings, SDSBCHOICE 1)"
+      $B/hww3-src adj-src $H --replicate ${REPS_SRC:-1} ${SRCOPT}
+      echo "== the same with BETAMAX(U) (tables in BETAMAX)"
+      $B/hww3-src adj-src $H --replicate ${REPS_SRC:-1} --betau 0,5,10,15,20,30:0.1,-0.05,0.08,-0.1,0.05,0.02 --masks 0,157
+      HR=$S/struct/romero/iri/harness.bin
+      if [ -f $HR ]; then
+        echo "== the same on the harness of the IRI settings (SDSBCHOICE 3, Romero)"
+        $B/hww3-src adj-src $HR --replicate ${REPS_SRC:-1} ${SRCOPT}
+      fi
+      echo "== timing: the harness repeated 10 times, all the terms"
+      $B/hww3-src adj-src $H --replicate 10 --masks 0 | grep -E "^CUDA C|adjoint kernel"
+      ;;
+    step)
+      FORCE="--current $D/current.ww3 --level $D/level.ww3 --ice $D/ice.ww3 --nest $D/nest.ww3 --wind $D/wind.ww3 --sources $P"
+      echo "== the adjoint of whole steps against their tangent (grid v5 K=4, f64)"
+      peak step $B/hww3-prop adj-step $G --restart $R $FORCE --steps ${STEPS:-6}
+      ;;
+    prop)
+      FORCE="--current $D/current.ww3 --level $D/level.ww3 --ice $D/ice.ww3 --nest $D/nest.ww3 --wind $D/wind.ww3 --sources $P"
+      echo "== the CUDA C adjoint of the propagation against the tangent kernels (grid v5 K=4, f64)"
+      peak prop $B/hww3-prop adj-prop $G --restart $R $FORCE
       ;;
     geo)
       FORCE="--current $D/current.ww3 --level $D/level.ww3 --ice $D/ice.ww3 --nest $D/nest.ww3 --wind $D/wind.ww3 --sources $P"

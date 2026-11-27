@@ -2133,6 +2133,141 @@ gives, or a patched CubeCL.
 
 The GPU time from 23 November 07:27 is 51.5 GPU-hours.
 
+## Milestone M4: the adjoint in CUDA C (27 November)
+
+Jean-Marc chose CUDA C for the adjoint. The kernels are compiled at run
+time with NVRTC and launched through `cudarc` (feature `cuda-c`). The
+forward and tangent kernels stay in CubeCL, and the CI builds both.
+
+### Source terms (checkpoint a)
+
+The adjoint of `W3SRCE` covers the configurations of the M3 tangent:
+- `W3SIN4` with `SINTABLE = 1`, with or without sheltering, with the tables
+  at one `BETAMAX` or in `BETAMAX` for `BETAMAX`$(U)$;
+- `W3SDS4` with `SDSBCHOICE = 1` and its cumulative term, or 3 (Romero);
+- the DIA, `W3SLN1`, `W3SDB1`, `W3SBT4`, and the dynamic sub-steps with
+  the FHMAX limit and the tail.
+
+It works in three passes (`hww3_wave::cuda_adj`, sources
+`src/cuda/w3srce*.cu*`):
+1. **Value kernel.** A CUDA C port of the CubeCL kernel writes, for each
+   node, the spectrum and 40 scalars at the start of each dynamic
+   sub-step: the tape, 9.2 KB per node and sub-step.
+2. **Adjoint kernel.** It takes the sub-steps in reverse. For each one it
+   recomputes the forward pass from its record: the same sources, step
+   and update as the value kernel, so the same discrete choices. Then it
+   runs the transposes of the tail, the FHMAX limit, FHIGH, `W3SPR4`, the
+   update and each source term.
+3. **Start of `W3SRCE`.** Last come `W3SPR4`, `W3SIN4` without sources,
+   `W3SPR4`, and `BETAMAX`$(U)$.
+
+The DIA gathers through the transposed index tables (`dia_adj`), with no
+atomics. Nodes go in batches whose tape fits a given size.
+
+**Checks** (`hww3-src adj-src`, jobs 4555442 and 4555775 on one A100, f64):
+
+| Check | Harness | Result |
+|---|---|---|
+| Value port against the CubeCL kernel | HWW3 settings, 1,869 nodes | 4.2e-15 of each node's largest density |
+| | IRI settings with Romero, 1,864 nodes | 5.4e-15 |
+| | `BETAMAX`$(U)$ | 2.3e-15 |
+| | all three | u* within 3.3e-16, mean dynamic step within 1.8e-14 |
+| Dot products against the tangent kernel `srce_tl` | all three | sums agree to 3.0e-14 or better, every node to 2.8e-11, none above 1e-8 |
+
+The dot products were run:
+- for each freeze mask: all the terms, each term alone, no term, u* and
+  z0 frozen, the denominators frozen;
+- for each class of directions: the spectrum, the wind speed and
+  direction, `BETAMAX`, `SDSC2`, `NLPROP`, `BJGAM`, and the six
+  coefficients of `BETAMAX`$(U)$.
+
+**Cost** on the harness repeated 10 times (18,690 nodes):
+- The value kernel takes 0.068 s.
+- The two value passes of the adjoint (the count of the sub-steps, then the
+  tape) take 0.135 s.
+- The adjoint kernel takes 0.616 s, 9.0 times the value kernel, with 1.81
+  sub-steps per node and a tape of 322 MB.
+- The adjoint kernel uses 255 registers and 114,680 B of shared memory per
+  node, so one node runs per SM. The value kernel runs two.
+- This is well above the 1.4 of the DIA prototype. The causes are the
+  lower occupancy, the serial parts on thread 0, and `W3SIN4` computed
+  twice per sub-step.
+
+### Propagation (checkpoint b)
+
+The adjoint of the propagation (`hww3_wave::cuda_prop`, source
+`src/cuda/w3prop.cu`) runs on the raw pointers of the CubeCL model's
+buffers: CubeCL and `cudarc` share the primary context of the device, so
+nothing is copied. It covers:
+- the refraction and the frequency shift of `W3KTP3`: each row or column
+  recomputes its ULTIMATE QUICKEST face values, then applies their
+  transpose with the limiter branches of the values;
+- the geographic N-scheme with its sub-cycling: the sub-steps of the
+  frequency are recomputed and kept on the device, then reversed by a node,
+  a triangle and a node pass;
+- the conversions between `VA` and `AC`, with their clamps at zero.
+
+The kernels of the level remap of `W3ULEV` (device and host paths) and of
+the outputs $H_s$ and $T_m02$ are written as well.
+
+**Checks** (`hww3-prop adj-prop`, job 4555442): dot products against the
+tangent kernels of `prop_tl` on grid v5 K=4 (424,123 nodes), after the
+forcing of the first step (1 January 00:20; two `W3KTP3` calls, one
+before the geographic part):
+
+| Part | Relative difference of the sums |
+|---|---|
+| refraction | 5.4e-13 |
+| frequency shift | 4.7e-13 |
+| geographic, frequency 17 | 2.7e-16 |
+| geographic, frequency 32 | 6.8e-14 |
+| whole propagation of the step | 3.3e-13 |
+
+Frequency 1 agrees to the bit. The random direction is relative to the
+spectra, which are close to zero at the lowest frequency, so that test
+says nothing.
+
+### Whole steps (first part of checkpoint c)
+
+`hww3-prop adj-step` (job 4555775) runs six steps of grid v5 K=4 from the
+restart of 1 January 00:10. It compares the tangent of each direction with
+the adjoint of the six steps. Each step is recomputed from its checkpoint,
+which holds the spectra, the wavenumbers and group speeds, the host state
+and the times of the forcing records (the files are reopened). The adjoint
+then transposes the source terms, the propagation and the parts of the
+forcing that change the spectra:
+- the open boundary;
+- the ice transitions;
+- the drying and wetting nodes;
+- the level remap.
+
+| Direction | Relative difference of the sums |
+|---|---|
+| spectrum at the start | 1.5e-12 |
+| `BETAMAX` | 7.8e-13 |
+| `SDSC2` | 3.3e-14 |
+| `NLPROP` | 7.7e-13 |
+| `BJGAM` | 2.0e-14 |
+
+Times and memory:
+- The tangent takes 74 s per direction, 12.3 s per step.
+- The value run that keeps the checkpoints takes 95 s.
+- The adjoint takes 501 s: 429 s for the source terms, 14 s for the
+  propagation and the forcing, 58 s for the recomputed steps.
+- A checkpoint holds 4.17 GB, and the GPU peak is 55.7 GB.
+
+At this state, the start of the run, the source terms take many dynamic
+sub-steps. The tangent step costs 3.5 times its mean over the first day
+(508.5 s per model day).
+
+The adjoint of the source terms, at 71 s per step, is what to optimise
+before the 156 h gradient. At this rate 936 steps would take about 22 h,
+or about 6 h at the mean rate of the first day, against the 2.1–2.4 h of
+the plan.
+
+The GPU time from 23 November 07:27 is 53.3 GPU-hours, of which 0.64
+for the adjoint jobs of this section (4553862, 4555442, 4555775).
+
 ## Coastal diagnostics of the buoy scores
 
 At the start of the calibration the buoy $H_s$ is too low (bias −4.85 cm on

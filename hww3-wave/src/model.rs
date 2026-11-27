@@ -49,6 +49,10 @@ use rayon::prelude::*;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
+/// Milestone M4: the CUDA C adjoint on the buffers of the model.
+#[cfg(all(feature = "cubecl", feature = "cuda-c"))]
+mod adjm;
+
 /// Output value where a field is undefined (WW3 `UNDEF`).
 pub const UNDEF: f32 = -999.9;
 

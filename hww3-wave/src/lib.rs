@@ -41,6 +41,7 @@
 pub mod backend;
 pub mod bounc;
 pub mod cpu;
+pub mod dia_adj;
 pub mod geom;
 pub mod grid;
 pub mod harness;
@@ -80,7 +81,11 @@ pub mod srce_ice;
 pub mod srce_tl;
 
 #[cfg(feature = "cuda-c")]
+pub mod cuda_adj;
+#[cfg(feature = "cuda-c")]
 pub mod cuda_c;
+#[cfg(feature = "cuda-c")]
+pub mod cuda_prop;
 #[cfg(all(feature = "cubecl", feature = "cuda-c"))]
 pub mod cuda_m4;
 

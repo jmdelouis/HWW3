@@ -53,6 +53,18 @@
 //!     with the dot-product test and the times, then the same sub-step as
 //!     Burn tensor operations with its gradient through Burn's tape
 //!     (unless --only cubecl).
+//! hww3-prop adj-step <grid dir> --restart FILE [forcing as for run] [--steps N] [--k1 K]   (feature cuda-c)
+//!     Milestone M4: the dot-product tests of the adjoint of N whole steps
+//!     (default 6) against their tangent, for the spectra at the start and
+//!     BETAMAX, SDSC2, NLPROP and BJGAM, through the driver with two levels
+//!     of checkpoints (every K steps, default 3), with the times and the size
+//!     of the checkpoints.
+//! hww3-prop adj-prop <grid dir> --restart FILE [forcing as for run]   (feature cuda-c)
+//!     Milestone M4: after the first step's forcing, the dot-product tests
+//!     of the CUDA C adjoint of the propagation (hww3_wave::cuda_prop)
+//!     against the tangent kernels in double precision: the refraction, the
+//!     frequency shift, the geographic propagation of three frequencies and
+//!     the whole propagation of the step, with the times.
 //! hww3-prop check-ktp3 <grid dir> --restart FILE [forcing as for run]
 //!     One step's forcing, then one W3KTP3 call on the GPU compared with
 //!     the CPU transcription of W3KTP3 (hww3_wave::cpu) on a sample of nodes.
@@ -97,7 +109,7 @@ fn parse() -> Result<Args> {
     let valued = [
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
         "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent", "--init-factor", "--betamax",
-        "--stop", "--restart-out", "--ice-ref", "--betau", "--betau-grid", "--probe", "--probe-check", "--tl-nlcut", "--ik", "--reps", "--only",
+        "--stop", "--restart-out", "--ice-ref", "--betau", "--betau-grid", "--probe", "--probe-check", "--tl-nlcut", "--ik", "--reps", "--only", "--steps", "--k1",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -1009,6 +1021,53 @@ fn main() -> Result<()> {
                 m.prepare()?;
                 m.adj_geo_check(ik, reps, &only)?
             };
+            println!("{}", serde_json::to_string(&rep)?);
+            Ok(())
+        }
+        #[cfg(feature = "cuda-c")]
+        "adj-step" => {
+            let geo = Geometry::new(&grid);
+            let device = Device::cuda(0);
+            let client = hww3_wave::burn_ext::client(&device)?;
+            let opt = |k: &str| a.opts.get(k).map(PathBuf::from);
+            let inp = Inputs {
+                restart: PathBuf::from(&a.opts["--restart"]),
+                current: opt("--current"),
+                level: opt("--level"),
+                ice: opt("--ice"),
+                nest: opt("--nest"),
+                wind: opt("--wind"),
+                sources: opt("--sources"),
+                start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
+                ice_ref: None,
+            };
+            let steps: usize = a.opts.get("--steps").map(|s| s.parse()).transpose()?.unwrap_or(6);
+            let k1: usize = a.opts.get("--k1").map(|s| s.parse()).transpose()?.unwrap_or(3);
+            let mut m = Model::<f64>::new(client, &grid, &geo, &inp, Config::default())?;
+            let d = m.dtauhf_unit(&inp)?;
+            let rep = m.adj_step_check(&inp, steps, k1, &d)?;
+            println!("{}", serde_json::to_string(&rep)?);
+            Ok(())
+        }
+        #[cfg(feature = "cuda-c")]
+        "adj-prop" => {
+            let geo = Geometry::new(&grid);
+            let device = Device::cuda(0);
+            let client = hww3_wave::burn_ext::client(&device)?;
+            let opt = |k: &str| a.opts.get(k).map(PathBuf::from);
+            let inp = Inputs {
+                restart: PathBuf::from(&a.opts["--restart"]),
+                current: opt("--current"),
+                level: opt("--level"),
+                ice: opt("--ice"),
+                nest: opt("--nest"),
+                wind: opt("--wind"),
+                sources: opt("--sources"),
+                start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
+                ice_ref: None,
+            };
+            let mut m = Model::<f64>::new(client, &grid, &geo, &inp, Config::default())?;
+            let rep = m.adj_prop_check()?;
             println!("{}", serde_json::to_string(&rep)?);
             Ok(())
         }
