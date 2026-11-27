@@ -2975,8 +2975,16 @@ for the spectrum and to $8\times10^{-13}$ at most for the parameters.
 \item The source adjoint costs 9.0 times its value kernel (one node per
 multiprocessor, 115\,KB of shared memory): 71\,s per step at the start
 of the run, against 12.3\,s for the tangent, which would put a 156-hour
-gradient at about 6 to 22 hours instead of the planned 2.1 to 2.4. It is
-optimised before the two-level checkpointing is run over 156 hours.
+gradient at about 6 to 22 hours instead of the planned 2.1 to 2.4.
+After optimisation (commit \texttt{3e4a91a}) it costs 3.3 times its
+value kernel. Three changes did this: 50\,KB of shared memory with a
+bound of 168 registers, so 3 nodes fit per multiprocessor; the tape and
+the per-bin arrays moved to a scratch in global memory; and, above all,
+a transposed saturation table for W3SDS4, whose scan of the whole table
+for each bin made half the cost. The dot products are unchanged to the
+bit. Six steps of grid v5 $K=4$ through the two-level driver take
+\SI{250}{s} instead of \SI{501}{s}, and the 156-hour gradient is
+estimated at 5 to 7 hours on one A100 with 320\,GB of host memory.
 \end{itemize}
 
 \paragraph{WW3 structured grids.} To compare with a global
