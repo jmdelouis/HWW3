@@ -2990,6 +2990,26 @@ or about 69 core-hours. With the parameters of the North Atlantic runs
 the regular grid alone takes \SI{343}{s}. Double precision, which fits
 one node per multiprocessor at 36 frequencies, and an $H_s$ comparison
 on the polar grids were not run.
+\item The missing physics is now being ported, for correctness first.
+The whitecapping of Romero (2019), \texttt{SDSBCHOICE}\,=\,3 with the
+isotropic cumulative term $\texttt{SDSCUM}>0$ and the modulation
+\texttt{SDSFACMTF}, is in the CPU reference, the value kernel and the
+tangent kernel (commit \texttt{17c0433}), chosen at compile time from
+the parameters, so the kernels of \texttt{SDSBCHOICE}\,=\,1 are
+unchanged. On the 1\,864 nodes of the M2 harness with the parameters of
+the IRI configuration, W3SDS4 of the CPU reference differs from WW3 by
+at most $8.6\times10^{-6}$ (relative) and the spectrum after W3SRCE by
+$4.7\times10^{-6}$, with the same sub-steps. The GPU kernels in single
+and double precision agree with it to $3.3\times10^{-7}$ on average and
+\SI{8.8e-5}{m} in $H_s$; the largest difference ($7.5\times10^{-5}$), at
+one node held at the minimum step, is as large with the old
+whitecapping. The M3 check of the tangent has no smooth node above
+$10^{-4}$ (largest $9.9\times10^{-6}$). Two hours of grid v5 $K=4$ with
+the North Atlantic parameters are identical bit for bit to the previous
+build. The term is not differentiable where the overlap \texttt{BTOVER}
+vanishes and at the floor of the saturation, where the tangent is one
+sided. The ice terms IC2 and IS2 and the reflection REF1 come next, then
+the UQ scheme and the coupling of the grids.
 \end{itemize}
 
 
