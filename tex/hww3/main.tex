@@ -2985,6 +2985,24 @@ for each bin made half the cost. The dot products are unchanged to the
 bit. Six steps of grid v5 $K=4$ through the two-level driver take
 \SI{250}{s} instead of \SI{501}{s}, and the 156-hour gradient is
 estimated at 5 to 7 hours on one A100 with 320\,GB of host memory.
+\item The gradient of the training cost (third cost) over 936 steps
+(156 hours) from the restart of 1 January 00:10, at $p_0$ with the
+coefficients of \texttt{BETAMAX}$(U)$ at zero, ran in one job on one
+A100 (commit \texttt{7f79ed4}), with 62 checkpoints of 4.17\,GB in host
+memory and 57\,GB at most on the GPU. Its components along the seven
+coefficients of \texttt{BETAMAX}$(U)$, $\ln$\,\texttt{SDSC2} and
+$\ln$\,\texttt{NLPROP} agree with those of the nine tangents to
+$1.4\times10^{-10}$ to $7.6\times10^{-7}$ (relative). The derivative
+along $\ln\beta_{\max}$, $17\,971.13$, equals the sum of those along the
+coefficients, as the hat functions summing to one require. The adjoint
+takes \SI{12965}{s} (3.6 hours), 1.6 times less than the nine tangents,
+against the 2.1 to 2.4 hours planned: the source adjoint is 45\,\% of
+it, the propagation and forcing adjoint 17\,\%, the checkpoint copies
+14\,\%, the recomputed steps 12\,\% and the value run 11\,\%. The two
+value passes inside the source adjoint, the overlap of the checkpoint
+copies with the computation and the recomputed geographic sub-steps
+remain to be sped up. The adjoints of ice and reflection follow their
+tangents.
 \end{itemize}
 
 \paragraph{WW3 structured grids.} To compare with a global
