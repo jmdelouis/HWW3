@@ -82,7 +82,7 @@ hww3-src build-params GRID_DIR NAMELISTS.nml OUT.params
 hww3-prop run GRID_DIR --restart calm --start T --wind wind.ww3 --sources OUT.params --hours H --out DIR
 ```
 
-`scripts/struct_run_hpc.slurm` runs these on one A100 of the hpc cluster.
+`scripts/struct_run_hpc.slurm` runs these on one A100 of the hpc cluster; the whole recipe, from the copy of the inputs to the comparison with WW3, is in [Run a WW3 structured-grid configuration](tutorials/run_structured_grid.md).
 
 ## Physics of the IRI configuration left out
 

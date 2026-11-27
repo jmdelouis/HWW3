@@ -69,6 +69,7 @@ each can be run alone when its inputs exist.
 | [Run the GPU model for 48 h](tutorials/run_gpu.md) | hpc cluster | about 5 min on one A100, plus the build |
 | [Validate a run](tutorials/validate_run.md) | hpc cluster or Datarmor | a few minutes per run |
 | [Take one calibration step](tutorials/calibration_step.md) | hpc cluster | a few hours of GPU jobs |
+| [Run a WW3 structured-grid configuration](tutorials/run_structured_grid.md) | Datarmor and hpc cluster | about 2 h of GPU jobs for the three grids, plus the copy |
 
 ```{toctree}
 :hidden:
@@ -80,5 +81,6 @@ tutorials/run_ww3
 tutorials/run_gpu
 tutorials/validate_run
 tutorials/calibration_step
+tutorials/run_structured_grid
 glossary
 ```
