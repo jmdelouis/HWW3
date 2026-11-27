@@ -3125,8 +3125,21 @@ A100 takes \SI{134}{s} per model day for the geographic step alone,
 (\SI{680.6}{s} in double precision) with the sources, ice and
 reflection over the first six hours. Not yet handled: boundary spectra
 in this mode, the sea points on the edges of the curvilinear grids, so
-the polar grids are not yet run with UQ, and the adjoint. The coupling
-of the grids comes next.
+the polar grids are not yet run with UQ, and the adjoint.
+\item The Arctic grid now runs with UQ (commit \texttt{5801a7d}): its
+edges hold no sea point, and the blocker was the transparency of ice in
+W3UTRN, which WW3 applies only with the switch IC0, absent from the IRI
+build (with it, differences reached \SI{0.87}{m} next to the ice). Over
+six hours against WW3 of the IRI build, the RMS difference of $H_s$ is
+\SI{6.9e-8}{m} at the median point and at most \SI{1.1e-6}{m} with the
+geographic propagation alone, \SI{1.25e-6}{m} with W3KTP3 in single
+precision. The tangent has no smooth point above $10^{-4}$. Boundary
+spectra are taken in this mode as W3XYP3 takes them, and the steps of
+\texttt{ww3\_multi} (2\,520 and 1\,080\,s per hour) are an option. One
+A100 takes \SI{81}{s} per model day for the Arctic grid with sources,
+ice and reflection. The coupled driver of the three grids comes next,
+with boundary data from the regular grid to the polar grids and the
+feedback by conservative remapping, as in \texttt{ww3\_multi}.
 \end{itemize}
 
 
