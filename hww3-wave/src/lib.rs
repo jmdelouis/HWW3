@@ -74,6 +74,8 @@ pub mod prop_tl;
 #[cfg(feature = "cubecl")]
 pub mod srce;
 #[cfg(feature = "cubecl")]
+pub mod srce_ice;
+#[cfg(feature = "cubecl")]
 pub mod srce_tl;
 
 #[cfg(feature = "cuda-c")]

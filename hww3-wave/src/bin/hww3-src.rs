@@ -6,6 +6,7 @@
 //! hww3-src check HARNESS        (reads HARNESS and HARNESS.params)
 //! hww3-src check-ice HARNESS2 --params ST4.params --nml NAMELISTS.nml --grid-nml WW3_GRID.nml [--data DIR]
 //! hww3-src check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red]
+//! hww3-src check-ice-gpu HARNESS2 --params ST4.params --nml NAMELISTS.nml --grid-nml WW3_GRID.nml --data DIR [--f64] [--units N]
 //! hww3-src check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]]
 //! hww3-src adj-dia HARNESS [--units N] [--replicate R] [--burn-replicate RB] [--reps K] [--only cubecl|burn]
 //! hww3-src tables BASE.params [OTHER.params ...]
@@ -22,6 +23,10 @@
 //! test and the times, then the same DIA as Burn tensor operations on the
 //! first `RB` copies, its gradient through Burn's tape against the adjoint
 //! and the tangent (`hww3_wave::burn_m4`); `--only` runs one of the two.
+//! `check-ice-gpu` (CubeCL build) runs the GPU kernel of the ice step and
+//! the reflection after the dynamic loop (`hww3_wave::srce_ice`) on the
+//! nodes of the second harness against `ice_after_loop` and `W3SREF` on the
+//! CPU.
 //! `check-tl` (CubeCL build, milestone M3) checks the tangent kernel
 //! `hww3_wave::srce_tl` against finite differences of that kernel in double
 //! precision, `tables` the stress tables computed here against those of
@@ -844,15 +849,27 @@ fn build_params(grid_dir: PathBuf, nml: PathBuf, out: PathBuf, grid_nml: Option<
 /// also the reflection (`hww3_wave::ref1`): the geometry of `W3SETREF`
 /// against the inputs WW3 passed, `W3SREF`, and the full `W3SRCE` with ice
 /// and reflection on every node.
-fn check_ice(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, data: Option<PathBuf>) -> Result<()> {
+/// What the checks of the ice and reflection terms read: the second
+/// harness, the ST4 parameters, the ice parameters and, with the grid
+/// files, the reflection parameters and geometry.
+struct IceSetup {
+    h: hww3_wave::harness2::Harness2,
+    q: SrcePar,
+    ip: hww3_wave::ice::IceParams,
+    refl: Option<(hww3_wave::ref1::Ref1Params, hww3_wave::ref1::Ref1Geometry)>,
+}
+
+/// Read the inputs of [`check_ice`] and `check_ice_gpu` and print the
+/// summary of the harness.
+fn ice_setup(path: &PathBuf, params: &PathBuf, nml: &PathBuf, grid_nml: &PathBuf, data: Option<&PathBuf>) -> Result<IceSetup> {
     use hww3_wave::harness2::Harness2;
-    use hww3_wave::ice::{ice_after_loop, sic2, sis2, IceIn, IceParams};
+    use hww3_wave::ice::IceParams;
     use hww3_wave::ww3grid::Namelists;
-    let h = Harness2::read(&path)?;
-    let q = SrcePar::new(&Params::read(&params)?)?;
-    let gs = hww3_wave::structgrid::spectrum(&Namelists::read(&grid_nml)?)?;
+    let h = Harness2::read(path)?;
+    let q = SrcePar::new(&Params::read(params)?)?;
+    let gs = hww3_wave::structgrid::spectrum(&Namelists::read(grid_nml)?)?;
     let sp = hww3_wave::spec::Spec::new(gs.nk, gs.nth, gs.freq1 as f32, gs.xfr as f32, gs.thoff as f32);
-    let ip = IceParams::from_namelists(&Namelists::read(&nml)?, &sp)?;
+    let ip = IceParams::from_namelists(&Namelists::read(nml)?, &sp)?;
     anyhow::ensure!(h.nk == gs.nk && h.nth == gs.nth, "harness {}x{}, grid {}x{}", h.nk, h.nth, gs.nk, gs.nth);
     let nice = h.nodes.iter().filter(|n| n.ice > 0.0).count();
     let nref = h.nodes.iter().filter(|n| n.reflec[0] > 0.0 || n.reflec[1] > 0.0).count();
@@ -867,15 +884,13 @@ fn check_ice(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, da
         h.restart_time,
         h.wind_time
     );
-    let f = |v: &[f32]| -> Vec<f64> { v.iter().map(|&x| x as f64).collect() };
-    let mut r = Report { rows: vec![] };
     // reflection: parameters and the geometry of the structured grid
-    let refl = match &data {
+    let refl = match data {
         Some(d) => {
             use hww3_wave::ref1::{flagtr, read_obstructions, reflection_geometry_trn, Ref1Params};
-            let rn = Namelists::read(&nml)?;
-            let gn = Namelists::read(&grid_nml)?;
-            let g = hww3_wave::structgrid::StructGrid::read(&grid_nml, d)?;
+            let rn = Namelists::read(nml)?;
+            let gn = Namelists::read(grid_nml)?;
+            let g = hww3_wave::structgrid::StructGrid::read(grid_nml, d)?;
             let rp = Ref1Params::from_namelists(&rn, &gs)?;
             let trn = read_obstructions(&gn, flagtr(&rn)?, d, g.nx, g.ny)?;
             let geo = reflection_geometry_trn(&g, &rp, trn.as_ref())?;
@@ -884,6 +899,44 @@ fn check_ice(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, da
         }
         None => None,
     };
+    Ok(IceSetup { h, q, ip, refl })
+}
+
+/// The inputs of the full `W3SRCE` at a node of the second harness, with
+/// the ice concentration `ice`.
+fn srce_in2(n: &hww3_wave::harness2::Node2, dtg: f32, ice: f64) -> hww3_wave::sources::SrceIn {
+    hww3_wave::sources::SrceIn {
+        start: false,
+        dtg: dtg as f64,
+        depth: n.dw as f64,
+        u10: n.u10 as f64,
+        u10dir: n.u10dir as f64,
+        ice,
+        d50: n.d50 as f64,
+        psic: n.psic as f64,
+        coef: n.asf as f64,
+    }
+}
+
+/// The ice inputs of a node of the second harness, as `check_ice` gives
+/// them to `ice_after_loop`.
+fn ice_in2(n: &hww3_wave::harness2::Node2) -> hww3_wave::ice::IceIn {
+    hww3_wave::ice::IceIn {
+        ice: n.ice as f64,
+        iceh: n.iceh as f64,
+        icedmax: n.icedmax as f64,
+        depth: n.depth as f64,
+        ice_read: true,
+        icei: n.ice as f64,
+        southern_rlg: false,
+    }
+}
+
+fn check_ice(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, data: Option<PathBuf>) -> Result<()> {
+    use hww3_wave::ice::{ice_after_loop, sic2, sis2};
+    let IceSetup { h, q, ip, refl } = ice_setup(&path, &params, &nml, &grid_nml, data.as_ref())?;
+    let f = |v: &[f32]| -> Vec<f64> { v.iter().map(|&x| x as f64).collect() };
+    let mut r = Report { rows: vec![] };
     let mut geo_bad = 0usize;
     for n in &h.nodes {
         let isea = n.isea as usize;
@@ -900,17 +953,7 @@ fn check_ice(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, da
             r.vector("sic2 S", &s, &n.sic2_s, isea);
             r.vector("sic2 D", &d, &n.sic2_d, isea);
         }
-        let si = hww3_wave::sources::SrceIn {
-            start: false,
-            dtg: h.dtg as f64,
-            depth: n.dw as f64,
-            u10: n.u10 as f64,
-            u10dir: n.u10dir as f64,
-            ice: 0.0,
-            d50: n.d50 as f64,
-            psic: n.psic as f64,
-            coef: n.asf as f64,
-        };
+        let si = srce_in2(n, h.dtg, 0.0);
         let mut s0 = a.clone();
         let o0 = srce(&q, &si, &mut s0, &wn, &cg, n.ust as f64);
         r.vector("srce0 SPEC", &s0, &n.srce0_spec, isea);
@@ -956,15 +999,7 @@ fn check_ice(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, da
         let mut s1 = a.clone();
         let o1 = srce(&q, &si, &mut s1, &wn, &cg, n.ust as f64);
         let mut icef = n.icef as f64;
-        let inp = IceIn {
-            ice,
-            iceh: n.iceh as f64,
-            icedmax: n.icedmax as f64,
-            depth,
-            ice_read: true,
-            icei: ice,
-            southern_rlg: false,
-        };
+        let inp = ice_in2(n);
         let fl = ice_after_loop(&ip, &mut s1, &inp, &mut icef, &wn, &cg, h.dtg as f64)?;
         if let Some((rp, geo)) = &refl {
             // W3SREF on the spectrum after the ice terms, SPEC += DTG VREF
@@ -995,6 +1030,163 @@ fn check_ice(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, da
     if refl.is_some() {
         println!("reflection inputs (REFLEC, REFLED) unlike WW3's at {geo_bad} of {} nodes", h.nodes.len());
     }
+    Ok(())
+}
+
+/// The GPU kernel of the ice step and the reflection
+/// (`hww3_wave::srce_ice`) on every node of the second harness: from the
+/// CPU spectrum after `srce` with ice (as in [`check_ice`]), one launch of
+/// the kernel against `ice_after_loop` then `W3SREF` on the CPU, by kind of
+/// node, with `ICEF`; the spectra are also compared with WW3's.
+#[cfg(feature = "cubecl")]
+fn check_ice_gpu<F: hww3_wave::device::Real>(path: PathBuf, params: PathBuf, nml: PathBuf, grid_nml: PathBuf, data: PathBuf, nu: usize) -> Result<()> {
+    use burn::tensor::Device;
+    use cubecl::prelude::CubeElement;
+    use hww3_wave::ice::ice_after_loop;
+    use hww3_wave::ref1::{is_called, reflec, sref};
+    use hww3_wave::srce_ice::{IceRefArgs, IceRefKernel};
+    let IceSetup { h, q, ip, refl } = ice_setup(&path, &params, &nml, &grid_nml, Some(&data))?;
+    let (rp, geo) = refl.expect("reflection geometry");
+    let (nk, nth) = (h.nk, h.nth);
+    let nspec = nk * nth;
+    let n = h.nodes.len();
+    let dtg = h.dtg;
+    let f = |v: &[f32]| -> Vec<f64> { v.iter().map(|&x| x as f64).collect() };
+    // inputs and the CPU result of every node
+    let mut va = vec![0f64; nspec * n];
+    let mut wn = vec![0f64; (nk + 2) * n];
+    let mut cg = vec![0f64; (nk + 2) * n];
+    let (mut depth, mut ice, mut icef) = (vec![0f64; n], vec![0f64; n], vec![0f64; n]);
+    let (mut reflc, mut refld) = (vec![0f64; 4 * n], vec![0u32; 6 * n]);
+    let (mut delx, mut dely, mut trnx, mut trny, mut berg) = (vec![0f64; n], vec![0f64; n], vec![0f64; n], vec![0f64; n], vec![0f64; n]);
+    let mut cpu = Vec::with_capacity(n);
+    let mut cpu_icef = vec![0f64; n];
+    let mut kind = vec![0usize; n];
+    let mut off_const = 0usize;
+    for (j, nd) in h.nodes.iter().enumerate() {
+        let k = nd.isea as usize - 1;
+        let (a, wnk, cgk) = (f(&nd.spec0), f(&nd.wn), f(&nd.cg));
+        let si = srce_in2(nd, dtg, nd.ice as f64);
+        let mut s1 = a.clone();
+        srce(&q, &si, &mut s1, &wnk, &cgk, nd.ust as f64);
+        for ik in 0..nk {
+            for th in 0..nth {
+                va[(ik * n + j) * nth + th] = s1[ik * nth + th];
+            }
+            wn[(ik + 1) * n + j] = wnk[ik];
+            cg[(ik + 1) * n + j] = cgk[ik];
+        }
+        depth[j] = nd.depth as f64;
+        ice[j] = nd.ice as f64;
+        icef[j] = nd.icef as f64;
+        let lc = reflec(&geo.reflc[k], nd.berg as f64);
+        reflc[4 * j..4 * j + 4].copy_from_slice(&lc);
+        for (m, &v) in geo.refld[k].iter().enumerate() {
+            anyhow::ensure!(v >= 0, "negative REFLD at ISEA {}", nd.isea);
+            refld[6 * j + m] = v as u32;
+        }
+        delx[j] = geo.delx[k];
+        dely[j] = geo.dely[k];
+        trnx[j] = geo.trnx[k];
+        trny[j] = geo.trny[k];
+        berg[j] = nd.berg as f64;
+        // the CPU reference: ice_after_loop then W3SREF
+        let inp = ice_in2(nd);
+        if nd.ice > 0.0 && (nd.iceh as f64 != ip.iicehinit || nd.icedmax != 1000.0) {
+            off_const += 1;
+        }
+        let mut ic = nd.icef as f64;
+        ice_after_loop(&ip, &mut s1, &inp, &mut ic, &wnk, &cgk, dtg as f64)?;
+        let called = is_called(&lc, nd.berg as f64);
+        if called {
+            let v = sref(&rp, &s1, &cgk, &lc, &geo.refld[k], geo.delx[k], geo.dely[k], geo.trnx[k], geo.trny[k], nd.berg as f64);
+            for (x, d) in s1.iter_mut().zip(&v) {
+                *x += dtg as f64 * d;
+            }
+        }
+        kind[j] = (nd.ice > 0.0) as usize + 2 * called as usize;
+        cpu.push(s1);
+        cpu_icef[j] = ic;
+    }
+    if off_const > 0 {
+        println!("warning: {off_const} ice nodes with ICEH or ICEDMAX unlike the kernel's constants (ICEHINIT = {}, 1000 m)", ip.iicehinit);
+    }
+    // the kernel
+    let device = Device::cuda(0);
+    let client = hww3_wave::burn_ext::client(&device)?;
+    let kern = IceRefKernel::<F>::new(&client, Some(&ip), Some(&rp), nu)?;
+    let up = |v: &[f64]| {
+        let w: Vec<F> = v.iter().map(|&x| F::of_f64(x)).collect();
+        client.create_from_slice(F::as_bytes(&w))
+    };
+    let (d_va, d_wn, d_cg, d_depth, d_ice, d_icef) = (up(&va), up(&wn), up(&cg), up(&depth), up(&ice), up(&icef));
+    let (d_reflc, d_delx, d_dely, d_trnx, d_trny, d_berg) = (up(&reflc), up(&delx), up(&dely), up(&trnx), up(&trny), up(&berg));
+    let d_refld = client.create_from_slice(u32::as_bytes(&refld));
+    let d_nflag = client.create_from_slice(u32::as_bytes(&vec![4u32; n]));
+    let args = IceRefArgs {
+        va: &d_va,
+        wn: &d_wn,
+        cg: &d_cg,
+        nflag: &d_nflag,
+        depth: Some(&d_depth),
+        ice: Some(&d_ice),
+        icef: Some(&d_icef),
+        reflc: Some(&d_reflc),
+        refld: Some(&d_refld),
+        delx: Some(&d_delx),
+        dely: Some(&d_dely),
+        trnx: Some(&d_trnx),
+        trny: Some(&d_trny),
+        berg: Some(&d_berg),
+    };
+    let sync = || futures_lite::future::block_on(client.sync()).expect("device sync");
+    let down = |hd: &cubecl::server::Handle| -> Vec<f64> {
+        let b = client.read_one(hd.clone()).expect("device read");
+        F::from_bytes(&b).iter().map(|&x| x.as_f64()).collect()
+    };
+    let t0 = std::time::Instant::now();
+    kern.launch(&client, &args, n, nk, nth, dtg)?;
+    sync();
+    let first = t0.elapsed().as_secs_f64();
+    let gva = down(&d_va);
+    let gicef = down(&d_icef);
+    // second launch on a fresh copy, for the time
+    let d_va2 = up(&va);
+    let d_icef2 = up(&icef);
+    let args2 = IceRefArgs { va: &d_va2, icef: Some(&d_icef2), ..args };
+    let t1 = std::time::Instant::now();
+    kern.launch(&client, &args2, n, nk, nth, dtg)?;
+    sync();
+    let second = t1.elapsed().as_secs_f64();
+    let names = ["open", "ice", "ref", "ice+ref"];
+    let mut r = Report { rows: vec![] };
+    let mut rw = Report { rows: vec![] };
+    for (j, nd) in h.nodes.iter().enumerate() {
+        let g: Vec<f64> = (0..nspec).map(|is| gva[((is / nth) * n + j) * nth + is % nth]).collect();
+        // relative to the largest |CPU| value of the node
+        let scale = cpu[j].iter().fold(0f64, |m, &x| m.max(x.abs())).max(1e-30);
+        let err = g.iter().zip(&cpu[j]).fold(0f64, |m, (&a, &b)| m.max((a - b).abs())) / scale;
+        r.stat(&format!("gpu-cpu {} SPEC", names[kind[j]])).add(err, nd.isea as usize);
+        rw.vector(&format!("gpu-ww3 {} SPEC", names[kind[j]]), &g, &nd.srce_spec, nd.isea as usize);
+        if nd.ice > 0.0 {
+            let e = (gicef[j] - cpu_icef[j]).abs() / cpu_icef[j].abs().max(1e-12);
+            r.stat("gpu-cpu ICEF").add(e, nd.isea as usize);
+            rw.scalar("gpu-ww3 ICEF", gicef[j], nd.srce_icef, nd.isea as usize);
+        } else {
+            let e = (gicef[j] - cpu_icef[j]).abs();
+            r.stat("gpu-cpu ICEF (no ice, abs)").add(e, nd.isea as usize);
+        }
+    }
+    println!(
+        "GPU {} ({} units per cube), {} nodes: first launch {:.3} s (with compilation), second {:.5} s",
+        F::NAME,
+        nu,
+        n,
+        first,
+        second
+    );
+    r.print();
+    rw.print();
     Ok(())
 }
 
@@ -1049,6 +1241,18 @@ fn main() -> Result<()> {
             adj_dia(PathBuf::from(f), nu, rep, rb, reps, &only)
         }
         #[cfg(feature = "cubecl")]
+        (Some("check-ice-gpu"), Some(f)) => {
+            let usage = "check-ice-gpu HARNESS2 --params ST4.params --nml NAMELISTS.nml --grid-nml WW3_GRID.nml --data DIR [--f64] [--units N]";
+            let need = |k: &str| opt(k).map(PathBuf::from).ok_or_else(|| anyhow::anyhow!(usage));
+            let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
+            let (p, nml, gn, d) = (need("--params")?, need("--nml")?, need("--grid-nml")?, need("--data")?);
+            if a.iter().any(|x| x == "--f64") {
+                check_ice_gpu::<f64>(PathBuf::from(f), p, nml, gn, d, nu)
+            } else {
+                check_ice_gpu::<f32>(PathBuf::from(f), p, nml, gn, d, nu)
+            }
+        }
+        #[cfg(feature = "cubecl")]
         (Some("check-tl"), Some(f)) => {
             let nu: usize = opt("--units").map(|s| s.parse()).transpose()?.unwrap_or(128);
             let h: f64 = opt("--h").map(|s| s.parse()).transpose()?.unwrap_or(1e-4);
@@ -1056,7 +1260,7 @@ fn main() -> Result<()> {
             check_tl(PathBuf::from(f), nu, h, cut, a.iter().any(|x| x == "--tl-nlnode"))
         }
         _ => bail!(
-            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml F] [--check BASE.params] | check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red] | check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]] | adj-dia HARNESS [--units N] [--replicate R] [--burn-replicate RB] [--reps K] [--only cubecl|burn]"
+            "usage: hww3-src check HARNESS | tables BASE.params [OTHER.params ...] | params BASE.params OUT.params [--betamax B] [--scale-par NAME:F+...] | build-params GRID_DIR NAMELISTS.nml OUT.params [--grid-nml F] [--check BASE.params] | check-ice-gpu HARNESS2 --params P --nml N --grid-nml G --data D [--f64] [--units N] | check-gpu HARNESS [--f64] [--units N] [--replicate R] [--par-red] | check-tl HARNESS [--units N] [--h H] [--tl-nlcut C [--tl-nlnode]] | adj-dia HARNESS [--units N] [--replicate R] [--burn-replicate RB] [--reps K] [--only cubecl|burn]"
         ),
     }
 }
