@@ -17,7 +17,11 @@
 //!   (`harness/src_harness.F90`, read by [`harness`]): CPU transcriptions in
 //!   [`sources`], the GPU kernel of the whole `W3SRCE` integration and the
 //!   wind of `W3UWND` in `srce`, run after the propagation in the time loop
-//!   of `model`.
+//!   of `model`;
+//! - WW3's structured grids: their third-order geographic propagation (the
+//!   UQ scheme of `W3XYP3`, CPU transcription in [`pro3`]) as a second
+//!   propagation path of the model, without triangles (GPU kernels in
+//!   `prop_uq`, their tables and grid directories in [`uqgrid`]).
 //!
 //! # Backends
 //!
@@ -54,6 +58,7 @@ pub mod reference;
 pub mod sources;
 pub mod spec;
 pub mod structgrid;
+pub mod uqgrid;
 pub mod ww3grid;
 pub mod ww3io;
 
@@ -73,6 +78,8 @@ pub mod model;
 pub mod prop;
 #[cfg(feature = "cubecl")]
 pub mod prop_tl;
+#[cfg(feature = "cubecl")]
+pub mod prop_uq;
 #[cfg(feature = "cubecl")]
 pub mod srce;
 #[cfg(feature = "cubecl")]

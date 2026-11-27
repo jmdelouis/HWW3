@@ -685,6 +685,12 @@ impl Pro3Grid {
         self.ncent
     }
 
+    /// `MAPCXY`: the sea points (0-based `ISEA`) in the order of the
+    /// averaging of [`xyp3`], the [`Pro3Grid::ncent`] central points first.
+    pub fn mapcxy(&self) -> &[usize] {
+        &self.mapcxy
+    }
+
     /// The counters of `W3MAP3`: `NCENT`, `NMX0`, `NMX1`, `NMX2`, `NMY0`,
     /// `NMY1`, `NMY2`, `NACT`.
     pub fn counts(&self) -> [usize; 8] {

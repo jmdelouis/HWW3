@@ -487,6 +487,10 @@ pub struct Model<F: Real> {
     /// Mean dynamic step of the last source call per node on the device.
     pub d_dtdyn: Handle,
     tl: Option<Tangent>,
+    /// The UQ scheme of a structured grid ([`Model::new_uq`]): the
+    /// geographic propagation of `W3XYP3` and the gradients of `W3DZXY` in
+    /// place of the triangle kernels, and the global steps of `W3WAVE`.
+    uq: Option<crate::prop_uq::UqState<F>>,
     _f: PhantomData<F>,
 }
 
@@ -502,6 +506,36 @@ impl<F: Real> Model<F> {
     /// Read the restart and open the forcing files, copy the grid to the
     /// device and set the state at the restart time.
     pub fn new(client: Client, grid: &Grid, geo: &Geometry, inp: &Inputs, cfg: Config) -> Result<Model<F>> {
+        Model::build(client, grid, geo, inp, cfg, None)
+    }
+
+    /// [`Model::new`] on a structured grid with the UQ scheme of WW3
+    /// (switches `PR3` + `UQ`, [`crate::prop_uq`]): `grid` holds the sea
+    /// points of the structured grid in WW3's order (a grid directory of
+    /// [`crate::uqgrid`], no triangles) and the restart one spectrum per sea
+    /// point. As in `W3INIT` on structured grids, the wavenumbers and group
+    /// velocities are those of `WAVNU1` at `max(DMIN, DW)`
+    /// ([`crate::pro3::DispTable`]); `W3KTP3` takes the gradients of
+    /// `W3DZXY`; `W3XYP3` propagates every component with the sub-steps,
+    /// averaging and transparencies of the grid; and the global steps follow
+    /// `W3WAVE`: each call (from the time to the next hour or the next time
+    /// of a forcing field) in `1 + INT(DTTST / DTMAX - 0.001)` equal steps,
+    /// `DTMAX`, `DTKTH` of the grid's `ww3_grid.nml` and `CFLTM` of its
+    /// namelists replacing [`Config::dtg`], [`Config::dtkth`] and
+    /// [`Config::ctmax`] (`Config::dtg` then holds the step being made). Not
+    /// with boundary spectra (`--nest`). The level updates keep the
+    /// wavenumbers of `WAVNU3` of the triangle path.
+    pub fn new_uq(client: Client, grid: &Grid, setup: &crate::uqgrid::UqSetup, inp: &Inputs, mut cfg: Config) -> Result<Model<F>> {
+        anyhow::ensure!(inp.nest.is_none(), "the UQ scheme does not take boundary spectra (--nest)");
+        anyhow::ensure!(setup.dtmax > 0.0 && setup.dtkth > 0.0, "DTMAX {} and DTKTH {} of the grid", setup.dtmax, setup.dtkth);
+        cfg.dtg = setup.dtmax as f32;
+        cfg.dtkth = setup.dtkth as f32;
+        cfg.ctmax = setup.cfltm as f32;
+        let geo = Geometry::without_triangles(grid);
+        Model::build(client, grid, &geo, inp, cfg, Some(setup))
+    }
+
+    fn build(client: Client, grid: &Grid, geo: &Geometry, inp: &Inputs, cfg: Config, uq: Option<&crate::uqgrid::UqSetup>) -> Result<Model<F>> {
         let (np, ne, nk, nth) = (geo.np, geo.ne, geo.nk, geo.nth);
         let nspec = nk * nth;
         let s = &grid.spec;
@@ -548,7 +582,18 @@ impl<F: Real> Model<F> {
         let mut wn = vec![0f32; (nk + 2) * np];
         let mut cg = vec![0f32; (nk + 2) * np];
         let mut deep = vec![false; np];
-        {
+        if uq.is_some() {
+            // W3INIT on structured grids: WAVNU1 at max(DMIN, DW)
+            let tab = crate::pro3::DispTable::new();
+            for i in 0..np {
+                let depth = dmin.max(dw[i]);
+                for ik in 0..nk + 2 {
+                    let (k, c) = tab.wavnu1(sp.sig[ik], depth);
+                    wn[ik * np + i] = k;
+                    cg[ik * np + i] = c;
+                }
+            }
+        } else {
             let mut wnc = vec![0f32; nk + 2];
             let mut cgc = vec![0f32; nk + 2];
             for i in 0..np {
@@ -703,7 +748,7 @@ impl<F: Real> Model<F> {
             d_vad: if init { upva(&va) } else { upf(&vec![0.0; nspec * np]) },
             d_dac: upf(&vec![0.0; np * nth]),
             d_dac2: upf(&vec![0.0; np * nth]),
-            d_dut: upf(&vec![0.0; ne * nth]),
+            d_dut: upf(&vec![0.0; ne.max(1) * nth]),
             d_du10: upf(&vec![0.0; np]),
             d_du10d: upf(&vec![0.0; np]),
             d_dpar: upd(&dpar),
@@ -766,11 +811,12 @@ impl<F: Real> Model<F> {
             ipbpi,
             rdbpi,
             nbnd,
-            d_ine: upu(&geo.ine),
-            d_ien: upd(&geo.ien),
-            d_tria: upd(&geo.tria),
+            // (one dummy value without triangles)
+            d_ine: if ne > 0 { upu(&geo.ine) } else { upu(&[0]) },
+            d_ien: if ne > 0 { upd(&geo.ien) } else { upd(&[0.0]) },
+            d_tria: if ne > 0 { upd(&geo.tria) } else { upd(&[0.0]) },
             d_start: upu(&geo.start),
-            d_slot: upu(&geo.slot),
+            d_slot: if ne > 0 { upu(&geo.slot) } else { upu(&[0]) },
             d_si: upd(&geo.si),
             d_si_inv: upd(&si_inv),
             d_clats: upf(&clats),
@@ -791,7 +837,7 @@ impl<F: Real> Model<F> {
             d_cg: upf(&cg),
             d_gx: client.empty(nk * np * fb),
             d_gy: client.empty(nk * np * fb),
-            d_coef: client.empty(nk * ne * 12 * fb),
+            d_coef: client.empty(nk * ne.max(1) * 12 * fb),
             d_nflag: client.empty(np * 4),
             d_mlo: client.empty(np * 4),
             d_mhi: client.empty(np * 4),
@@ -811,14 +857,14 @@ impl<F: Real> Model<F> {
             d_dcxdy: upf(&vec![0.0; np]),
             d_dcydx: upf(&vec![0.0; np]),
             d_dcydy: upf(&vec![0.0; np]),
-            d_ccoef: upf(&vec![0.0; ne * 6]),
+            d_ccoef: upf(&vec![0.0; ne.max(1) * 6]),
             d_partial: client.empty(nspec * cfg.lanes * fb),
             d_iter: upu(&vec![1u32; nspec]),
             d_dtk: upf(&vec![cfg.dtg; nspec]),
             d_va: upva(&va),
             d_ac: client.empty(np * nth * fb),
             d_ac2: client.empty(np * nth * fb),
-            d_ut: client.empty(ne * nth * fb),
+            d_ut: client.empty(ne.max(1) * nth * fb),
             d_hs: client.empty(np * fb),
             d_t02: client.empty(np * fb),
             d_en: client.empty(np * fb),
@@ -834,11 +880,34 @@ impl<F: Real> Model<F> {
             d_ust: upf(&vec![0.0; np]),
             d_dtdyn: upf(&vec![0.0; np]),
             tl,
+            uq: None,
             sp,
             client,
             _f: PhantomData,
         };
         drop(va);
+        if let Some(setup) = uq {
+            let st = crate::prop_uq::UqState::<F>::new(&m.client, setup, &m.mapsta, &m.ice_c, m.tl.is_some())?;
+            let c = st.tables.nx * st.tables.ny;
+            eprintln!(
+                "UQ scheme: {} ({} x {}, {} sea points, closed {}), NCENT {}, MAPTRN {} points, DTMAX {} s, DTKTH {} s, CFLTM {}, WDTHCG {} WDTHTH {}, FLAGTR {}, work buffers {:.2} GB",
+                setup.sg.name,
+                st.tables.nx,
+                st.tables.ny,
+                st.tables.nsea,
+                st.tables.closed,
+                st.pg.ncent(),
+                st.tables.gfl.iter().filter(|&&f| f & crate::uqgrid::GF_TRN != 0).count(),
+                setup.dtmax,
+                setup.dtkth,
+                setup.cfltm,
+                setup.params.wdthcg,
+                setup.params.wdthth,
+                setup.params.flagtr,
+                (if m.tl.is_some() { 4 } else { 2 } * nth * c * fb) as f64 / 1e9
+            );
+            m.uq = Some(st);
+        }
         if let Some(p) = &inp.current {
             m.cur = Some(Fields::open(p)?);
         }
@@ -991,6 +1060,10 @@ impl<F: Real> Model<F> {
         self.d_nflag = self.client.create_from_slice(u32::as_bytes(&nflag));
         self.d_mlo = self.client.create_from_slice(u32::as_bytes(&mlo));
         self.d_mhi = self.client.create_from_slice(u32::as_bytes(&mhi));
+        if let Some(u) = self.uq.as_mut() {
+            // FLMAP of W3WAVE: W3MAP3, W3UTRN, W3MAPT
+            u.update_maps(&self.client, &self.mapsta, &self.ice_c).expect("maps of the UQ scheme");
+        }
     }
 
     /// After a depth change on the host: upload depths, wavenumbers and
@@ -1004,6 +1077,11 @@ impl<F: Real> Model<F> {
 
     /// After a depth change: group velocities, per-frequency coefficients, depth gradients.
     fn depth_kernels(&mut self) {
+        if let Some(u) = self.uq.as_ref() {
+            // W3DZXY of the depth; no triangle coefficients
+            u.dzxy(&self.client, &self.d_dw, &self.d_dddx, &self.d_dddy, self.cfg.block);
+            return;
+        }
         let (np, ne, nk) = (self.np, self.ne, self.nk);
         let facx = 1.0 / (DERA * RADIUS);
         let (c, d) = self.dims(np * nk);
@@ -1212,6 +1290,12 @@ impl<F: Real> Model<F> {
                 facx,
                 np,
             );
+        }
+        if let Some(u) = self.uq.as_ref() {
+            // W3DZXY of the currents
+            u.dzxy(&self.client, &self.d_cx, &self.d_dcxdx, &self.d_dcxdy, self.cfg.block);
+            u.dzxy(&self.client, &self.d_cy, &self.d_dcydx, &self.d_dcydy, self.cfg.block);
+            return;
         }
         let (cx, cy) = (self.d_cx.clone(), self.d_cy.clone());
         let (a, b, c2, d2) = (self.d_dcxdx.clone(), self.d_dcxdy.clone(), self.d_dcydx.clone(), self.d_dcydy.clone());
@@ -1712,6 +1796,11 @@ impl<F: Real> Model<F> {
 
     /// `ITER(ik, ith)` of every component (device), and its copy on the host.
     pub fn compute_iter(&mut self) {
+        if let Some(u) = self.uq.as_ref() {
+            // the sub-steps of W3XYP3 (NTLOC of UqState::set_step)
+            self.iter_host = u.ntloc.iter().map(|&n| n as u32).collect();
+            return;
+        }
         let (np, ne, nk, nth) = (self.np, self.ne, self.nk, self.nth);
         let lanes = self.cfg.lanes;
         let n = nk * (nth / 4) * lanes;
@@ -1953,6 +2042,28 @@ impl<F: Real> Model<F> {
 
     /// `PDLIB_W3XYPUG` for every direction of frequency `ik`.
     pub fn geographic(&mut self, ik: usize) {
+        if let Some(u) = self.uq.as_ref() {
+            let secs = (self.time.secs() - Time(self.time.0, 0).secs()) as f64;
+            let p = &u.pg.params;
+            let n = u.geographic(
+                &self.client,
+                &self.d_va,
+                self.tl.as_ref().map(|t| &t.d_vad),
+                &self.d_cg,
+                &self.d_cx,
+                &self.d_cy,
+                self.cur.is_some(),
+                self.np,
+                ik,
+                secs,
+                self.cfg.dtg as f64,
+                self.cfg.flcx && p.flcx,
+                self.cfg.flcx && p.flcy,
+                self.cfg.block,
+            );
+            self.timers.sweeps += n as u64;
+            return;
+        }
         if self.tl.is_some() {
             self.geographic_tl(ik);
             return;
@@ -2202,12 +2313,15 @@ impl<F: Real> Model<F> {
     /// ice, levels and the sub-cycling count. Returns `(NTLOC, ITLOCH, FACTH, FACK)`.
     pub fn prepare(&mut self) -> Result<(usize, usize, f32, f32)> {
         let mut t = std::time::Instant::now();
-        let dtg = self.cfg.dtg;
         let t_start = self.time;
         // ww3_shel reads fields at the start of each W3WAVE call; calls start
         // at every field or output time, and at other step starts no record
         // is due, so reading at every step start is equivalent.
         self.read_fields(t_start)?;
+        if self.uq.is_some() {
+            self.uq_step(t_start);
+        }
+        let dtg = self.cfg.dtg;
         self.time = Time::from_secs(t_start.secs() + dtg as i64);
         self.itstep += 1;
         self.update_currents();
@@ -2216,6 +2330,9 @@ impl<F: Real> Model<F> {
         self.apply_boundary();
         self.update_ice()?;
         self.update_level()?;
+        if self.uq.is_some() {
+            self.uq_substeps();
+        }
         self.tick(0, &mut t);
         self.compute_iter();
         self.tick(1, &mut t);
@@ -2245,6 +2362,43 @@ impl<F: Real> Model<F> {
             self.ktp3(facth, fack);
         }
         self.tick(2, &mut t);
+    }
+
+    /// The UQ scheme of the run, if any ([`Model::new_uq`]).
+    pub fn uq(&self) -> Option<&crate::prop_uq::UqState<F>> {
+        self.uq.as_ref()
+    }
+
+    /// The device buffer of the tangent of the spectra in a tangent run
+    /// (layout of [`Model::d_va`]), for the checks.
+    pub fn tangent_handle(&self) -> Option<&Handle> {
+        self.tl.as_ref().map(|tl| &tl.d_vad)
+    }
+
+    /// The global step of `W3WAVE` from `t` (section 2) into
+    /// [`Config::dtg`]: a call ends at the next hour (the outputs) or at the
+    /// next time of a forcing field, whichever comes first.
+    fn uq_step(&mut self, t: Time) {
+        let ts = t.secs();
+        let mut end = (ts.div_euclid(3600) + 1) * 3600;
+        let lev = self.lev.as_ref().and_then(|f| f.tnext());
+        let ice = self.ice.as_ref().and_then(|f| f.tnext());
+        for tn in [self.tcn, self.twn, lev, ice].into_iter().flatten() {
+            if tn.secs() > ts {
+                end = end.min(tn.secs());
+            }
+        }
+        let u = self.uq.as_mut().expect("UQ scheme");
+        self.cfg.dtg = u.steps.next(ts, end);
+    }
+
+    /// The sub-steps of `W3XYP3` for the step (`NTLOC` from the deep-water
+    /// group velocities and the extreme currents of the step).
+    fn uq_substeps(&mut self) {
+        let cur = if self.cur.is_some() { Some((self.download_f64(&self.d_cx), self.download_f64(&self.d_cy))) } else { None };
+        let dtg = self.cfg.dtg as f64;
+        let u = self.uq.as_mut().expect("UQ scheme");
+        u.set_step(&self.client, dtg, cur.as_ref().map(|(x, y)| (x.as_slice(), y.as_slice())));
     }
 
     /// One global step of `W3WAVE`.

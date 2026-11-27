@@ -332,6 +332,52 @@ impl Geometry {
             .collect();
         (si_inv, dtk, mlo, mhi)
     }
+
+    /// The "geometry" of a grid propagated without triangles (the UQ scheme
+    /// of the structured grids, [`crate::prop_uq`]): the points of `g` and
+    /// no triangles, every point inside (`IOBP = 1`, all directions in
+    /// `IOBPD`) except those of `g.obc` (`IOBP = 2`, `IOBPA = 1`), `IOBDP`
+    /// from the depth, and no velocities nor sub-cycling (`ITER = 1`). The
+    /// triangles of `g`, if any, are ignored.
+    pub fn without_triangles(g: &Grid) -> Geometry {
+        let np = g.lon.len();
+        let (nk, nth) = (g.spec.nk, g.spec.nth);
+        assert!(nth <= 63, "at most 63 directions (bit 63 of the mask word pair holds IOBPA)");
+        let full: u64 = (1u64 << nth) - 1;
+        let mut iobp = vec![1u8; np];
+        for &o in &g.obc {
+            iobp[o as usize] = 2;
+        }
+        let iobpa: Vec<u8> = iobp.iter().map(|&b| (b == 2) as u8).collect();
+        let iobdp: Vec<u8> = g.depth.iter().map(|&d| (d >= g.spec.dmin + 1e-5) as u8).collect();
+        let dth = 2.0 * PI / nth as f64;
+        let clean = |v: f64| if v.abs() < 1e-5 { 0.0 } else { v };
+        Geometry {
+            np,
+            ne: 0,
+            nk,
+            nth,
+            ine: vec![],
+            ien: vec![],
+            si: vec![0.0; np],
+            iobp,
+            iobpa,
+            mask: iobdp.iter().map(|&w| if w == 0 { 0 } else { full }).collect(),
+            iobdp,
+            iobpd: vec![full; np],
+            tria: vec![],
+            start: vec![0; np + 1],
+            slot: vec![],
+            ecos: (0..nth).map(|k| clean(((k as f64 + g.spec.thoff) * dth).cos())).collect(),
+            esin: (0..nth).map(|k| clean(((k as f64 + g.spec.thoff) * dth).sin())).collect(),
+            freqs: (0..nk).map(|k| g.spec.freq1 * g.spec.xfr.powi(k as i32)).collect(),
+            cx: vec![],
+            cy: vec![],
+            iter: vec![1; nk * nth],
+            cflxy: vec![0.0; nk * nth],
+            bccfl: true,
+        }
+    }
 }
 
 #[cfg(test)]

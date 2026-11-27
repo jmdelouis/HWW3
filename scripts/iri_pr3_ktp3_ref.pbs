@@ -1,0 +1,95 @@
+#!/bin/bash
+#PBS -N hww3_iriktp3
+#PBS -q mpi_1
+#PBS -l select=1:ncpus=28:mpiprocs=28:mem=115g
+#PBS -l walltime=00:20:00
+#PBS -j oe
+#
+# WW3 reference of the propagation of the IRI configuration on its regular
+# grid IRIGLOB-7M with the spectral propagation: the geographic propagation
+# of W3XYP3 (UQ/PR3 with the GSE averaging, the SMPL closure and the
+# sub-grid obstructions) and W3KTP3 (refraction and frequency shift with the
+# depth gradients of W3DZXY), RUN%FLCX = FLCY = FLCTH = FLCK = T and
+# FLSOU = F, with the executables of the IRI build (read only), from the
+# restart of scripts/iri_pr3_ref.pbs ($D/../restart.ww3, 4 January 2019
+# 00 h), with hourly H_s. The six hours run in two jobs of three hours so
+# that each stays under 5 core-hours: PART=1 from 00 h to 03 h writing a
+# restart at 03 h, PART=2 (after it) from that restart to 06 h. A restart
+# after an even number of global steps (6 of 1,800 s) keeps the parity of
+# ITSTEP (W3KTP3 alternates the order of its two parts with it), so the
+# two parts give the six-hour run.
+#   J=$(qsub -v PART=1 scripts/iri_pr3_ktp3_ref.pbs)
+#   qsub -W depend=afterok:$J -v PART=2 scripts/iri_pr3_ktp3_ref.pbs
+set -e
+M=/home/datawork-WW3/MODEL/prod_forecast_Ifremer3_20260309_MTAG2
+I=/home/datawork-WW3/PROJECT/IRI/IRI_15KM_L4SAT_11/bmax157/111901/IRIGLOB-7M/2019-01-01T00_2019-05-01T00
+B=/home1/scratch/jmdeloui/HWW3/iri_pr3
+D=$B/ktp3
+G=IRIGLOB-7M
+PART=${PART:-1}
+source /usr/share/Modules/3.2.10/init/bash
+module purge
+module load intel-comp/18 impi/2018.1.163
+NC=/home/datawork-wave/NETCDF2019/INTEL/lib
+export LD_LIBRARY_PATH=$NC:$LD_LIBRARY_PATH
+mkdir -p $D/part$PART
+cd $D/part$PART
+exec > $D/part$PART.log 2>&1
+for f in $I/data/$G.*; do ln -sf $f .; done
+cp $I/work/namelists_$G.nml .
+if [ "$PART" = 1 ]; then
+  T0='20190104 000000'
+  T1='20190104 030000'
+  ln -sf $B/restart.ww3 restart.ww3
+  sed -e 's/RUN%FLSOU *= *T/RUN%FLSOU = F/' $I/work/ww3_grid.nml.$G > ww3_grid.nml
+  grep "RUN%" ww3_grid.nml
+  SECONDS=0
+  $M/bin/ww3_grid > ww3_grid.out 2>&1 || { tail -40 ww3_grid.out; exit 1; }
+  echo "ww3_grid: $SECONDS s"
+else
+  T0='20190104 030000'
+  T1='20190104 060000'
+  ln -sf $D/part1/restart001.ww3 restart.ww3
+  ln -sf $D/part1/mod_def.ww3 mod_def.ww3
+  cp $D/part1/ww3_grid.nml .
+fi
+cat > ww3_shel.nml <<EOF
+&DOMAIN_NML
+  DOMAIN%START = '$T0'
+  DOMAIN%STOP  = '$T1'
+/
+&INPUT_NML
+/
+&OUTPUT_TYPE_NML
+  TYPE%FIELD%LIST = 'HS'
+/
+&OUTPUT_DATE_NML
+  DATE%FIELD%START  = '$T0'
+  DATE%FIELD%STRIDE = '3600'
+  DATE%FIELD%STOP   = '$T1'
+  DATE%RESTART%START  = '$T1'
+  DATE%RESTART%STRIDE = '10800'
+  DATE%RESTART%STOP   = '$T1'
+/
+EOF
+NP=$(wc -l < $PBS_NODEFILE)
+SECONDS=0
+mpirun -np $NP $M/bin/ww3_shel > ww3_shel.out 2>&1 || { tail -40 ww3_shel.out; exit 1; }
+echo "ww3_shel on $NP ranks: $SECONDS s"
+tail -5 ww3_shel.out
+ls -la restart*.ww3
+cat > ww3_ounf.nml <<EOF
+&FIELD_NML
+  FIELD%TIMESTART  = '$T0'
+  FIELD%TIMESTRIDE = '3600'
+  FIELD%LIST       = 'HS'
+  FIELD%PARTITION  = '0'
+  FIELD%TYPE       = 4
+/
+&FILE_NML
+  FILE%PREFIX = 'ww3.'
+  FILE%NETCDF = 4
+/
+EOF
+$M/bin/ww3_ounf > ww3_ounf.out 2>&1 || { tail -20 ww3_ounf.out; exit 1; }
+ls -la ww3.*.nc

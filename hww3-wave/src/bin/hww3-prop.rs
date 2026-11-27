@@ -47,6 +47,22 @@
 //!     the value source kernel: another order of the additions, so results
 //!     that differ at round-off (off by default; the tangent kernel keeps
 //!     the order of WW3).
+//!     On a grid directory of the UQ scheme of a structured grid
+//!     (hww3-pre struct --scheme uq, hww3_wave::uqgrid), the geographic
+//!     propagation is WW3's W3XYP3 (PR3 + UQ, hww3_wave::prop_uq) with
+//!     the global steps of W3WAVE (DTMAX, DTKTH of the grid), the restart
+//!     holds one spectrum per sea point (hww3-pre restart-uq), and H_s,
+//!     T_m02 (and their tangents) are written on the whole NX x NY grid
+//!     (iy NX + ix, UNDEF off the sea points).
+//! hww3-prop check-uq <uq grid dir> --restart FILE [--f64] [--ik K1,K2,..] [--tangent INIT] [--h H]
+//!     The UQ scheme after the first step's forcing: the geographic step
+//!     of the frequencies K (default 1, NK/2 and NK, 1-based) on the GPU
+//!     against the CPU transcription of W3XYP3 (hww3_wave::pro3::xyp3) on
+//!     the same inputs, every direction; with --tangent, the tangent of the
+//!     step along the field itself (equal to the stepped field: the scheme
+//!     is positively homogeneous of degree 1) and along a random relative
+//!     perturbation against central differences of steps H (default 1e-7)
+//!     and H / 10 at the sea points with no kink within H.
 //! hww3-prop adj-geo <grid dir> --restart FILE [forcing as for run] [--f64] [--ik K] [--reps N] [--only cubecl]
 //!     Milestone M4 prototype: one geographic sub-step of frequency K after
 //!     the first step's forcing, its value, tangent and hand-written adjoint
@@ -117,6 +133,7 @@ fn parse() -> Result<Args> {
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
         "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent", "--init-factor", "--betamax",
         "--stop", "--restart-out", "--ice-ref", "--betau", "--betau-grid", "--probe", "--probe-check", "--tl-nlcut", "--ik", "--reps", "--only", "--steps", "--k1", "--seeds",
+        "--h",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -201,26 +218,41 @@ fn write_hourly<F: Real>(m: &mut Model<F>, out: &Path, tag: &str, out64: bool) -
     let (hs, t02) = m.outputs_f64();
     let hs32: Vec<f32> = hs.iter().map(|&x| x as f32).collect();
     let t32: Vec<f32> = t02.iter().map(|&x| x as f32).collect();
-    write_f32(&out.join(format!("hs_{tag}.f32")), &hs32)?;
-    write_f32(&out.join(format!("t02_{tag}.f32")), &t32)?;
+    // with the UQ scheme, the whole NX x NY grid
+    let f32s = |v: &[f32]| -> Vec<f32> {
+        match m.uq() {
+            Some(u) => u.expand(v, UNDEF),
+            None => v.to_vec(),
+        }
+    };
+    let f64s = |v: &[f64]| -> Vec<f64> {
+        match m.uq() {
+            Some(u) => u.expand(v, UNDEF as f64),
+            None => v.to_vec(),
+        }
+    };
+    write_f32(&out.join(format!("hs_{tag}.f32")), &f32s(&hs32))?;
+    write_f32(&out.join(format!("t02_{tag}.f32")), &f32s(&t32))?;
     if out64 {
-        write_f64(&out.join(format!("hs_{tag}.f64")), &hs)?;
-        write_f64(&out.join(format!("t02_{tag}.f64")), &t02)?;
+        write_f64(&out.join(format!("hs_{tag}.f64")), &f64s(&hs))?;
+        write_f64(&out.join(format!("t02_{tag}.f64")), &f64s(&t02))?;
     }
     let tan = m.tangent_outputs_f64();
     if let Some((dhs, dt02, _)) = &tan {
         for (name, v) in [("dhs", dhs), ("dt02", dt02)] {
             let d32: Vec<f32> = v.iter().map(|&x| x as f32).collect();
-            write_f32(&out.join(format!("{name}_{tag}.f32")), &d32)?;
+            write_f32(&out.join(format!("{name}_{tag}.f32")), &f32s(&d32))?;
             if out64 {
-                write_f64(&out.join(format!("{name}_{tag}.f64")), v)?;
+                write_f64(&out.join(format!("{name}_{tag}.f64")), &f64s(v))?;
             }
         }
     }
     Ok((hs32, tan))
 }
 
-fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
+/// `run`: on the triangles of `geo`, or with the UQ scheme of the grid
+/// directory when `geo` is `None`.
+fn run<F: Real>(grid: &Grid, geo: Option<&Geometry>, a: &Args) -> Result<()> {
     let device = Device::cuda(0);
     let client = hww3_wave::burn_ext::client(&device)?;
     let opt = |k: &str| a.opts.get(k).map(PathBuf::from);
@@ -259,7 +291,10 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
     let out = PathBuf::from(a.opts.get("--out").cloned().unwrap_or_else(|| "prop_out".into()));
     std::fs::create_dir_all(&out)?;
     let t0 = Instant::now();
-    let mut m = Model::<F>::new(client, grid, geo, &inp, cfg.clone())?;
+    let mut m = match geo {
+        Some(geo) => Model::<F>::new(client, grid, geo, &inp, cfg.clone())?,
+        None => Model::<F>::new_uq(client, grid, &hww3_wave::uqgrid::UqSetup::read(&a.grid)?, &inp, cfg.clone())?,
+    };
     m.profile = a.flags.contains("--profile");
     m.sync();
     let setup = t0.elapsed().as_secs_f64();
@@ -513,7 +548,194 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
                    "betau": cfg.betau.as_ref().map(|b| json!({"knots": b.knots, "coefs": b.coefs, "grid": [b.b0, b.db, b.n]})),
                    "scale_par": cfg.scale_par.iter().map(|(n, f)| json!([n, f])).collect::<Vec<_>>()},
     });
+    let mut summary = summary;
+    if let Some(u) = m.uq() {
+        summary["uq"] = json!({"nx": u.tables.nx, "ny": u.tables.ny, "nsea": u.tables.nsea, "dtmax": u.steps.dtmax, "dtkth": u.dtkth, "cfltm": u.cfltm,
+                               "last_dtg": m.cfg.dtg});
+    }
     std::fs::write(out.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
+    Ok(())
+}
+
+/// `check-uq`: the GPU geographic step of the UQ scheme against the CPU
+/// transcription of `W3XYP3`, and its tangent against central differences.
+fn check_uq<F: Real>(grid: &Grid, a: &Args) -> Result<()> {
+    use hww3_wave::pro3::xyp3;
+    use hww3_wave::prop_uq::{read_range, write_range};
+    use hww3_wave::ww3io::Time;
+    use rayon::prelude::*;
+    let device = Device::cuda(0);
+    let client = hww3_wave::burn_ext::client(&device)?;
+    let inp = inputs(a)?;
+    let mut cfg = Config::default();
+    perturbations(a, &mut cfg)?;
+    let setup = hww3_wave::uqgrid::UqSetup::read(&a.grid)?;
+    let mut m = Model::<F>::new_uq(client, grid, &setup, &inp, cfg)?;
+    m.prepare()?;
+    let (np, nk, nth) = (m.np, m.nk, m.nth);
+    let iks: Vec<usize> = match a.opts.get("--ik") {
+        Some(s) => s.split(',').map(|x| x.parse::<usize>().map(|k| k - 1)).collect::<Result<_, _>>()?,
+        None => vec![0, nk / 2 - 1, nk - 1],
+    };
+    let pg = m.uq().expect("UQ scheme").pg.clone();
+    let secs = (m.time.secs() - Time(m.time.0, 0).secs()) as f64;
+    let dtg = m.cfg.dtg as f64;
+    let cgall = m.device_cg();
+    let len = nk * np * nth;
+    let n = np * nth;
+    let prec = <F as hww3_wave::backend::Scalar>::NAME;
+    println!("check-uq at {} ({prec}): DTG {dtg} s, {} sea points, {} directions", m.time, np, nth);
+    let mut saved = vec![];
+    for &ik in &iks {
+        let cg: Vec<f64> = cgall[(ik + 1) * np..(ik + 2) * np].iter().map(|&x| x as f64).collect();
+        let va0 = read_range::<F>(&m.client, &m.d_va, len, ik * n, n);
+        let t = Instant::now();
+        let cpu: Vec<Vec<f64>> = (0..nth)
+            .into_par_iter()
+            .map(|th| {
+                let mut f = vec![0.0; pg.nx * pg.ny];
+                for (s, &i) in pg.sea_ij.iter().enumerate() {
+                    f[i] = va0[s * nth + th];
+                }
+                xyp3(&pg, ik * nth + th, dtg, secs, &mut f, &cg, None, None);
+                pg.sea_ij.iter().map(|&i| f[i]).collect()
+            })
+            .collect();
+        let tcpu = t.elapsed().as_secs_f64();
+        m.sync();
+        let t = Instant::now();
+        m.geographic(ik);
+        m.sync();
+        let tgpu = t.elapsed().as_secs_f64();
+        let gpu = read_range::<F>(&m.client, &m.d_va, len, ik * n, n);
+        let vmax = cpu.iter().flatten().fold(0f64, |x, &y| x.max(y.abs())).max(1e-300);
+        let (mut dmax, mut d2, mut v2, mut worst) = (0f64, 0f64, 0f64, (0usize, 0usize));
+        let mut above = [0usize; 3];
+        for th in 0..nth {
+            for s in 0..np {
+                let d = (gpu[s * nth + th] - cpu[th][s]).abs();
+                if d > dmax {
+                    dmax = d;
+                    worst = (s, th);
+                }
+                d2 += d * d;
+                v2 += cpu[th][s] * cpu[th][s];
+                for (j, e) in [1e-12, 1e-9, 1e-6].iter().enumerate() {
+                    if d > e * vmax {
+                        above[j] += 1;
+                    }
+                }
+            }
+        }
+        let i = pg.sea_ij[worst.0];
+        println!(
+            "  frequency {} (max NTLOC {}): max |gpu - cpu| / max |cpu| {:.3e}, RMS ratio {:.3e}; values above 1e-12, 1e-9, 1e-6 of the max {:?}; worst at sea point {} (ix {} iy {}, direction {}): {:.6e} vs {:.6e}; CPU {:.1} s, GPU {:.4} s",
+            ik + 1,
+            m.uq().unwrap().max_ntloc(ik),
+            dmax / vmax,
+            (d2 / v2.max(1e-300)).sqrt(),
+            above,
+            worst.0,
+            i % pg.nx + 1,
+            i / pg.nx + 1,
+            worst.1 + 1,
+            gpu[worst.0 * nth + worst.1],
+            cpu[worst.1][worst.0],
+            tcpu,
+            tgpu
+        );
+        // back to the state before the step
+        write_range::<F>(&m.client, &m.d_va, len, ik * n, &va0);
+        saved.push(va0);
+    }
+    let Some(dh) = m.tangent_handle().cloned() else { return Ok(()) };
+    let h: f64 = a.opts.get("--h").map(|s| s.parse()).transpose()?.unwrap_or(1e-7);
+    for (&ik, va0) in iks.iter().zip(&saved) {
+        // 1. homogeneity: the scheme is positively homogeneous of degree 1,
+        // so that its tangent along the field itself is the stepped field
+        write_range::<F>(&m.client, &m.d_va, len, ik * n, va0);
+        write_range::<F>(&m.client, &dh, len, ik * n, va0);
+        m.geographic(ik);
+        let tl = read_range::<F>(&m.client, &dh, len, ik * n, n);
+        let v1 = read_range::<F>(&m.client, &m.d_va, len, ik * n, n);
+        let vmax = v1.iter().fold(0f64, |x, &y| x.max(y.abs())).max(1e-300);
+        let dmax = tl.iter().zip(&v1).fold(0f64, |x, (p, q)| x.max((p - q).abs()));
+        println!("  tangent, frequency {}: along the field itself (homogeneity), max |TL - value| / max value {:.3e}", ik + 1, dmax / vmax);
+        // 2. a random relative perturbation of the frequency against
+        // central differences of steps h and h / 10, the smooth sea points
+        // being those where these agree and the one-sided differences of
+        // step h / 10 agree (no kink of the limiters or clamps within h)
+        let mut seed = 0x2545F4914F6CDD1Du64 ^ (ik as u64 * 7919);
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+        };
+        let dva: Vec<f64> = va0.iter().map(|&v| rnd() * v).collect();
+        write_range::<F>(&m.client, &m.d_va, len, ik * n, va0);
+        write_range::<F>(&m.client, &dh, len, ik * n, &dva);
+        m.geographic(ik);
+        let tl = read_range::<F>(&m.client, &dh, len, ik * n, n);
+        let f0 = read_range::<F>(&m.client, &m.d_va, len, ik * n, n);
+        let run = |m: &mut Model<F>, step: f64| -> Vec<f64> {
+            let v: Vec<f64> = va0.iter().zip(&dva).map(|(x, d)| x + step * d).collect();
+            write_range::<F>(&m.client, &m.d_va, len, ik * n, &v);
+            m.geographic(ik);
+            read_range::<F>(&m.client, &m.d_va, len, ik * n, n)
+        };
+        let (p1, m1) = (run(&mut m, h), run(&mut m, -h));
+        let (p2, m2) = (run(&mut m, h / 10.0), run(&mut m, -h / 10.0));
+        write_range::<F>(&m.client, &m.d_va, len, ik * n, va0);
+        let (mut nsm, mut nrough, mut nzero, mut emax, mut wnode) = (0usize, 0usize, 0usize, 0f64, 0usize);
+        let mut errs = vec![];
+        let mut big = vec![];
+        let h2 = h / 10.0;
+        let nfmax = (0..np)
+            .map(|s| (s * nth..(s + 1) * nth).map(|q| ((p2[q] - m2[q]) / (2.0 * h2)).powi(2)).sum::<f64>().sqrt())
+            .fold(0f64, f64::max);
+        for s in 0..np {
+            let r = s * nth..(s + 1) * nth;
+            let f1: Vec<f64> = r.clone().map(|q| (p1[q] - m1[q]) / (2.0 * h)).collect();
+            let f2: Vec<f64> = r.clone().map(|q| (p2[q] - m2[q]) / (2.0 * h2)).collect();
+            let fp: Vec<f64> = r.clone().map(|q| (p2[q] - f0[q]) / h2).collect();
+            let fm: Vec<f64> = r.clone().map(|q| (f0[q] - m2[q]) / h2).collect();
+            let l2 = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f64>().sqrt();
+            let nf: f64 = f2.iter().map(|x| x * x).sum::<f64>().sqrt();
+            if nf == 0.0 {
+                nzero += 1;
+                continue;
+            }
+            if l2(&f1, &f2) > 1e-6 * nf || l2(&fp, &fm) > 1e-6 * nf {
+                nrough += 1;
+                continue;
+            }
+            let e = l2(&tl[r.clone()], &f2) / nf;
+            nsm += 1;
+            errs.push(e);
+            if e > 1e-4 {
+                // the size of the point's derivative and spectrum against the largest
+                let vn = f0[r.clone()].iter().map(|x| x * x).sum::<f64>().sqrt();
+                let vm = f0.iter().fold(0f64, |x, &y| x.max(y.abs()));
+                big.push(format!("sea point {s}: |TL - FD| / |FD| {e:.3e}, |FD| / max |FD| {:.3e}, |VA| / max VA {:.3e}, |TL - FD| / max |FD| {:.3e}", nf / nfmax, vn / vm.max(1e-300), e * nf / nfmax));
+            }
+            if e > emax {
+                emax = e;
+                wnode = s;
+            }
+        }
+        errs.sort_by(|x, y| x.total_cmp(y));
+        let med = errs.get(errs.len() / 2).copied().unwrap_or(0.0);
+        let p99 = errs.get(errs.len() * 99 / 100).copied().unwrap_or(0.0);
+        let above = errs.iter().filter(|&&e| e > 1e-4).count();
+        println!(
+            "  tangent, frequency {} (h {h:e}): {nsm} smooth sea points, {nrough} not smooth (a kink within h), {nzero} with zero FD; |TL - FD| / |FD| at the smooth points: median {med:.3e}, p99 {p99:.3e}, max {emax:.3e} (sea point {wnode}), above 1e-4: {above}",
+            ik + 1
+        );
+        for b in big.iter().take(5) {
+            println!("    {b}");
+        }
+    }
     Ok(())
 }
 
@@ -963,13 +1185,24 @@ fn main() -> Result<()> {
     match a.cmd.as_str() {
         "restart-hs" => restart_hs(&grid, &a),
         "run" => {
+            if hww3_wave::uqgrid::UqSetup::is_uq_dir(&a.grid) {
+                println!("{}: UQ scheme of a structured grid, {} sea points", a.grid.display(), grid.lon.len());
+                return if a.flags.contains("--f64") { run::<f64>(&grid, None, &a) } else { run::<f32>(&grid, None, &a) };
+            }
             let t = Instant::now();
             let geo = Geometry::new(&grid);
             println!("geometry: {} nodes, {} triangles, {:.1} s", geo.np, geo.ne, t.elapsed().as_secs_f64());
             if a.flags.contains("--f64") {
-                run::<f64>(&grid, &geo, &a)
+                run::<f64>(&grid, Some(&geo), &a)
             } else {
-                run::<f32>(&grid, &geo, &a)
+                run::<f32>(&grid, Some(&geo), &a)
+            }
+        }
+        "check-uq" => {
+            if a.flags.contains("--f64") {
+                check_uq::<f64>(&grid, &a)
+            } else {
+                check_uq::<f32>(&grid, &a)
             }
         }
         "check-geo" => {

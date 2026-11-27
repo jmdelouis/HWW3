@@ -56,7 +56,7 @@ fn uq_limit_d<F: Float>(qb: F, qc: F, qu: F, qd: F, cfl: F, dqb: F, dqc: F, dqu:
 /// Tangent of [`theta_flux`] along the tangents of the four cell values.
 #[cube]
 #[allow(clippy::too_many_arguments)]
-fn theta_flux_d<F: Float>(ct: F, ctp: F, qtm: F, qt: F, qtp: F, qtpp: F, dqtm: F, dqt: F, dqtp: F, dqtpp: F) -> F {
+pub(crate) fn theta_flux_d<F: Float>(ct: F, ctp: F, qtm: F, qt: F, qtp: F, qtpp: F, dqtm: F, dqt: F, dqtp: F, dqtpp: F) -> F {
     let half = F::new(0.5f32);
     let one = F::new(1.0f32);
     let two = F::new(2.0f32);

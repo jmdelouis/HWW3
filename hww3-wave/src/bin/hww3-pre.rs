@@ -31,6 +31,19 @@
 //!     geometry of W3SETREF per node (raw/ref1_reflc.f64, ref1_refld.u32,
 //!     ref1_delx.f64, ref1_dely.f64, ref1_trnx.f64, ref1_trny.f64), read by
 //!     hww3-prop run --ice-ref.
+//! hww3-pre struct WW3_GRID.nml --data DIR --out GRID_DIR --scheme uq --nml NAMELISTS
+//!     The grid directory of the UQ scheme of WW3 (hww3_wave::uqgrid): every
+//!     sea point of the structured grid in WW3's order as a grid without
+//!     triangles, the structured grid itself (coordinates, bottom, MAPSTA,
+//!     obstructions) and the namelists, for hww3-prop run with the
+//!     geographic propagation of W3XYP3 (hww3_wave::prop_uq); with the
+//!     reflection geometry of W3SETREF per sea point.
+//! hww3-pre restart-uq <mesh dir> --restart IN.ww3 --uq-grid UQ_DIR --out OUT.ww3
+//!     A restart of hww3-prop on the mesh of a structured grid (hww3-pre
+//!     struct) written for the grid directory of the UQ scheme of the same
+//!     grid: one spectrum per sea point in WW3's order, the points left
+//!     out of the mesh with zero spectra, levels and ice; MAPSTA that of
+//!     the structured grid (1 or 2) with the sign of the node's.
 //! hww3-pre restart-struct <grid dir> --restart IN.ww3 --out OUT.ww3 --grid-nml WW3_GRID.nml --data DIR
 //!     A restart of hww3-prop on the mesh of a structured grid (hww3-pre
 //!     struct) written in WW3's order of the sea points of the structured
@@ -348,6 +361,9 @@ fn structured(a: &Args) -> Result<()> {
     let out = PathBuf::from(a.opts.get("--out").context("struct needs --out")?);
     let t0 = Instant::now();
     let g = StructGrid::read(&nml, &data)?;
+    if a.opts.get("--scheme").map(String::as_str) == Some("uq") {
+        return structured_uq(a, &g, &nml, &data, &out, t0);
+    }
     let c = g.counts();
     println!(
         "{} ({:?}, {} x {}, closed {}): land {}, sea {}, active boundary {}, excluded {} ({:.1} s)",
@@ -415,6 +431,127 @@ fn structured(a: &Args) -> Result<()> {
         println!("reflection geometry: {} nodes with a coast reflection, REFPARS {:?}", ncoast, rp.refpars);
     }
     println!("written to {} in {:.1} s", out.display(), t0.elapsed().as_secs_f64());
+    Ok(())
+}
+
+/// `struct --scheme uq`: the grid directory of the UQ scheme.
+fn structured_uq(a: &Args, g: &StructGrid, nml: &Path, data: &Path, out: &Path, t0: Instant) -> Result<()> {
+    use hww3_wave::ref1::{flagtr, read_obstructions, reflection_geometry_trn, Ref1Params};
+    use hww3_wave::uqgrid::{UqSetup, UqTables};
+    use hww3_wave::ww3grid::Namelists;
+    let rn = a.opts.get("--nml").context("struct --scheme uq needs --nml (the namelists of the run)")?;
+    let rnl = Namelists::read(Path::new(rn))?;
+    let gn = Namelists::read(nml)?;
+    let trn = read_obstructions(&gn, flagtr(&rnl)?, data, g.nx, g.ny)?;
+    UqSetup::write(out, g, trn.as_ref(), &std::fs::read_to_string(nml)?, &std::fs::read_to_string(rn)?)?;
+    let setup = UqSetup::read(out)?;
+    let pg = setup.pro3()?;
+    let t = UqTables::new(&pg)?;
+    let c = g.counts();
+    println!(
+        "{} ({:?}, {} x {}, closed {}): land {}, sea {}, active boundary {}, excluded {}; UQ scheme: {} sea points, NCENT {}, W3MAP3 counters {:?}, FLAGTR {}, DTMAX {} s, DTXY {} s, DTKTH {} s",
+        g.name,
+        g.gtype,
+        g.nx,
+        g.ny,
+        g.closed,
+        c[0],
+        c[1],
+        c[2],
+        c[3],
+        t.nsea,
+        pg.ncent(),
+        pg.counts(),
+        setup.params.flagtr,
+        setup.dtmax,
+        setup.params.dtcfl,
+        setup.dtkth
+    );
+    // the reflection geometry of W3SETREF per sea point (hww3-prop run --ice-ref)
+    let rp = Ref1Params::from_namelists(&rnl, &g.spec)?;
+    let geo = reflection_geometry_trn(g, &rp, trn.as_ref())?;
+    let raw = out.join("raw");
+    let (mut reflc, mut refld) = (vec![], vec![]);
+    let (mut dx, mut dy, mut tx, mut ty) = (vec![], vec![], vec![], vec![]);
+    for &i in &pg.sea_ij {
+        let s = geo.ij.binary_search(&(i as u32)).map_err(|_| anyhow::anyhow!("point {i} not a sea point of the reflection geometry"))?;
+        reflc.extend_from_slice(&geo.reflc[s]);
+        refld.extend(geo.refld[s].iter().map(|&v| v.max(0) as u32));
+        dx.push(geo.delx[s]);
+        dy.push(geo.dely[s]);
+        tx.push(geo.trnx[s]);
+        ty.push(geo.trny[s]);
+    }
+    let f64s = |name: &str, v: &[f64]| std::fs::write(raw.join(name), v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>());
+    f64s("ref1_reflc.f64", &reflc)?;
+    std::fs::write(raw.join("ref1_refld.u32"), refld.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())?;
+    f64s("ref1_delx.f64", &dx)?;
+    f64s("ref1_dely.f64", &dy)?;
+    f64s("ref1_trnx.f64", &tx)?;
+    f64s("ref1_trny.f64", &ty)?;
+    println!("written to {} in {:.1} s", out.display(), t0.elapsed().as_secs_f64());
+    Ok(())
+}
+
+/// `restart-uq`: a restart of the mesh of a structured grid for the grid
+/// directory of its UQ scheme.
+fn restart_uq(a: &Args) -> Result<()> {
+    use hww3_wave::ww3io::Restart;
+    let mesh = PathBuf::from(a.pos.first().context("restart-uq needs the mesh directory")?);
+    let uqd = PathBuf::from(a.opts.get("--uq-grid").context("restart-uq needs --uq-grid")?);
+    let inp = PathBuf::from(a.opts.get("--restart").context("restart-uq needs --restart")?);
+    let out = PathBuf::from(a.opts.get("--out").context("restart-uq needs --out")?);
+    let t0 = Instant::now();
+    let rd = |d: &Path, n: &str| -> Result<Vec<u32>> {
+        let b = std::fs::read(d.join("raw").join(n)).with_context(|| format!("{}/raw/{n}", d.display()))?;
+        Ok(b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect())
+    };
+    let (ij, sea_ij, uq_sea, uq_obc) = (rd(&mesh, "ij.u32")?, rd(&mesh, "sea_ij.u32")?, rd(&uqd, "sea_ij.u32")?, rd(&uqd, "obc.u32")?);
+    anyhow::ensure!(sea_ij == uq_sea, "the mesh and the UQ grid do not have the same sea points");
+    let r = Restart::read(&inp)?;
+    anyhow::ensure!(r.nsea == ij.len(), "restart of {} points, mesh of {} nodes", r.nsea, ij.len());
+    let (nspec, nsea) = (r.nspec, sea_ij.len());
+    let mut node = vec![usize::MAX; nsea];
+    for (k, &i) in ij.iter().enumerate() {
+        let s = sea_ij.binary_search(&i).map_err(|_| anyhow::anyhow!("node {k} at {i} is not a sea point"))?;
+        node[s] = k;
+    }
+    let mut base = vec![1i32; nsea];
+    for &o in &uq_obc {
+        base[o as usize] = 2;
+    }
+    let pick = |v: &[f32], x: f32| -> Vec<f32> {
+        if v.is_empty() {
+            return vec![];
+        }
+        node.iter().map(|&k| if k == usize::MAX { x } else { v[k] }).collect()
+    };
+    let mut va = vec![0f32; nsea * nspec];
+    for (s, &k) in node.iter().enumerate() {
+        if k != usize::MAX {
+            va[s * nspec..(s + 1) * nspec].copy_from_slice(&r.va[k * nspec..(k + 1) * nspec]);
+        }
+    }
+    let mapsta: Vec<i32> = node.iter().zip(&base).map(|(&k, &b)| if k != usize::MAX && r.mapsta[k] < 0 { -b } else { b }).collect();
+    let mapst2: Vec<i32> = node.iter().map(|&k| if k == usize::MAX { 0 } else { r.mapst2[k] }).collect();
+    let left = node.iter().filter(|&&k| k == usize::MAX).count();
+    let s = Restart {
+        nsea,
+        va,
+        wlv: pick(&r.wlv, 0.0),
+        ice: pick(&r.ice, 0.0),
+        mapsta,
+        mapst2,
+        ust: pick(&r.ust, 1e-5),
+        ustdir: pick(&r.ustdir, 0.0),
+        asf: pick(&r.asf, 1.0),
+        fpis: pick(&r.fpis, 0.0),
+        tail: vec![],
+        map_full: None,
+        ..r
+    };
+    s.write(&out)?;
+    println!("{}: {nsea} sea points ({left} out of the mesh, at zero), NSPEC {nspec}, time {}, written in {:.1} s", out.display(), s.time, t0.elapsed().as_secs_f64());
     Ok(())
 }
 
@@ -549,6 +686,7 @@ fn main() -> Result<()> {
         "struct" => structured(&a),
         "ideal-wind" => ideal_wind(&a),
         "restart-struct" => restart_struct(&a),
+        "restart-uq" => restart_uq(&a),
         other => bail!("unknown command {other}"),
     }
 }

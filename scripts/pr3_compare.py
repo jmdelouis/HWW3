@@ -1,10 +1,12 @@
 """H_s of hww3-pr3 (or hww3-prop) on a structured grid against a ww3_ounf file.
 
-    python scripts/pr3_compare.py RUN_DIR FIELD.nc [--json OUT.json]
+    python scripts/pr3_compare.py RUN_DIR FIELD.nc [FIELD2.nc ...] [--json OUT.json]
 
 RUN_DIR holds hs_YYYYMMDDHH.f32 on the whole NX x NY grid (iy NX + ix,
 -999.9 off the sea points), as hww3-pr3 writes them; FIELD.nc is the
-ww3_ounf output of the same grid (variable hs on latitude x longitude).
+ww3_ounf output of the same grid (variable hs on latitude x longitude), or
+several of them (a run in parts; an hour found in several is taken from
+the first).
 For every hour present in both: the number of sea points, the mean H_s of
 both, the largest and the RMS difference; then, over the hours after the
 first, the RMS difference of each point in time, with its median, 99th
@@ -23,12 +25,15 @@ import numpy as np
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("run")
-    ap.add_argument("nc")
+    ap.add_argument("nc", nargs="+")
     ap.add_argument("--json", default="")
     a = ap.parse_args()
-    ds = netCDF4.Dataset(a.nc)
-    times = netCDF4.num2date(ds["time"][:], ds["time"].units, only_use_cftime_datetimes=False)
-    index = {f"{t.year:04d}{t.month:02d}{t.day:02d}{t.hour:02d}": i for i, t in enumerate(times)}
+    index = {}
+    for name in a.nc:
+        ds = netCDF4.Dataset(name)
+        times = netCDF4.num2date(ds["time"][:], ds["time"].units, only_use_cftime_datetimes=False)
+        for i, t in enumerate(times):
+            index.setdefault(f"{t.year:04d}{t.month:02d}{t.day:02d}{t.hour:02d}", (ds, i))
     ny, nx = ds["hs"].shape[1:]
     rows, diffs, means = [], [], []
     for f in sorted(glob.glob(os.path.join(a.run, "hs_*.f32"))):
@@ -36,7 +41,8 @@ def main():
         if tag not in index:
             continue
         g = np.fromfile(f, dtype="<f4").astype(np.float64)
-        w = np.ma.filled(ds["hs"][index[tag]].astype(np.float64), np.nan).ravel()
+        ds, it = index[tag]
+        w = np.ma.filled(ds["hs"][it].astype(np.float64), np.nan).ravel()
         assert g.size == nx * ny, (g.size, nx, ny)
         ok = (g > -999.0) & np.isfinite(w)
         d = g[ok] - w[ok]
