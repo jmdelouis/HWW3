@@ -3044,10 +3044,29 @@ grid from a six-hour state, 1\,259 of them with ice and 370 with
 reflection. The largest relative differences are $1.7\times10^{-6}$ for
 W3SIS2, $2.1\times10^{-7}$ for W3SIC2, $2.1\times10^{-6}$ for W3SREF,
 and $5.0\times10^{-6}$ for the whole of W3SRCE with ice and reflection.
-The GPU kernels and their tangents come next. In the tangents, the
-break-up of the ice, the concentration window of IS2 and the clips of
-W3SREF are not differentiable, and the coastal geometry is fixed.
-The UQ scheme and the coupling of the grids follow.
+In the tangents, the break-up of the ice, the concentration window of
+IS2 and the clips of W3SREF are not differentiable, and the coastal
+geometry is fixed.
+\item The ice and reflection step now runs in the GPU model, after the
+source kernel (commits \texttt{700b4a0} and \texttt{2d7cfd4}). On the
+1\,410 nodes of the Arctic grid it agrees with the CPU reference to
+$1.4\times10^{-15}$ in double precision and $1.8\times10^{-6}$ in single
+precision ($5.2\times10^{-6}$ against WW3). The default path is
+identical bit for bit to the previous build. Restarts of the structured
+grids now carry the status map of the whole grid, as WW3 writes them,
+and WW3 reads them. The tangent of this step is in progress.
+\item With the Romero whitecapping in place, the Arctic grid with the
+parameters of the configuration unchanged takes \SI{226.5}{s} per model
+day (\SI{221.5}{s} with ice and reflection), against \SI{1127}{s} with
+\texttt{SDSBCHOICE}\,=\,1 in its place. Most of the earlier slowness
+came from that substitute whitecapping, whose short dynamic steps the
+Romero form does not need, rather than from the configuration.
+\item The UQ scheme of WW3 for the structured grids (W3MAP3, W3UTRN,
+W3MAPT, W3XYP3 with the GSE averaging, W3QCK1, W3QCK3, W3CFLXY) is
+transcribed in the CPU reference (commit \texttt{bf2f594}), with six
+synthetic tests. It will be checked against a WW3 run of the regular
+grid with the geographic propagation alone. The GPU kernels and the
+coupling of the grids follow.
 \end{itemize}
 
 
