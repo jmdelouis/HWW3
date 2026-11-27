@@ -23,23 +23,31 @@
 
 #define NPB (4 + BU_MAXK)
 
+// The arrays of a node: in shared memory those read across the bins in the
+// gathers (the spectrum a, the extended spectrum ue and the B arrays b1, b2
+// of the DIA, the per-frequency tables), about 50 KB, so that MINB_ADJ (3)
+// nodes fit in an SM; in a per-node scratch of global memory (gscr, 8 NSPEC
+// per node of the batch) those read mostly bin by bin: the cotangents ab,
+// vsb, vdb, the spectrum after the update an, the renewal sums of W3SDS4
+// ren, the sources vs, vd and the crest lengths dn.
 struct SrceAdjSh {
-    double *a, *an, *dn, *vs, *vd, *ab, *vsb, *vdb, *ue, *b1, *b2, *kb, *sc, *scb, *dr, *red, *tp, *kbb;
+    double *a, *an, *dn, *vs, *vd, *ab, *vsb, *vdb, *ren, *ue, *b1, *b2, *kb, *sc, *scb, *dr, *red, *tp, *kbb;
     uchar *ws;
 };
 
-__device__ SrceAdjSh srce_adj_shared(double *sh)
+__device__ SrceAdjSh srce_adj_shared(double *sh, double *g)
 {
     SrceAdjSh s;
+    s.ab = g;
+    s.vsb = g + NSPEC;
+    s.vdb = g + 2 * NSPEC;
+    s.an = g + 3 * NSPEC;
+    s.ren = g + 4 * NSPEC;
+    s.vs = g + 5 * NSPEC; // vs, vd contiguous: the DIA's ueb (NUE <= 2 NSPEC)
+    s.vd = g + 6 * NSPEC;
+    s.dn = g + 7 * NSPEC;
     s.a = sh;
-    s.an = s.a + NSPEC;
-    s.dn = s.an + NSPEC; // an, dn contiguous: the DIA's ueb (NUE <= 2 NSPEC)
-    s.vs = s.dn + NSPEC;
-    s.vd = s.vs + NSPEC;
-    s.ab = s.vd + NSPEC;
-    s.vsb = s.ab + NSPEC;
-    s.vdb = s.vsb + NSPEC;
-    s.ue = s.vdb + NSPEC;
+    s.ue = s.a + NSPEC;
     s.b1 = s.ue + NUE;
     s.b2 = s.b1 + NB1;
     s.kb = s.b2 + NB1;
@@ -53,14 +61,18 @@ __device__ SrceAdjSh srce_adj_shared(double *sh)
     return s;
 }
 
-#define SRCE_ADJ_SHARED_DOUBLES (8 * NSPEC + NUE + 2 * NB1 + NKB * NK + NSC + NSCB + 3 * NTH + NU + 1 + 4 * NK)
+#define SRCE_ADJ_SHARED_DOUBLES (NSPEC + NUE + 2 * NB1 + NKB * NK + NSC + NSCB + 3 * NTH + NU + 1 + 4 * NK)
+#define SRCE_ADJ_SCRATCH (8 * NSPEC)
+#ifndef MINB_ADJ
+#define MINB_ADJ 3
+#endif
 #define SRCE_ADJ_SHARED_BYTES (SRCE_ADJ_SHARED_DOUBLES * 8 + NSPEC)
 
-extern "C" __global__ void __launch_bounds__(NU, 1)
+extern "C" __global__ void __launch_bounds__(NU, MINB_ADJ)
 srce_adj(const double *va, const double *vout, const double *ybar, double *abar, SRCE_IN_ARGS, const double *dtauhf,
          const uint *tb1s, const uint *tb1e, const uint *tb2s, const uint *tb2e, const uint *tps, const uint *tpe,
-         double dtg, uint np, uint i0, const double *tape, const unsigned long long *tape_off, const uint *nsub, double *ubar,
-         double *udbar, double *pbar)
+         const uint *sats, const uint *sate, double dtg, uint np, uint i0, const double *tape, const unsigned long long *tape_off, const uint *nsub, double *ubar,
+         double *udbar, double *pbar, double *gscr)
 {
     extern __shared__ double shm[];
     SRCE_IN_MAKE;
@@ -75,7 +87,7 @@ srce_adj(const double *va, const double *vout, const double *ybar, double *abar,
         if (t < NPB) pbar[i * NPB + t] = 0.0;
         return;
     }
-    SrceAdjSh S = srce_adj_shared(shm);
+    SrceAdjSh S = srce_adj_shared(shm, gscr + (unsigned long long)blockIdx.x * SRCE_ADJ_SCRATCH);
     double *a = S.a, *an = S.an, *vs = S.vs, *vd = S.vd, *ab = S.ab, *vsb = S.vsb, *vdb = S.vdb, *kb = S.kb, *sc = S.sc, *scb = S.scb;
     const uint fz = (uint)par[P_TLFREEZE];
     // the cotangent of the output max(0, a)
@@ -111,13 +123,13 @@ srce_adj(const double *va, const double *vout, const double *ybar, double *abar,
         sln1(par, in.sig, in.ecos, in.esin, kb, vs, fhigh, ustar, udir, isc_ln);
         __syncthreads();
         sin4(par, in.tauhf, in.sig, in.dden, in.ecos, in.esin, in.sig2k, in.dden2k, in.fwtab, a, vs, vd, S.ws, kb, sc, S.dr, ustar, z0,
-             udir, beta, isc_in, true, 0);
+             udir, beta, isc_in, true, S.tp);
         double stauwx = sc[S_TAUWX], stauwy = sc[S_TAUWY];
         snl1(par, in.sig, in.dia_ip, in.dia_ic, in.af11, a, kb, S.ue, S.b1, S.b2, S.dn, vs, vd, wnmean * depth, isc_nl);
 #if ROMERO
         sds4_romero(par, in.sig, in.ecos, in.esin, a, kb, S.b1, S.b2, S.dn, vs, vd, ustar, udir, isc_ds);
 #else
-        sds4(par, in.sig, in.ecos, in.esin, in.satw, in.sati, in.cumw, a, kb, S.b1, S.dn, vs, vd, depth, ustar, udir, isc_ds);
+        sds4(par, in.sig, in.ecos, in.esin, in.satw, in.sati, in.cumw, a, kb, S.b1, S.dn, vs, vd, depth, ustar, udir, isc_ds, S.ren);
 #endif
         double dbd = sdb1(par, emean, fmean, wnmean, depth);
         sbt4(par, in.sig, in.dden, in.ecos, in.esin, in.fwtab, in.erftab, a, kb, sc, vs, vd, depth, sd50, spsic);
@@ -275,15 +287,15 @@ srce_adj(const double *va, const double *vout, const double *ybar, double *abar,
             sds4_romero_adj(par, in.sig, in.ecos, in.esin, a, kb, S.b1, S.b2, S.dn, vsb, vdb, ab, vs, vd, an, S.ue, scb, S.red, ustar,
                             udir, isc_ds);
 #else
-            sds4_adj(par, in.sig, in.ecos, in.esin, in.satw, in.sati, in.cumw, a, kb, S.b1, S.dn, vsb, vdb, ab, vs, vd, an, S.kbb, scb,
-                     S.red, depth, ustar, udir, isc_ds);
+            sds4_adj(par, in.sig, in.ecos, in.esin, in.satw, in.sati, in.cumw, a, kb, S.b1, S.dn, vsb, vdb, ab, S.ue, S.b2, an, S.kbb, scb,
+                     S.red, depth, ustar, udir, isc_ds, S.ren, sats, sate);
 #endif
         }
         if ((fz & 4u) == 0)
-            snl1_adj(par, in.sig, in.dia_ip, in.af11, a, kb, vsb, vdb, ab, scb, S.red, tb1s, tb1e, tb2s, tb2e, tps, tpe, S.ue, an, vs, vd,
-                     S.b1, S.kbb, wnmean * depth, depth, isc_nl);
+            snl1_adj(par, in.sig, in.dia_ip, in.af11, a, kb, vsb, vdb, ab, scb, S.red, tb1s, tb1e, tb2s, tb2e, tps, tpe, S.ue, vs, S.b2,
+                     S.dn, S.b1, S.kbb, wnmean * depth, depth, isc_nl);
         sin4_adj(par, in.tauhf, dtauhf, in.sig, in.dden, in.ecos, in.esin, in.sig2k, in.dden2k, in.fwtab, a, kb, sc, S.dr, S.ws, S.tp,
-                 vsb, vdb, ab, scb, S.kbb, S.red, ustar, z0, udir, beta, isc_in, true, (fz & 2u) == 0, scb + B_TWX);
+                 vsb, vdb, ab, scb, S.kbb, S.red, ustar, z0, udir, beta, isc_in, true, (fz & 2u) == 0, scb + B_TWX, false);
         if (t == 0) { scb[B_TWX] = 0.0; scb[B_TWY] = 0.0; }
         __syncthreads();
         if ((fz & 1u) == 0) sln1_adj(par, in.sig, in.ecos, in.esin, kb, vsb, fhigh, ustar, udir, isc_ln, scb, S.red);
@@ -308,12 +320,12 @@ srce_adj(const double *va, const double *vout, const double *ybar, double *abar,
     spr4(par, in.taut, in.sig, in.dden, a, S.ws, kb, sc, u, 0.0, 0.0);
     double ust0 = sc[S_USTAR], z00 = sc[S_Z0];
     sin4(par, in.tauhf, in.sig, in.dden, in.ecos, in.esin, in.sig2k, in.dden2k, in.fwtab, a, vs, vd, S.ws, kb, sc, S.dr, ust0, z00,
-         udir, beta, 1.0, false, 0);
+         udir, beta, 1.0, false, S.tp);
     double tauwx0 = sc[S_TAUWX], tauwy0 = sc[S_TAUWY];
     __syncthreads();
     spr4_adj(par, in.taut, in.sig, in.dden, a, S.ws, kb, S.kbb, scb, ab, u, tauwx0, tauwy0, scb + B_TWX);
     sin4_adj(par, in.tauhf, dtauhf, in.sig, in.dden, in.ecos, in.esin, in.sig2k, in.dden2k, in.fwtab, a, kb, sc, S.dr, S.ws, S.tp,
-             vsb, vdb, ab, scb, S.kbb, S.red, ust0, z00, udir, beta, 1.0, false, false, scb + B_TWX);
+             vsb, vdb, ab, scb, S.kbb, S.red, ust0, z00, udir, beta, 1.0, false, false, scb + B_TWX, false);
     for (uint r = 0; r < RS; r++) { uint is = r * NU + t; if (is < NSPEC) S.ws[is] = 1; }
     if (t == 0) { scb[B_TWX] = 0.0; scb[B_TWY] = 0.0; }
     __syncthreads();

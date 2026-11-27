@@ -1272,14 +1272,28 @@ differences ([GPU model results](wave_results.md)).
   transposes the source terms, the propagation, and the open boundary, the
   ice transitions, the drying and the level remap. Over six steps of grid v5
   the dot products agree to 1.5e-12 for the spectrum and to 8e-13 for the
-  parameters. A driver with two levels of checkpoints in host memory
-  (`Model::adjoint_run`) is written. Its run over 156 h comes after the
-  source adjoint is optimised: it now takes 71 s per step at the start of
-  the run.
-- **Cost of the source adjoint.** It is 9.0 times its value kernel, against
-  1.4 for the DIA prototype. It holds one node per SM against two, with
-  more serial work on one thread. It is the first thing to optimise once
-  the whole gradient is checked.
+  parameters. The driver with two levels of checkpoints in host memory
+  (`Model::adjoint_run`) gives the same dot products to the bit.
+- **Cost of the source adjoint.** The first version took 9.0 times its
+  value kernel. It now takes 3.3 times: 0.225 s against 0.068 s on 18,690
+  nodes, with the same dot products to the bit. The gains came from:
+  - the sums over the directions run on one thread per frequency;
+  - `W3SIN4` reused from the recomputed sub-step;
+  - the arrays read bin by bin moved to a per-node scratch in global
+    memory (50 KB of shared memory, three nodes per SM under a register cap
+    of 168);
+  - above all, the transpose of the saturation of `W3SDS4` through a
+    transposed table, where each bin had scanned the whole table. That
+    loop had made `W3SDS4` half of the adjoint.
+
+  The two value passes before the adjoint (the count of the sub-steps, then
+  the tape) now cost 0.13 s, more than half of it. On grid v5 at the start
+  of the run, the source adjoint takes 25.7 s per step against 71 s.
+- **The 156 h gradient** (checkpoint d) is run against the derivatives of
+  the training cost along the nine tangents of the `BETAMAX`$(U)$ test.
+  `scripts/cal_obs.py seed` gives the derivatives of the cost with respect
+  to the hourly $H_s$ and $T_{m02}$ fields. Along the tangents of `BETAU3`
+  and `SDSC2` they reproduce the derivatives of `cal_obs.py eval` to 1e-9.
 - **Not covered.** The ice and reflection step of the IRI configuration
   (`W3SIC2`, `W3SIS2`, `W3SREF`) is refused for now. Its adjoint comes once
   its tangents are in.

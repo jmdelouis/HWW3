@@ -261,7 +261,19 @@ distribution of their relative difference node by node.
 does the same for the CUDA C adjoint of the propagation (`cuda_prop`)
 after the first step's forcing: the refraction, the frequency shift, the
 geographic propagation of three frequencies and the whole propagation of
-the step.
+the step. `hww3-prop adj-step GRID --restart FILE [forcing] [--steps N]
+[--k1 K]` does it for `N` whole steps (default 6) through the driver with
+two levels of checkpoints in host memory (every `K` steps, default 3), for
+the spectra at the start, `BETAMAX`, `SDSC2`, `NLPROP` and `BJGAM`.
+`hww3-prop adj-grad GRID --restart FILE [forcing and parameters as for
+run] --hours H --seeds DIR [--k1 K]` computes the gradient of a cost of
+the hourly $H_s$ and $T_{m02}$ over `H` hours by the adjoint. It reads the
+derivatives of the cost with respect to those fields from `DIR`
+(`hsb_`, `t02b_YYYYMMDDHH.f64`, written by `scripts/cal_obs.py seed`), and
+prints $dJ/d\ln p$ for `BETAMAX`, `SDSC2`, `NLPROP` and `BJGAM` and
+$dJ/dc_k$ for the coefficients of `BETAMAX`$(U)$. The checkpoints are taken
+every `K` steps, by default the square root of the number of steps; for
+156 h, 62 checkpoints of 4.2 GB are held in host memory.
 
 `tables` computes the stress tables of `INSIN4` for the `BETAMAX` of each
 parameter file and compares them with those WW3 wrote there: `TAUT`

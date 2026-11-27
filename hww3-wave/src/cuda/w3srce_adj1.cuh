@@ -92,20 +92,22 @@ __device__ void spr4_adj(const double *par, const double *taut, const double *si
                          double tauwy, double *tauwb)
 {
     const uint t = threadIdx.x;
+    // the sums over the directions (as spr4), one frequency per thread
+    if (t < NK) {
+        double e = 0.0, e2 = 0.0;
+        for (uint th = 0; th < NTH; th++) {
+            double x = a[t * NTH + th];
+            e += x;
+            if (ws[t * NTH + th] != 0) e2 += x;
+        }
+        kbb[t] = e;
+        kbb[NK + t] = e2;
+    }
+    __syncthreads();
     if (t == 0) {
         const double tw = par[P_WWNMEANPTAIL], wp = par[P_WWNMEANP], e7 = flt(1.0e-7f);
         double emean = 0.0, fmean = 0.0, fmean1 = 0.0, wnmean = 0.0, emeanws = 0.0, fmeanws = 0.0;
-        double eb_[NK], eb2_[NK];
-        for (uint ik = 0; ik < NK; ik++) {
-            double e = 0.0, e2 = 0.0;
-            for (uint th = 0; th < NTH; th++) {
-                double x = a[ik * NTH + th];
-                e += x;
-                if (ws[ik * NTH + th] != 0) e2 += x;
-            }
-            eb_[ik] = e;
-            eb2_[ik] = e2;
-        }
+        const double *eb_ = kbb, *eb2_ = kbb + NK;
         for (uint ik = 0; ik < NK; ik++) {
             double f = kb[K_DCG * NK + ik], eb = eb_[ik] * f, eb2 = eb2_[ik] * f;
             double s = sig[ik + 1], sp = kb[K_SPW * NK + ik];
@@ -282,7 +284,7 @@ __device__ void sdb1_adj(const double *par, double emean, double fmean, double w
     } else scb[B_SDBC2] += hmb * depth;
 }
 
-// W3SBT4: from vsb, vdb, adds the cotangents of a. kbb: NK values of scratch
+// W3SBT4: from vsb, vdb, adds the cotangents of a. kbb: 2 NK values of scratch
 __device__ void sbt4_adj(const double *par, const double *sig, const double *dden, const double *fwtab, const double *erftab,
                          const double *a, const double *kb, const double *vsb, const double *vdb, double *ab, double *kbb,
                          double *sc, double *red, double depth, double d50_, double psic)
@@ -296,18 +298,19 @@ __device__ void sbt4_adj(const double *par, const double *sig, const double *dde
         part += -kb[K_CBETA * NK + is / NTH] * (vsb[is] * a[is] + vdb[is]);
     }
     double fbtb = block_sum(part, red);
+    if (t < NK) {
+        double e = 0.0;
+        for (uint th = 0; th < NTH; th++) e += a[t * NTH + th];
+        kbb[NK + t] = e;
+        kbb[t] = 0.0;
+    }
+    __syncthreads();
     if (t == 0) {
         const double grav = par[P_GRAV], sg1 = par[P_SED_SG] - 1.0, e7 = flt(1.0e-7f);
         uint nfw = (uint)par[P_NFW];
         double d50 = fmin(fmax(d50_, flt(0.00001f)), 1.0);
         double background = fmax(par[P_SBTCX + 5], par[P_SBTCX + 6] * d50);
-        double eb_[NK];
-        for (uint ik = 0; ik < NK; ik++) {
-            double e = 0.0;
-            for (uint th = 0; th < NTH; th++) e += a[ik * NTH + th];
-            eb_[ik] = e;
-            kbb[ik] = 0.0;
-        }
+        const double *eb_ = kbb + NK;
         double sh[3], aos[3], uo2[3], aorbs[3], xis[3], fws[3], rvs[3], xivs[3];
         double cpsi = 2.0 * grav * sg1 * d50;
         for (uint isub = 0; isub < 3; isub++) {

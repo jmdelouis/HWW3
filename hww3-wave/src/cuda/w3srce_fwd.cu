@@ -15,20 +15,24 @@ struct SrceIn {
     const double *af11, *taut, *tauhf, *cumw;
 };
 
-// the shared arrays of the value kernel
+// the arrays of the value kernel: in shared memory those read across the
+// bins (the spectrum, the DIA's extended spectrum and B arrays, the
+// per-frequency tables), about 49 KB, so that MINB_FWD (3) nodes fit in an
+// SM; the sources vs, vd and the crest lengths dn in a per-node scratch of
+// global memory (gscr, 3 NSPEC per node of the launch)
 struct SrceSh {
     double *a, *vs, *vd, *dn, *ue, *b1, *b2, *kb, *sc, *dr, *red, *tp;
     uchar *ws;
 };
 
-__device__ SrceSh srce_shared(double *sh)
+__device__ SrceSh srce_shared(double *sh, double *g)
 {
     SrceSh s;
+    s.vs = g;
+    s.vd = g + NSPEC;
+    s.dn = g + 2 * NSPEC;
     s.a = sh;
-    s.vs = s.a + NSPEC;
-    s.vd = s.vs + NSPEC;
-    s.dn = s.vd + NSPEC;
-    s.ue = s.dn + NSPEC;
+    s.ue = s.a + NSPEC;
     s.b1 = s.ue + NUE;
     s.b2 = s.b1 + NB1;
     s.kb = s.b2 + NB1;
@@ -40,8 +44,12 @@ __device__ SrceSh srce_shared(double *sh)
     return s;
 }
 
-#define SRCE_SHARED_DOUBLES (4 * NSPEC + NUE + 2 * NB1 + NKB * NK + NSC + 3 * NTH + NU + 2 * NK)
+#define SRCE_SHARED_DOUBLES (NSPEC + NUE + 2 * NB1 + NKB * NK + NSC + 3 * NTH + NU + 2 * NK)
 #define SRCE_SHARED_BYTES (SRCE_SHARED_DOUBLES * 8 + NSPEC)
+#define SRCE_FWD_SCRATCH (3 * NSPEC)
+#ifndef MINB_FWD
+#define MINB_FWD 3
+#endif
 
 // the per-frequency constants of the node
 __device__ void srce_init_kb(const SrceIn &in, double *kb, uint i, uint np)
@@ -69,15 +77,15 @@ __device__ void srce_init_kb(const SrceIn &in, double *kb, uint i, uint np)
     SrceIn in = {wn, cg, dw, u10, u10d, ice, d50, psic, nflag, par, sig, dden, ecos, esin, sig2k, dden2k, fwtab,       \
                  erftab, satw, sati, dia_ip, dia_ic, af11, taut, tauhf, cumw}
 
-extern "C" __global__ void __launch_bounds__(NU, 1)
+extern "C" __global__ void __launch_bounds__(NU, MINB_FWD)
 srce_fwd(double *va, SRCE_IN_ARGS, double *ust_out, double *dtdyn_out, double dtg, uint np, uint i0,
-         double *tape, const unsigned long long *tape_off, const uint *tape_cap, uint *nsub)
+         double *tape, const unsigned long long *tape_off, const uint *tape_cap, uint *nsub, double *gscr)
 {
     extern __shared__ double shm[];
     SRCE_IN_MAKE;
     const uint i = i0 + blockIdx.x, t = threadIdx.x;
     if (i >= np || (in.nflag[i] & 4u) == 0) return;
-    SrceSh S = srce_shared(shm);
+    SrceSh S = srce_shared(shm, gscr + (unsigned long long)blockIdx.x * SRCE_FWD_SCRATCH);
     double *a = S.a, *vs = S.vs, *vd = S.vd, *kb = S.kb, *sc = S.sc;
     for (uint r = 0; r < RS; r++) {
         uint is = r * NU + t;

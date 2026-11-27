@@ -23,9 +23,14 @@ J = sum (r_alt / SA)^2 + sum (r_hs / SB)^2 + sum (r_t02 / ST)^2 over the
 observations, and the derivatives of the scores and of J along each
 tangent; with --npz the residuals and their derivatives, for cal_gn.py.
 
+seed: the derivatives of J with respect to the hourly H_s and T_m02 fields
+of RUN_DIR (hsb_, t02b_YYYYMMDDHH.f64 in OUT_DIR), the seeds of the adjoint
+(milestone M4, hww3-prop adj-grad).
+
 usage:
     python scripts/cal_obs.py build OP.npz RUN_DIR START END ICE_NC[+ICE_NC] GRID_DIR [--l3 DIR] [--buoys DIR] [--min-hours N]
     python scripts/cal_obs.py eval OP.npz RUN_DIR [NAME:DIR ...] [--json OUT] [--npz OUT] [--sigma SA+SB+ST]
+    python scripts/cal_obs.py seed OP.npz RUN_DIR OUT_DIR [--sigma SA+SB+ST]
 START and END are YYYYMMDDHH, the first and last hours of the window.
 """
 import datetime
@@ -377,6 +382,74 @@ def evaluate(op, rdir, tans, sigma=SIGMA):
     return res, r, jac, cost
 
 
+def seed(op, rdir, outdir, sigma=SIGMA):
+    """The seeds of the adjoint (milestone M4): the derivatives of J with
+    respect to the hourly H_s and T_m02 fields of RUN_DIR, the transposes of
+    the operators of apply() applied to 2 psi(z) / sigma, written as
+    hsb_TAG.f64 and t02b_TAG.f64 (one value per node) in OUTDIR for each hour
+    of the window. dJ along a tangent is then the sum over the hours of the
+    products of these fields with its dhs_ and dt02_ fields, as evaluate()
+    gives it."""
+    o = np.load(op)
+    tags = list(o["tags"])
+    check_spinup(rdir, tags)
+    alt, bh, bt = apply(o, rdir)
+    cost = o["bt_cost"]
+    sa, sb, st = sigma
+    if "bh_sigma" in o:
+        sb, st = o["bh_sigma"], o["bt_sigma"][cost]
+    delta = float(o["huber_delta"]) if "huber_delta" in o else 0.0
+
+    def psi(z):
+        return np.clip(z, -delta, delta) if delta > 0 else z
+    g_alt = 2 * psi((alt - o["alt_obs"]) / sa) / sa
+    g_bhs = 2 * psi((bh - o["bh_obs"]) / sb) / sb
+    g_btm = np.zeros(len(bt))
+    g_btm[cost] = 2 * psi((bt - o["bt_obs"])[cost] / st) / st
+    nn = len(field(rdir, "hs", tags[0]))
+    hsb = np.zeros((len(tags) + 1, nn))
+    t02b = np.zeros((len(tags) + 1, nn))
+    # altimeters: the block mean of the samples interpolated in time
+    k, n, w = o["alt_k"], o["alt_n"], o["alt_w"]
+    c = g_alt[:, None] / k.shape[1]
+    np.add.at(hsb, (k.ravel(), n.ravel()), (c * (1 - w)).ravel())
+    np.add.at(hsb, (k.ravel() + 1, n.ravel()), (c * w).ravel())
+    if "bw_w" in o:
+        nodes, wts = o["bw_nodes"], o["bw_w"]
+        kb, nb, wb = o["bh_k"], nodes[o["bh_b"]], wts[o["bh_b"]]
+        np.add.at(hsb, (np.repeat(kb, nb.shape[1]), nb.ravel()), (np.where(wb > 0, wb, 0.0) * g_bhs[:, None]).ravel())
+        kt, nt, wt = o["bt_k"], nodes[o["bt_b"]], wts[o["bt_b"]]
+        wt = np.where(wt > 0, wt, 0.0)
+        if "bw_tm02" in o and str(o["bw_tm02"]) == "moments":
+            for i, tag in enumerate(tags):
+                s_ = kt == i
+                if not s_.any():
+                    continue
+                hs, t = field(rdir, "hs", tag), field(rdir, "t02", tag)
+                m0 = (hs / 4) ** 2
+                m2 = m0 * (2 * np.pi / t) ** 2
+                ni, wi, gi = nt[s_], wt[s_], g_btm[s_]
+                M0 = (np.where(wi > 0, m0[ni], 0.0) * wi).sum(1)
+                M2 = (np.where(wi > 0, m2[ni], 0.0) * wi).sum(1)
+                T = 2 * np.pi * np.sqrt(M0 / M2)
+                gM0, gM2 = gi * 0.5 * T / M0, -gi * 0.5 * T / M2
+                hn, tn, m0n = hs[ni], t[ni], m0[ni]
+                gh = wi * (gM0[:, None] + gM2[:, None] * (2 * np.pi / tn) ** 2) * hn / 8
+                gt = wi * gM2[:, None] * (-2 * m0n * (2 * np.pi) ** 2 / tn ** 3)
+                np.add.at(hsb[i], ni.ravel(), np.where(wi > 0, gh, 0.0).ravel())
+                np.add.at(t02b[i], ni.ravel(), np.where(wi > 0, gt, 0.0).ravel())
+        else:
+            np.add.at(t02b, (np.repeat(kt, nt.shape[1]), nt.ravel()), (wt * g_btm[:, None]).ravel())
+    else:
+        np.add.at(hsb, (o["bh_k"], o["bh_n"]), g_bhs)
+        np.add.at(t02b, (o["bt_k"], o["bt_n"]), g_btm)
+    os.makedirs(outdir, exist_ok=True)
+    for i, tag in enumerate(tags):
+        hsb[i].astype("<f8").tofile(os.path.join(outdir, "hsb_%s.f64" % tag))
+        t02b[i].astype("<f8").tofile(os.path.join(outdir, "t02b_%s.f64" % tag))
+    print("seeds of %d hours in %s: |dJ/dHs| sum %.6e, |dJ/dTm02| sum %.6e" % (len(tags), outdir, np.abs(hsb).sum(), np.abs(t02b).sum()))
+
+
 def main():
     a = sys.argv[1:]
     opts = {}
@@ -389,6 +462,9 @@ def main():
         build(a[1], a[2], a[3], a[4], a[5], a[6], opts.get("--l3", L3), opts.get("--buoys", BUOYS), int(opts.get("--min-hours", 24)))
         return
     sigma = tuple(float(x) for x in opts["--sigma"].split("+")) if "--sigma" in opts else SIGMA
+    if a[0] == "seed":
+        seed(a[1], a[2], a[3], sigma)
+        return
     tans = [tuple(x.split(":", 1)) for x in a[3:]]
     res, r, jac, cost = evaluate(a[1], a[2], tans, sigma)
     o = np.load(a[1])

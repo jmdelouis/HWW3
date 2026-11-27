@@ -24,6 +24,7 @@
 #   prop: hww3-prop adj-prop: the dot-product tests of the CUDA C adjoint
 #        of the propagation against the tangent kernels on grid v5 K=4;
 #   step: hww3-prop adj-step: the same for STEPS whole steps (default 6);
+#   ncu: Nsight Compute on the adjoint kernel of the source terms;
 #   geo: hww3-prop adj-geo on grid v5 K=4 from the restart of 1 January
 #        00:10, one sub-step of frequency IK (default 12).
 #   sbatch --export=ALL,BIN=$S/opt/bin_m4 scripts/m4_proto_hpc.slurm
@@ -74,6 +75,13 @@ for part in ${PARTS:-dia geo}; do
       fi
       echo "== timing: the harness repeated 10 times, all the terms"
       $B/hww3-src adj-src $H --replicate 10 --masks 0 | grep -E "^CUDA C|adjoint kernel"
+      echo "== the same with two nodes per SM asked of the adjoint kernel (HWW3_ADJ_MINB=2)"
+      HWW3_ADJ_MINB=2 $B/hww3-src adj-src $H --replicate 10 --masks 0 | grep -E "adjoint kernel"
+      ;;
+    ncu)
+      echo "== Nsight Compute on the adjoint kernel of the source terms (harness repeated 10 times)"
+      ncu --kernel-name regex:srce_adj --launch-count 1 --section SpeedOfLight --section Occupancy --section LaunchStats         --section WarpStateStats --section SchedulerStats --section SourceCounters --csv --page details         --log-file $O/ncu_srce_adj.csv $B/hww3-src adj-src $H --replicate 10 --masks 0 | grep -E "adjoint kernel"
+      grep -vE "^==PROF==" $O/ncu_srce_adj.csv | cut -d, -f12- | head -120
       ;;
     step)
       FORCE="--current $D/current.ww3 --level $D/level.ww3 --ice $D/ice.ww3 --nest $D/nest.ww3 --wind $D/wind.ww3 --sources $P"

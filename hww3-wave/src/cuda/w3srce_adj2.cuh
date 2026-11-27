@@ -17,18 +17,22 @@ __device__ void tauhf2_dw(const double *tab, uint base, uint ind, uint j, uint n
 // scb[B_UDIR], scb[B_BETA]) and of BETAMAX through the derivative of the
 // tail-stress table (scb[B_BETATAB], with dtauhf the derivative of the table
 // with respect to BETAMAX). spec = false leaves out the cotangents of S, D
-// (the freeze mask of the tangent). It recomputes sin4 (acc = false) into
-// sc, dr, ws and the per-frequency stress tp[2 NK]. kbb: NK of scratch.
+// (the freeze mask of the tangent). With fresh, it recomputes sin4 (acc =
+// false) into sc, dr, ws and the per-frequency stress tp[2 NK]; without, it
+// uses those of the caller's last call of sin4 with tp. kbb: NK of scratch.
 __device__ void sin4_adj(const double *par, const double *tauhf, const double *dtauhf, const double *sig, const double *dden,
                          const double *ecos, const double *esin, const double *sig2k, const double *dden2k,
                          const double *fwtab, const double *a, double *kb, double *sc, double *dr, uchar *ws, double *tp,
                          const double *vsb, const double *vdb, double *ab, double *scb, double *kbb, double *red,
                          double ustar, double z0, double usdir, double beta, double scale, bool acc, bool spec,
-                         const double *tauwb)
+                         const double *tauwb, bool fresh)
 {
     const uint t = threadIdx.x;
-    // the forward pass (no accumulation): sc holds its scalars, tp the stress
-    sin4(par, tauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, a, 0, 0, ws, kb, sc, dr, ustar, z0, usdir, beta, 1.0, false, tp);
+    // the forward pass (no accumulation): sc holds its scalars, tp the
+    // stress; without fresh, the caller's last call of sin4 at this state,
+    // with tp, left them (nothing in between writes those slots)
+    if (fresh)
+        sin4(par, tauhf, sig, dden, ecos, esin, sig2k, dden2k, fwtab, a, 0, 0, ws, kb, sc, dr, ustar, z0, usdir, beta, 1.0, false, tp);
     const double grav = par[P_GRAV], kappa = par[P_KAPPA], nu_air = par[P_NU_AIR], drat = par[P_DRAT];
     const double const0 = beta / (kappa * kappa) * drat;
     const double tsh = fabs(par[P_TTAUWSHELTER]);
@@ -271,6 +275,12 @@ __device__ void sin4_adj(const double *par, const double *tauhf, const double *d
         }
         __syncthreads();
     }
+    // the energy per frequency (kb[K_EB] may have been overwritten since)
+    if (t < NK) {
+        double e = 0.0;
+        for (uint th = 0; th < NTH; th++) e += a[t * NTH + th];
+        kbb[t] = e;
+    }
     z0b = block_sum(z0b, red);
     betab = block_sum(betab, red);
     fwb = block_sum(fwb, red);
@@ -283,8 +293,7 @@ __device__ void sin4_adj(const double *par, const double *tauhf, const double *d
         double udb = -cs[2] * ustar * ustar * su + cs[3] * ustar * ustar * cu;
         double uo = 0.0, ao = 0.0;
         for (uint ik = 0; ik < NK; ik++) {
-            double e = 0.0;
-            for (uint th = 0; th < NTH; th++) e += a[ik * NTH + th];
+            double e = kbb[ik];
             double s = sig[ik + 1], c = kb[K_CG * NK + ik];
             uo += e * s * s * dden[ik] / c;
             ao += e * dden[ik] / c;

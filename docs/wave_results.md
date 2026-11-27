@@ -2265,8 +2265,66 @@ before the 156 h gradient. At this rate 936 steps would take about 22 h,
 or about 6 h at the mean rate of the first day, against the 2.1–2.4 h of
 the plan.
 
-The GPU time from 23 November 07:27 is 53.3 GPU-hours, of which 0.64
-for the adjoint jobs of this section (4553862, 4555442, 4555775).
+### Optimisation of the source adjoint (27 November)
+
+The freeze masks of the dot-product tests also time each term alone. On
+the HWW3 harness, the adjoint with no term (the recomputed sub-steps and
+the chain of the update) took 0.031 s, and with `W3SDS4` alone 0.087 s
+out of 0.093 s for all the terms. The transpose of the saturation was the
+cause: for each bin it scanned the whole table of the saturation weights,
+252 comparisons.
+
+The steps, all with the dot products identical to the bit (jobs 4556796,
+4557828, 4559034):
+
+| Version | Shared memory, registers | Adjoint on 18,690 nodes | Against the value kernel |
+|---|---|---|---|
+| first (8ff4ff1) | 114,680 B, 255 | 0.616 s | 9.0 |
+| sums on one thread per frequency, `W3SIN4` reused, cotangents in a global scratch | 77,816 B, 255 (2 nodes per SM) | 0.370 s | 4.7 |
+| transposed saturation table, sources and crest lengths in the scratch, `__launch_bounds__(128, 3)` | 50,168 B, 168 (3 nodes per SM) | 0.225 s | 3.3 |
+
+Notes on the last version:
+- The cap of 168 registers spills 132 B, and the uncapped kernel at two
+  nodes per SM takes 0.219 s. Occupancy is no longer the limit.
+- The value kernel, given the same layout (49,248 B, 168 registers), keeps
+  its 0.068 s.
+- The two value passes of the adjoint (the count of the sub-steps, then
+  the tape) take 0.130 s.
+- Keeping the renewal sums of the cumulative term from the recomputed
+  sub-step gained nothing: they run only where the saturation exceeds its
+  threshold.
+- Splitting the DIA adjoint into its own kernel was not done. It takes
+  about 5 % of the adjoint (0.005 s of 0.093 s on the harness), and a
+  separate kernel would need one launch per sub-step across nodes whose
+  sub-steps differ.
+
+Six steps of grid v5 (job 4559034), with the two-level driver (checkpoints
+every 3 steps), give the same dot products to the bit as one checkpoint
+per step:
+- The adjoint with its value runs takes 250 s, against 501 s at first.
+- Of that, the source terms take 154 s (25.7 s per step), the propagation
+  and the forcing 14 s, the recomputed steps 60 s and the checkpoints 32 s.
+- The checkpoints are copied through a pinned host buffer, about 4 s each
+  for 4.2 GB.
+
+### Derivatives of the cost for the adjoint
+
+`scripts/cal_obs.py seed` writes, per hour of the window, the derivative
+of the cost with respect to the $H_s$ and $T_{m02}$ field of each node. It
+applies the transposes of its operators to $2\psi(z)/\sigma$:
+- the time interpolation and block means of the altimeters;
+- the weights of the depth-aware buoy operator;
+- $T_{m02}$ through the moments $m_0$ and $m_2$.
+
+`hww3-prop adj-grad` reads these as the seeds of the adjoint, through the
+transpose of the outputs. Summed over the 49 hours of the training window
+with the $dH_s$ and $dT_{m02}$ fields of the tangents of `BETAU3` and
+`SDSC2`, they give the derivatives of `cal_obs.py eval` to 9.6e-10 and
+2.7e-10. The cost at $p_0$ is 35,543.
+
+The GPU time from 23 November 07:27 is 54.6 GPU-hours, of which 1.50
+for the adjoint jobs of this section (4553862, 4555442, 4555775, 4556796,
+4557828, 4559034).
 
 ## Coastal diagnostics of the buoy scores
 

@@ -61,6 +61,13 @@ fn par_defs() -> Vec<String> {
     ]
 }
 
+/// The nodes per SM asked of the adjoint kernel of the source terms
+/// (`__launch_bounds__`, which caps its registers): 3, or the value of the
+/// environment variable `HWW3_ADJ_MINB` (1 to 4), for timing comparisons.
+fn adj_minb() -> u32 {
+    std::env::var("HWW3_ADJ_MINB").ok().and_then(|v| v.parse().ok()).filter(|v| (1..=4).contains(v)).unwrap_or(3)
+}
+
 /// The source tables of [`SrceTables`] on the device, and the kernels.
 pub struct SrceCuda {
     /// The context.
@@ -88,6 +95,7 @@ pub struct SrceCuda {
     cumw: CudaSlice<f64>,
     dtauhf: CudaSlice<f64>,
     tb: [CudaSlice<u32>; 6],
+    sat_t: [CudaSlice<u32>; 2],
     /// Frequencies and directions.
     pub nk: usize,
     /// See [`SrceCuda::nk`].
@@ -225,6 +233,11 @@ impl SrceCuda {
             format!("-DNSAT={}u", t.nsat.max(1)),
             format!("-DNU={nu}u"),
             format!("-DROMERO={}", romero as u32),
+            // source lines for the profilers (no cost at run time)
+            "-lineinfo".to_string(),
+            // nodes per SM asked of the adjoint and value kernels (their register caps)
+            format!("-DMINB_ADJ={}", adj_minb()),
+            "-DMINB_FWD=3".to_string(),
         ]);
         let src = [W3SRCE, W3SRCE_FWD, W3SRCE_ADJ1, W3SRCE_ADJ1B, W3SRCE_ADJ2, W3SRCE_ADJ3, W3SRCE_ADJ].join("\n");
         let ctx = CudaContext::new(0)?;
@@ -233,11 +246,11 @@ impl SrceCuda {
         let module = ctx.load_module(ptx)?;
         let f_fwd = module.load_function("srce_fwd")?;
         let f_adj = module.load_function("srce_adj")?;
-        let doubles = 4 * nspec + nue + 2 * nb1 + 13 * nk + NSC + 3 * nth + nu + 2 * nk;
+        let doubles = nspec + nue + 2 * nb1 + 13 * nk + NSC + 3 * nth + nu + 2 * nk;
         let smem_fwd = (doubles * 8 + nspec) as u32;
         f_fwd.set_attribute(CUfunction_attribute_enum::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem_fwd as i32)?;
         let regs_fwd = f_fwd.num_regs()?;
-        let doubles = 8 * nspec + nue + 2 * nb1 + 13 * nk + NSC + (NSC + 10) + 3 * nth + nu + 1 + 4 * nk;
+        let doubles = nspec + nue + 2 * nb1 + 13 * nk + NSC + (NSC + 10) + 3 * nth + nu + 1 + 4 * nk;
         let smem_adj = (doubles * 8 + nspec) as u32;
         f_adj
             .set_attribute(CUfunction_attribute_enum::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem_adj as i32)
@@ -255,7 +268,27 @@ impl SrceCuda {
             st.clone_htod(&tab.tps)?,
             st.clone_htod(&tab.tpe)?,
         ];
+        // SATI transposed: for each direction, the entries th NSAT + j that
+        // read it, in the order of th then j
+        let nsat = t.nsat.max(1);
+        let mut sats = vec![0u32; nth + 1];
+        let mut sate = vec![];
+        for th2 in 0..nth {
+            for th in 0..nth {
+                for j in 0..nsat {
+                    if t.sati.get(j + th * nsat).copied() == Some(th2 as u32) {
+                        sate.push((th * nsat + j) as u32);
+                    }
+                }
+            }
+            sats[th2 + 1] = sate.len() as u32;
+        }
+        if sate.is_empty() {
+            sate.push(0);
+        }
+        let sat_t = [st.clone_htod(&sats)?, st.clone_htod(&sate)?];
         Ok(SrceCuda {
+            sat_t,
             par: st.clone_htod(&t.par)?,
             sig: st.clone_htod(&t.sig)?,
             dden: st.clone_htod(&t.dden)?,
@@ -334,9 +367,10 @@ impl SrceCuda {
     /// The value kernel on nodes `i0 .. i0 + n` of `np`: spectra at `va`
     /// updated in place; with `tape` non-zero, the records of the sub-steps
     /// written (`[tape, tape_off, tape_cap]`); `nsub` (or 0) the number of
-    /// sub-steps of each node.
+    /// sub-steps of each node; `scr` the scratch of the `n` nodes
+    /// (`3 nspec` values each).
     #[allow(clippy::too_many_arguments)]
-    fn launch_fwd(&self, d: &SrceDev, va: u64, ust: u64, dtdyn: u64, dtg: f64, np: usize, i0: usize, n: usize, tape: [u64; 3], nsub: u64) -> Result<()> {
+    fn launch_fwd(&self, d: &SrceDev, va: u64, ust: u64, dtdyn: u64, dtg: f64, np: usize, i0: usize, n: usize, tape: [u64; 3], nsub: u64, scr: u64) -> Result<()> {
         if n == 0 {
             return Ok(());
         }
@@ -345,7 +379,7 @@ impl SrceCuda {
         let mut b = self.st.launch_builder(&self.f_fwd);
         b.arg(&va);
         self.push_in(&mut b, d);
-        b.arg(&ust).arg(&dtdyn).arg(&dtg).arg(&np32).arg(&i032).arg(&tape[0]).arg(&tape[1]).arg(&tape[2]).arg(&nsub);
+        b.arg(&ust).arg(&dtdyn).arg(&dtg).arg(&np32).arg(&i032).arg(&tape[0]).arg(&tape[1]).arg(&tape[2]).arg(&nsub).arg(&scr);
         unsafe { b.launch(cfg) }?;
         Ok(())
     }
@@ -359,9 +393,10 @@ impl SrceCuda {
         let d_va = st.clone_htod(h.va)?;
         let d_ust = st.alloc_zeros::<f64>(np)?;
         let d_dtdyn = st.alloc_zeros::<f64>(np)?;
+        let d_scr = st.alloc_zeros::<f64>(3 * self.nk * self.nth * np)?;
         st.synchronize()?;
         let t0 = std::time::Instant::now();
-        self.launch_fwd(&d, raw(&d_va, st), raw(&d_ust, st), raw(&d_dtdyn, st), dtg, np, 0, np, [0; 3], 0)?;
+        self.launch_fwd(&d, raw(&d_va, st), raw(&d_ust, st), raw(&d_dtdyn, st), dtg, np, 0, np, [0; 3], 0, raw(&d_scr, st))?;
         st.synchronize()?;
         let secs = t0.elapsed().as_secs_f64();
         Ok((st.clone_dtoh(&d_va)?, st.clone_dtoh(&d_ust)?, st.clone_dtoh(&d_dtdyn)?, secs))
@@ -407,7 +442,17 @@ impl SrceCuda {
             cudarc::driver::result::memcpy_dtod_async(pend, va, n * 8, st.cu_stream())?;
             cudarc::driver::result::memcpy_dtod_async(ptape, va, n * 8, st.cu_stream())?;
         }
-        self.launch_fwd(d, pend, pust, pdt, dtg, np, 0, np, [0; 3], pnsub)?;
+        // the scratch of the kernels (8 nspec values per node of a batch),
+        // the count pass in batches of nodes
+        let max_nodes = (tape_max / (64 * nspec)).clamp(1, 1 << 16);
+        let d_scr = st.alloc_zeros::<f64>(8 * nspec * max_nodes.min(np))?;
+        let pscr = raw(&d_scr, st);
+        let mut b0 = 0usize;
+        while b0 < np {
+            let nb = max_nodes.min(np - b0);
+            self.launch_fwd(d, pend, pust, pdt, dtg, np, b0, nb, [0; 3], pnsub, pscr)?;
+            b0 += nb;
+        }
         info.nsub = st.clone_dtoh(&d_nsub)?;
         if let Some(v) = vout {
             unsafe { cudarc::driver::result::memcpy_dtod_async(v, pend, n * 8, st.cu_stream())? };
@@ -421,7 +466,7 @@ impl SrceCuda {
         while i0 < np {
             let mut i1 = i0;
             let mut tot = 0u64;
-            while i1 < np && (i1 == i0 || tot + info.nsub[i1] as u64 * rec <= tape_max as u64) {
+            while i1 < np && i1 - i0 < max_nodes && (i1 == i0 || tot + info.nsub[i1] as u64 * rec <= tape_max as u64) {
                 off[i1] = tot / 8;
                 tot += info.nsub[i1] as u64 * rec;
                 i1 += 1;
@@ -431,7 +476,7 @@ impl SrceCuda {
             let (ptp, poff) = (raw(&d_tape, st), raw(&d_off, st));
             st.synchronize()?;
             let t1 = std::time::Instant::now();
-            self.launch_fwd(d, ptape, pust, pdt, dtg, np, i0, i1 - i0, [ptp, poff, pnsub], 0)?;
+            self.launch_fwd(d, ptape, pust, pdt, dtg, np, i0, i1 - i0, [ptp, poff, pnsub], 0, pscr)?;
             st.synchronize()?;
             info.secs_fwd += t1.elapsed().as_secs_f64();
             let t2 = std::time::Instant::now();
@@ -444,7 +489,8 @@ impl SrceCuda {
             for x in &self.tb {
                 b.arg(x);
             }
-            b.arg(&dtg).arg(&np32).arg(&i032).arg(&ptp).arg(&poff).arg(&pnsub).arg(&ubar).arg(&udbar).arg(&pbar);
+            b.arg(&self.sat_t[0]).arg(&self.sat_t[1]);
+            b.arg(&dtg).arg(&np32).arg(&i032).arg(&ptp).arg(&poff).arg(&pnsub).arg(&ubar).arg(&udbar).arg(&pbar).arg(&pscr);
             unsafe { b.launch(cfg) }?;
             st.synchronize()?;
             info.secs_adj += t2.elapsed().as_secs_f64();
@@ -496,4 +542,29 @@ impl SrceCuda {
             secs_adj: info.secs_adj,
         })
     }
+}
+
+/// The seeds of the adjoint runs (`Model::adjoint_run`) from the files
+/// `hsb_TAG.f64` and `t02b_TAG.f64` (`TAG` = `YYYYMMDDHH`, one value per
+/// node, as written by `scripts/cal_obs.py seed`) in `dir`: the cotangents
+/// of `H_s` and `T_m02` at the time `t`, none at the times without files.
+pub fn seeds_from_dir(dir: &std::path::Path, np: usize, t: crate::ww3io::Time) -> Result<Option<(Vec<f64>, Vec<f64>)>> {
+    if t.1 % 10000 != 0 {
+        return Ok(None);
+    }
+    let tag = format!("{:08}{:02}", t.0, t.1 / 10000);
+    let (ph, pt) = (dir.join(format!("hsb_{tag}.f64")), dir.join(format!("t02b_{tag}.f64")));
+    if !ph.exists() {
+        return Ok(None);
+    }
+    let rd = |p: &std::path::Path| -> Result<Vec<f64>> {
+        let b = std::fs::read(p)?;
+        if b.len() != 8 * np {
+            bail!("{}: {} values against {np} nodes", p.display(), b.len() / 8);
+        }
+        Ok(b.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().expect("8 bytes"))).collect())
+    };
+    let h = rd(&ph)?;
+    let tt = if pt.exists() { rd(&pt)? } else { vec![0.0; np] };
+    Ok(Some((h, tt)))
 }

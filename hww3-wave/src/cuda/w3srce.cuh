@@ -555,10 +555,11 @@ __device__ void snl1(const double *par, const double *sig, const uint *dia_ip, c
     }
 }
 
-// W3SDS4 with SDSBCHOICE = 1, the saturation tables and the cumulative term
+// W3SDS4 with SDSBCHOICE = 1, the saturation tables and the cumulative term;
+// with ren, the renewal sum of each bin is kept there (for the adjoint)
 __device__ void sds4(const double *par, const double *sig, const double *ecos, const double *esin, const double *satw,
                      const uint *sati, const double *cumw, const double *a, double *kb, double *b1, double *dn, double *vs,
-                     double *vd, double depth, double ustar, double usdir, double scale)
+                     double *vd, double depth, double ustar, double usdir, double scale, double *ren = 0)
 {
     const uint t = threadIdx.x;
     for (uint r = 0; r < RS; r++) {
@@ -624,6 +625,7 @@ __device__ void sds4(const double *par, const double *sig, const double *ecos, c
                     }
             double facturb2 = -2.0 * s * k * facturb, dvisc = -4.0 * c21 * k * k;
             double coswind = ecos[th] * cu + esin[th] * su;
+            if (ren) ren[is] = renewal;
             double diag2 = c3 * renewal + facturb2 * fmax(0.0, coswind) + dvisc;
             dv += diag2;
             sv += a[is] * diag2;

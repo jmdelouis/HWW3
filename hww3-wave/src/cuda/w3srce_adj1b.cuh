@@ -4,13 +4,15 @@
 // W3SDS4 (SDSBCHOICE = 1): from vsb, vdb, adds the cotangents of a (ab), of
 // u*, the wind direction and SDSC2 (scb). b1 and dn hold the forward
 // saturation and crest lengths, kb[K_BTH0] the maxima (from sds4 at the same
-// state). Scratch: b1b, d2b, qbb (NSPEC each, qbb then holding the
-// cotangents of the crest lengths), kbb (NK).
+// state), ren (or 0) its renewal sums, sats and sate the saturation table
+// SATI transposed (for each direction, the entries th NSAT + j that read
+// it). Scratch: b1b, d2b, qbb (NSPEC each,
+// qbb then holding the cotangents of the crest lengths), kbb (NK).
 __device__ void sds4_adj(const double *par, const double *sig, const double *ecos, const double *esin, const double *satw,
                          const uint *sati, const double *cumw, const double *a, const double *kb, const double *b1,
                          const double *dn, const double *vsb, const double *vdb, double *ab, double *b1b, double *d2b,
                          double *qbb, double *kbb, double *scb, double *red, double depth, double ustar, double usdir,
-                         double scale)
+                         double scale, const double *ren, const uint *sats, const uint *sate)
 {
     const uint t = threadIdx.x;
     const double br = par[P_SSDSBR], c3 = par[P_SDSC3], c5 = par[P_SDSC5], c21 = par[P_SDSC21];
@@ -43,7 +45,8 @@ __device__ void sds4_adj(const double *par, const double *sig, const double *eco
             facturb2 = -2.0 * s * k * facturb;
             cwv = ecos[th] * cu + esin[th] * su;
             double renewal = 0.0;
-            if (c3 < 0.0 && ik + 1 > dik)
+            if (ren) renewal = ren[is];
+            else if (c3 < 0.0 && ik + 1 > dik)
                 for (uint ik2 = 0; ik2 < ik + 1 - dik; ik2++)
                     if (kb[K_BTH0 * NK + ik2] > br) {
                         double dot = 0.0;
@@ -124,9 +127,12 @@ __device__ void sds4_adj(const double *par, const double *sig, const double *eco
         double k = kb[K_WN * NK + ik];
         double facsat = sig[ik + 1] * (k * k * k) * par[P_DTH];
         double g = 0.0;
-        for (uint th = 0; th < NTH; th++)
-            for (uint j = 0; j < NSAT; j++)
-                if (sati[j + th * NSAT] == th2) g += b1b[ik * NTH + th] * satw[j + th * NSAT];
+        // the entries th NSAT + j of SATI that read direction th2, in the
+        // order of th then j (the transposed table)
+        for (uint q = sats[th2]; q < sats[th2 + 1]; q++) {
+            uint e = sate[q];
+            g += b1b[ik * NTH + e / NSAT] * satw[e];
+        }
         ab[is2] += g * facsat;
     }
     __syncthreads();

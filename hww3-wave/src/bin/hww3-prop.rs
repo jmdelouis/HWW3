@@ -53,6 +53,13 @@
 //!     with the dot-product test and the times, then the same sub-step as
 //!     Burn tensor operations with its gradient through Burn's tape
 //!     (unless --only cubecl).
+//! hww3-prop adj-grad <grid dir> --restart FILE [forcing and parameters as for run] --hours H --seeds DIR [--k1 K]   (feature cuda-c)
+//!     Milestone M4: the gradient of a cost of the hourly H_s and T_m02 over
+//!     H hours by the adjoint, from the derivatives of the cost with respect
+//!     to those fields (hsb_, t02b_YYYYMMDDHH.f64 in DIR, written by
+//!     scripts/cal_obs.py seed), with two levels of checkpoints in host
+//!     memory (every K steps, default the square root of the steps): dJ/dln p
+//!     of BETAMAX, SDSC2, NLPROP, BJGAM and dJ/dc_k of BETAMAX(U).
 //! hww3-prop adj-step <grid dir> --restart FILE [forcing as for run] [--steps N] [--k1 K]   (feature cuda-c)
 //!     Milestone M4: the dot-product tests of the adjoint of N whole steps
 //!     (default 6) against their tangent, for the spectra at the start and
@@ -109,7 +116,7 @@ fn parse() -> Result<Args> {
     let valued = [
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
         "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent", "--init-factor", "--betamax",
-        "--stop", "--restart-out", "--ice-ref", "--betau", "--betau-grid", "--probe", "--probe-check", "--tl-nlcut", "--ik", "--reps", "--only", "--steps", "--k1",
+        "--stop", "--restart-out", "--ice-ref", "--betau", "--betau-grid", "--probe", "--probe-check", "--tl-nlcut", "--ik", "--reps", "--only", "--steps", "--k1", "--seeds",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -1022,6 +1029,66 @@ fn main() -> Result<()> {
                 m.adj_geo_check(ik, reps, &only)?
             };
             println!("{}", serde_json::to_string(&rep)?);
+            Ok(())
+        }
+        #[cfg(feature = "cuda-c")]
+        "adj-grad" => {
+            use hww3_wave::sources::{NPAR, P_BBETA, P_BU_NK, P_SDBC2, P_SDSC2, P_SNLC1};
+            let geo = Geometry::new(&grid);
+            let device = Device::cuda(0);
+            let client = hww3_wave::burn_ext::client(&device)?;
+            let opt = |k: &str| a.opts.get(k).map(PathBuf::from);
+            let inp = Inputs {
+                restart: PathBuf::from(&a.opts["--restart"]),
+                current: opt("--current"),
+                level: opt("--level"),
+                ice: opt("--ice"),
+                nest: opt("--nest"),
+                wind: opt("--wind"),
+                sources: opt("--sources"),
+                start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
+                ice_ref: None,
+            };
+            let mut cfg = Config::default();
+            perturbations(&a, &mut cfg)?;
+            let hours: f64 = a.opts.get("--hours").map(|s| s.parse()).transpose()?.unwrap_or(1.0);
+            let seeds = PathBuf::from(a.opts.get("--seeds").ok_or_else(|| anyhow::anyhow!("adj-grad needs --seeds DIR"))?);
+            let mut m = Model::<f64>::new(client, &grid, &geo, &inp, cfg)?;
+            let nsteps = (hours * 3600.0 / m.cfg.dtg as f64).round() as usize;
+            let k1: usize = a.opts.get("--k1").map(|s| s.parse()).transpose()?.unwrap_or(((nsteps as f64).sqrt().ceil() as usize).max(1));
+            let d = m.dtauhf_unit(&inp)?;
+            let k = m.step_adj_kernels(&d, 8 << 30)?;
+            let np = m.np;
+            let n = m.nk * np * m.nth;
+            let start = m.time;
+            let mut ab = k.prop.st.alloc_zeros::<f64>(n)?;
+            let t0 = Instant::now();
+            let (bar, held) = m.adjoint_run(&k, &inp, nsteps, k1, &mut ab, &|t| hww3_wave::cuda_adj::seeds_from_dir(&seeds, np, t))?;
+            let secs = t0.elapsed().as_secs_f64();
+            let par = m.source_par().unwrap_or_else(|| vec![0.0; NPAR]);
+            println!(
+                "adj-grad from {start}: {nsteps} steps ({hours} h), checkpoints every {k1} steps ({held} held at most), {secs:.0} s (value run {:.0}, segments again {:.0}, of which checkpoints {:.0}; adjoint steps: sources {:.0}, propagation and forcing {:.0}, recomputed steps {:.0})",
+                bar.secs_runs[0], bar.secs_runs[1], bar.secs_runs[2], bar.secs[0], bar.secs[1], bar.secs[2]
+            );
+            let mut out = serde_json::Map::new();
+            let names = ["BETAMAX", "SDSC2", "NLPROP", "BJGAM"];
+            let slots = [P_BBETA, P_SDSC2, P_SNLC1, P_SDBC2];
+            for j in 0..4 {
+                let v = bar.par[j] * par[slots[j]];
+                println!("dJ/dln {:<10} {v:.6e}", names[j]);
+                out.insert(names[j].to_string(), json!(v));
+            }
+            for kk in 0..par[P_BU_NK] as usize {
+                let v = bar.par[4 + kk];
+                println!("dJ/dc{kk:<13} {v:.6e}");
+                out.insert(format!("BETAU{kk}"), json!(v));
+            }
+            out.insert("secs".into(), json!(secs));
+            out.insert("parts".into(), json!(bar.secs));
+            out.insert("runs".into(), json!(bar.secs_runs));
+            out.insert("steps".into(), json!(nsteps));
+            out.insert("k1".into(), json!(k1));
+            println!("{}", serde_json::to_string(&serde_json::Value::Object(out))?);
             Ok(())
         }
         #[cfg(feature = "cuda-c")]

@@ -342,6 +342,10 @@ pub struct StepBar {
     /// Time of the adjoint of the source terms, of the propagation and of the
     /// recomputed steps (s).
     pub secs: [f64; 3],
+    /// Time of the value runs of the driver (the run keeping the
+    /// checkpoints of the segments, then the segments run again keeping the
+    /// checkpoints of their steps) and of the checkpoints themselves (s).
+    pub secs_runs: [f64; 3],
 }
 
 /// The CUDA C kernels of the adjoint of a step.
@@ -355,15 +359,58 @@ pub struct StepAdj {
 }
 
 impl<F: Real> Model<F> {
+    /// A buffer of the model to the host in double precision: for the model
+    /// in double precision, a copy through the pinned staging buffer.
+    fn to_host(&self, h: &Handle, n: usize) -> Vec<f64> {
+        if std::mem::size_of::<F>() != 8 {
+            return self.download_f64(h);
+        }
+        self.sync();
+        let mut v: Vec<f64> = Vec::with_capacity(n);
+        // SAFETY: every element is written below before it is read
+        unsafe { v.set_len(n) };
+        with_pinned(n, |buf| {
+            unsafe { cudarc::driver::result::memcpy_dtoh_sync(&mut buf[..n], self.dptr(h)) }.expect("copy to the host");
+            par_copy(&mut v, &buf[..n]);
+        });
+        v
+    }
+
+    /// Host values into a buffer of the model, in place (a raw copy for the
+    /// model in double precision; otherwise a new buffer).
+    fn to_device(&mut self, which: u8, v: &[f64]) {
+        if std::mem::size_of::<F>() != 8 {
+            let h = self.upd(v);
+            match which {
+                0 => self.d_va = h,
+                1 => self.d_wn = h,
+                _ => self.d_cg = h,
+            }
+            return;
+        }
+        self.sync();
+        let h = match which {
+            0 => &self.d_va,
+            1 => &self.d_wn,
+            _ => &self.d_cg,
+        };
+        let p = self.dptr(h);
+        with_pinned(v.len(), |buf| {
+            par_copy(&mut buf[..v.len()], v);
+            unsafe { cudarc::driver::result::memcpy_htod_sync(p, &buf[..v.len()]) }.expect("copy to the device");
+        });
+    }
+
     /// The checkpoint of the state at the start of the next step.
     pub fn snapshot(&self) -> Snap {
         let rd = |f: &Option<Fields>| f.as_ref().map(|x| (x.tnext(), x.eof));
+        let (nsp, nw) = (self.nk * self.np * self.nth, (self.nk + 2) * self.np);
         Snap {
             time: self.time,
             itstep: self.itstep,
-            va: self.download_f64(&self.d_va),
-            wn: self.download_f64(&self.d_wn),
-            cg: self.download_f64(&self.d_cg),
+            va: self.to_host(&self.d_va, nsp),
+            wn: self.to_host(&self.d_wn, nw),
+            cg: self.to_host(&self.d_cg, nw),
             dw: self.dw.clone(),
             wlv: self.wlv.clone(),
             mapsta: self.mapsta.clone(),
@@ -397,9 +444,9 @@ impl<F: Real> Model<F> {
         }
         self.time = s.time;
         self.itstep = s.itstep;
-        self.d_va = self.upd(&s.va);
-        self.d_wn = self.upd(&s.wn);
-        self.d_cg = self.upd(&s.cg);
+        self.to_device(0, &s.va);
+        self.to_device(1, &s.wn);
+        self.to_device(2, &s.cg);
         self.dw = s.dw.clone();
         self.wlv = s.wlv.clone();
         self.mapsta = s.mapsta.clone();
@@ -466,8 +513,9 @@ impl<F: Real> Model<F> {
     }
 
     /// The derivative of the tail-stress table of the source kernel in
-    /// `BETAMAX` (`TABU_TAUHF2` in double precision at the `BETAMAX` of the
-    /// parameter file of `inp`), laid out as the table; zeros with tables in
+    /// `BETAMAX` (`TABU_TAUHF2` in double precision at the model's `BETAMAX`,
+    /// from the stress tables of the parameter file of `inp`), laid out as
+    /// the table; zeros with tables in
     /// `BETAMAX` ([`crate::sources::P_BT_N`] > 1), whose derivative the kernels
     /// interpolate themselves.
     pub fn dtauhf_unit(&self, inp: &Inputs) -> Result<Vec<f64>> {
@@ -479,12 +527,18 @@ impl<F: Real> Model<F> {
         let p = inp.sources.as_ref().ok_or_else(|| anyhow!("no parameter file of the sources"))?;
         let q = SrcePar::new(&Params::read(p)?)?;
         let stt = q.st.tables.as_ref().ok_or_else(|| anyhow!("no stress tables (SINTABLE = 0)"))?;
-        let (_, d1, _, d2) = tabu_tauhf2(&q.st, stt, q.st.sig[q.st.nk], q.st.bbeta);
+        let (_, d1, _, d2) = tabu_tauhf2(&q.st, stt, q.st.sig[q.st.nk], t.par[crate::sources::P_BBETA]);
         let d = if q.st.ttauwshelter > 0.0 { d2 } else { d1 };
         if d.len() != t.tauhf.len() {
             bail!("tail-stress table of {} values against {}", d.len(), t.tauhf.len());
         }
         Ok(d)
+    }
+
+    /// The parameters of the source kernel ([`crate::sources::SrceTables`]
+    /// `par`), if the source terms are on.
+    pub fn source_par(&self) -> Option<Vec<f64>> {
+        self.src_tables.as_ref().map(|t| t.par.clone())
     }
 
     /// The CUDA C kernels of the adjoint of a step for this model: the
@@ -739,24 +793,34 @@ impl<F: Real> Model<F> {
         seeds: &dyn Fn(Time) -> Result<Option<(Vec<f64>, Vec<f64>)>>,
     ) -> Result<(StepBar, usize)> {
         let k1 = k1.max(1);
-        let mut bar = StepBar { par: vec![0.0; crate::cuda_adj::NPB], secs: [0.0; 3] };
+        let mut bar = StepBar { par: vec![0.0; crate::cuda_adj::NPB], secs: [0.0; 3], secs_runs: [0.0; 3] };
         let mut l1 = vec![];
+        let t0 = std::time::Instant::now();
         for n in 0..nsteps {
             if n % k1 == 0 {
+                let ts = std::time::Instant::now();
                 l1.push(self.snapshot());
+                bar.secs_runs[2] += ts.elapsed().as_secs_f64();
             }
             self.step()?;
         }
+        self.sync();
+        bar.secs_runs[0] += t0.elapsed().as_secs_f64();
         let held = l1.len() + k1.min(nsteps);
         let dtg = self.cfg.dtg as i64;
         for (j, c) in l1.iter().enumerate().rev() {
             let (n0, n1) = (j * k1, ((j + 1) * k1).min(nsteps));
+            let t1 = std::time::Instant::now();
             self.restore(c, inp)?;
             let mut l2 = vec![];
             for _ in n0..n1 {
+                let ts = std::time::Instant::now();
                 l2.push(self.snapshot());
+                bar.secs_runs[2] += ts.elapsed().as_secs_f64();
                 self.step()?;
             }
+            self.sync();
+            bar.secs_runs[1] += t1.elapsed().as_secs_f64();
             for sn in l2.iter().rev() {
                 let t_end = Time::from_secs(sn.time.secs() + dtg);
                 let sd = seeds(t_end)?;
@@ -845,8 +909,11 @@ impl<F: Real> Model<F> {
         self.tl = saved;
         let abar = st.clone_dtoh(&ab)?;
         println!(
-            "adj-step from {}: {nsteps} steps, checkpoints every {k1} steps ({held} held at most); tangent {t_fwd:.2} s per direction, adjoint with its value runs {t_adj:.2} s (sources {:.2}, propagation and forcing {:.2}, recomputed steps {:.2}); checkpoints of {:.2} GB",
+            "adj-step from {}: {nsteps} steps, checkpoints every {k1} steps ({held} held at most); tangent {t_fwd:.2} s per direction, adjoint with its value runs {t_adj:.2} s (value run {:.2}, segments again {:.2}, of which checkpoints {:.2}; adjoint steps: sources {:.2}, propagation and forcing {:.2}, recomputed steps {:.2}); checkpoints of {:.2} GB",
             s0.time,
+            bar.secs_runs[0],
+            bar.secs_runs[1],
+            bar.secs_runs[2],
             bar.secs[0],
             bar.secs[1],
             bar.secs[2],
@@ -866,8 +933,33 @@ impl<F: Real> Model<F> {
             println!("{name:<10} {l:>14.6e} {r:>14.6e} {rel:>10.2e}");
             rows.push(serde_json::json!({"direction": name, "adj": l, "tl": r, "rel": rel}));
         }
-        Ok(serde_json::json!({"start": s0.time.to_string(), "steps": nsteps, "k1": k1, "held": held, "t_tl": t_fwd, "t_adj": t_adj, "secs": bar.secs, "snap_gb": s0.bytes() as f64 / 1e9, "rows": rows}))
+        Ok(serde_json::json!({"start": s0.time.to_string(), "steps": nsteps, "k1": k1, "held": held, "t_tl": t_fwd, "t_adj": t_adj, "secs": bar.secs, "secs_runs": bar.secs_runs, "snap_gb": s0.bytes() as f64 / 1e9, "rows": rows}))
     }
+}
+
+/// The pinned host buffer of the copies of the checkpoints (allocated once,
+/// grown when needed): its address and its length in values.
+static PINNED: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 0));
+
+/// `f` on a pinned host buffer of at least `n` values (page-locked memory,
+/// so that the copies from and to the device run at the bus's speed).
+fn with_pinned<R>(n: usize, f: impl FnOnce(&mut [f64]) -> R) -> R {
+    let mut g = PINNED.lock().expect("pinned buffer");
+    if g.1 < n {
+        if g.0 != 0 {
+            unsafe { cudarc::driver::result::free_host(g.0 as *mut std::ffi::c_void) }.expect("free the pinned buffer");
+        }
+        let p = unsafe { cudarc::driver::result::malloc_host(n * 8, 0) }.expect("pinned host memory");
+        *g = (p as usize, n);
+    }
+    // SAFETY: the buffer holds g.1 >= n values and the lock keeps it to us
+    let buf = unsafe { std::slice::from_raw_parts_mut(g.0 as *mut f64, n) };
+    f(buf)
+}
+
+/// A copy of `src` into `dst` by the threads of the host.
+fn par_copy(dst: &mut [f64], src: &[f64]) {
+    dst.par_chunks_mut(1 << 20).zip(src.par_chunks(1 << 20)).for_each(|(d, s)| d.copy_from_slice(s));
 }
 
 /// The raw pointer of a `cudarc` buffer.
