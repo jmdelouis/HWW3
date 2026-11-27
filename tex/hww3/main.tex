@@ -3091,14 +3091,19 @@ about six times slower at 36 frequencies.
 \item The UQ scheme of WW3 for the structured grids (W3MAP3, W3UTRN,
 W3MAPT, W3XYP3 with the GSE averaging, W3QCK1, W3QCK3, W3CFLXY) is
 transcribed in the CPU reference (commit \texttt{bf2f594}), with six
-synthetic tests. Against WW3 with the geographic propagation alone over
-six hours of the regular grid from the same restart (commit
-\texttt{45e4a55}), the mean $H_s$ agrees to \SI{1e-5}{m} and the RMS
-difference at the median point is \SI{7.3e-5}{m}. About 1\,\% of the
-points still differ by more than \SI{1}{cm} (up to 0.2 to
-\SI{0.35}{m}), next to land, on cells with obstructions and in the rows
-above the excluded southern edge, and are being traced. The GPU kernels
-of the scheme and the coupling of the grids follow.
+synthetic tests. A Fortran harness calling W3XYP3 of the IRI build for
+15 components of the regular grid gives the same counters and maps,
+transparencies within $1.2\times10^{-7}$ and fields within
+$5.7\times10^{-7}$ of their maximum, in both sweep orders. Against WW3
+with the geographic propagation alone over six hours of the regular
+grid from the same restart, the RMS difference in time is
+\SI{1.4e-7}{m} at the median point and \SI{1.4e-6}{m} at worst (commit
+\texttt{0c1cfcf}), once the driver splits each hour into equal steps as
+W3WAVE does and takes the wavenumbers of the structured grids
+(\texttt{WAVNU1} at $\max(\texttt{DMIN}, \eta - z_b)$); with the earlier
+driver some points differed by up to \SI{0.35}{m}. The GPU kernels of
+the scheme, as a second propagation path of the model, and the coupling
+of the grids follow.
 \end{itemize}
 
 
