@@ -2938,7 +2938,7 @@ scheme and 10.8 times faster than the implicit one.
 \end{itemize}
 \end{itemize}
 
-\paragraph{M4: how to write the adjoint (in progress).} Before writing
+\paragraph{M4: the adjoint (in progress).} Before writing
 the full adjoint, three ways are compared on the DIA (W3SNL1) and on one
 geographic sub-step (commit \texttt{0094e14}, one A100, double
 precision): an adjoint written by hand in CubeCL, the same in CUDA C
@@ -2960,8 +2960,23 @@ states of 3.9\,GB, 242\,GB), gives an estimated 2.1 to 2.4 hours on one
 A100 for the gradient of a 156-hour cost with respect to all the
 parameters and forcing fields. That is 2.4 to 2.7 times less than the
 nine tangents of the calibration.
-\item The choice between CUDA C, CubeCL, or Burn custom operations
-around the same kernels is left to the author of the study.
+\item CUDA C is chosen. The adjoint of the source terms (ST4 with both
+whitecapping choices and \texttt{BETAMAX}$(U)$, DIA, DB1, BT4, LN1, the
+dynamic sub-steps replayed from a tape per node) and that of the
+propagation (refraction, frequency shift, geographic sweeps, working on
+the buffers of the CubeCL model through raw pointers) are written and
+checked by dot products against the M3 tangents in double precision
+(commit \texttt{8ff4ff1}). The sums agree to $3.0\times10^{-14}$ for the
+sources in every direction and with every freeze mask, on the harnesses
+of the North Atlantic and IRI configurations, and to
+$3.3\times10^{-13}$ for a whole propagation step. Six whole steps of
+grid v5 $K=4$ with a checkpoint per step agree to $1.5\times10^{-12}$
+for the spectrum and to $8\times10^{-13}$ at most for the parameters.
+\item The source adjoint costs 9.0 times its value kernel (one node per
+multiprocessor, 115\,KB of shared memory): 71\,s per step at the start
+of the run, against 12.3\,s for the tangent, which would put a 156-hour
+gradient at about 6 to 22 hours instead of the planned 2.1 to 2.4. It is
+optimised before the two-level checkpointing is run over 156 hours.
 \end{itemize}
 
 \paragraph{WW3 structured grids.} To compare with a global
