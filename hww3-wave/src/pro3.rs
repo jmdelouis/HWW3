@@ -684,6 +684,94 @@ impl Pro3Grid {
     pub fn ncent(&self) -> usize {
         self.ncent
     }
+
+    /// The counters of `W3MAP3`: `NCENT`, `NMX0`, `NMX1`, `NMX2`, `NMY0`,
+    /// `NMY1`, `NMY2`, `NACT`.
+    pub fn counts(&self) -> [usize; 8] {
+        [self.ncent, self.nmx[0], self.nmx[1], self.nmx[2], self.nmy[0], self.nmy[1], self.nmy[2], self.mapaxy.len()]
+    }
+}
+
+/// The interpolation table of `DISTAB` (`w3dispmd.F90`) and `WAVNU1`, the
+/// wavenumbers and group velocities `W3INIT` gives the structured grids
+/// (without the `PDLIB` switch), in single precision as in WW3.
+#[derive(Clone, Debug)]
+pub struct DispTable {
+    /// `N1MAX = NAR1D - 1 = 120`.
+    n1max: i32,
+    /// `DSIE = sqrt(GRAV DFAC) / N1MAX` with `DFAC = 6`.
+    dsie: f32,
+    /// `EWN1(0:NAR1D)`: `k` at unit depth.
+    ewn1: Vec<f32>,
+    /// `ECG1(0:NAR1D)`: group velocity at unit depth.
+    ecg1: Vec<f32>,
+}
+
+impl Default for DispTable {
+    fn default() -> Self {
+        DispTable::new()
+    }
+}
+
+impl DispTable {
+    /// `DISTAB`: `WAVNU2` at unit depth (`EPS = 1e-7`, 15 iterations) at
+    /// the `NAR1D + 1 = 122` points `si = i DSIE`.
+    pub fn new() -> DispTable {
+        let g = GRAV as f32;
+        let nar1d = 121usize;
+        let n1max = (nar1d - 1) as i32;
+        let simax = (g * 6.0f32).sqrt();
+        let dsie = simax / n1max as f32;
+        let mut ewn1 = vec![0f32; nar1d + 1];
+        let mut ecg1 = vec![0f32; nar1d + 1];
+        ecg1[0] = g.sqrt();
+        for i in 1..=nar1d {
+            let (k, cg) = wavnu2(i as f32 * dsie, 1.0, 1e-7, 15);
+            ewn1[i] = k;
+            ecg1[i] = cg;
+        }
+        DispTable { n1max, dsie, ewn1, ecg1 }
+    }
+
+    /// `WAVNU1`: wavenumber and group velocity of the radian frequency `si`
+    /// at depth `h`, interpolated in the table, deep water beyond it.
+    pub fn wavnu1(&self, si: f32, h: f32) -> (f32, f32) {
+        let sqrth = h.sqrt();
+        let six = si * sqrth;
+        let i1 = (six / self.dsie) as i32;
+        if i1 <= self.n1max && i1 >= 1 {
+            let i2 = i1 + 1;
+            let r1 = six / self.dsie - i1 as f32;
+            let r2 = 1.0 - r1;
+            let (a, b) = (i1 as usize, i2 as usize);
+            ((r2 * self.ewn1[a] + r1 * self.ewn1[b]) / h, (r2 * self.ecg1[a] + r1 * self.ecg1[b]) * sqrth)
+        } else {
+            let g = GRAV as f32;
+            (si * si / g, 0.5 * g / si)
+        }
+    }
+}
+
+/// `WAVNU2`: Newton iterations of the dispersion relation (single
+/// precision), for the table of `DISTAB` (positive `w`).
+fn wavnu2(w: f32, h: f32, eps: f32, nmax: usize) -> (f32, f32) {
+    let g = GRAV as f32;
+    let w0 = w.abs();
+    let mut k = if w0 < (g / h).sqrt() { w0 / (g * h).sqrt() } else { w0 * w0 / g };
+    let mut kold = 0f32;
+    for _ in 0..nmax {
+        let dif = (k - kold).abs();
+        let rdif = if k != 0.0 { dif / k } else { 0.0 };
+        if dif < eps && rdif < eps {
+            break;
+        }
+        kold = k;
+        let f = g * kold * (kold * h).tanh() - w0 * w0;
+        let fd = if kold * h > 25.0 { g * (kold * h).tanh() } else { g * (kold * h).tanh() + g * kold * h / (kold * h).cosh().powi(2) };
+        k = kold - f / fd;
+    }
+    let cg = if 2.0 * k * h > 25.0 { w0 / k * 0.5 } else { w0 / k * 0.5 * (1.0 + (2.0 * k * h / (2.0 * k * h).sinh())) };
+    (k, cg)
 }
 
 /// `IXN`, `IXP` of `W3UTRN` (cell centres): the neighbours in `x`, wrapping
@@ -1350,6 +1438,21 @@ mod tests {
             let d = fr.iter().zip(&fc).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
             assert!(d < 1e-4 * fmax, "isp {isp}: {d} against {fmax}");
         }
+    }
+
+    /// `WAVNU1` of the table of `DISTAB` against the Newton iterations of
+    /// `WAVNU2` in shallow and intermediate water, and deep water beyond the
+    /// table.
+    #[test]
+    fn wavnu1_table() {
+        let t = DispTable::new();
+        for (si, h) in [(0.2f32, 5.0f32), (0.5, 20.0), (1.0, 3.0), (0.3, 100.0)] {
+            let (k1, c1) = t.wavnu1(si, h);
+            let (k2, c2) = wavnu2(si, h, 1e-7, 15);
+            assert!((k1 / k2 - 1.0).abs() < 2e-3 && (c1 / c2 - 1.0).abs() < 2e-3, "si {si} h {h}: {k1} {k2} {c1} {c2}");
+        }
+        let (k, c) = t.wavnu1(1.0, 4000.0);
+        assert_eq!((k, c), (1.0 / GRAV as f32, 0.5 * GRAV as f32));
     }
 
     /// `W3QCK1` and `W3QCK3` with unit transparencies agree, and a uniform
