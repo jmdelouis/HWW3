@@ -47,6 +47,7 @@ pub mod harness;
 pub mod harness2;
 pub mod ice;
 pub mod prnc;
+pub mod pro3;
 pub mod ref1;
 pub mod reference;
 pub mod sources;

@@ -1,0 +1,74 @@
+#!/bin/bash
+#PBS -N hww3_iripr3
+#PBS -q mpi_1
+#PBS -l select=1:ncpus=28:mpiprocs=28:mem=115g
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -o /home1/scratch/jmdeloui/HWW3/iri_pr3/logs/iri_pr3_ref.log
+#
+# WW3 reference of the UQ/PR3 geographic propagation of the IRI
+# configuration (W3XYP3 with the GSE averaging, the SMPL closure and the
+# sub-grid obstructions) on its regular grid IRIGLOB-7M, with the
+# executables of the IRI build (read only), everything on Datarmor scratch
+# ($D): ww3_grid with the geographic propagation only (RUN%FLCX = FLCY = T,
+# FLCTH = FLCK = FLSOU = F, as the "geo" runs of milestone M1), ww3_shel on
+# 28 ranks from $D/restart.ww3 (written by hww3-pre restart-struct from the
+# 4 January 2019 00 h state of a hww3-prop run on the mesh of the grid) for
+# HOURS hours with hourly H_s, and ww3_ounf.
+#   qsub scripts/iri_pr3_ref.pbs
+set -e
+M=/home/datawork-WW3/MODEL/prod_forecast_Ifremer3_20260309_MTAG2
+I=/home/datawork-WW3/PROJECT/IRI/IRI_15KM_L4SAT_11/bmax157/111901/IRIGLOB-7M/2019-01-01T00_2019-05-01T00
+D=${D:-/home1/scratch/jmdeloui/HWW3/iri_pr3}
+G=${GRID:-IRIGLOB-7M}
+T0=${T0:-20190104 000000}
+T1=${T1:-20190104 060000}
+source /usr/share/Modules/3.2.10/init/bash
+module purge
+module load intel-comp/18 impi/2018.1.163
+NC=/home/datawork-wave/NETCDF2019/INTEL/lib
+export LD_LIBRARY_PATH=$NC:$LD_LIBRARY_PATH
+cd $D
+for f in $I/data/$G.*; do ln -sf $f .; done
+sed -e 's/RUN%FLCTH *= *T/RUN%FLCTH = F/' -e 's/RUN%FLCK *= *T/RUN%FLCK = F/' -e 's/RUN%FLSOU *= *T/RUN%FLSOU = F/' \
+  $I/work/ww3_grid.nml.$G > ww3_grid.nml
+cp $I/work/namelists_$G.nml .
+grep "RUN%" ww3_grid.nml
+$M/bin/ww3_grid > ww3_grid.out 2>&1 || { tail -40 ww3_grid.out; exit 1; }
+grep -E "Number of sea points|propagation|GSE|WDTH" ww3_grid.out | head
+cat > ww3_shel.nml <<EOF
+&DOMAIN_NML
+  DOMAIN%START = '$T0'
+  DOMAIN%STOP  = '$T1'
+/
+&INPUT_NML
+/
+&OUTPUT_TYPE_NML
+  TYPE%FIELD%LIST = 'HS'
+/
+&OUTPUT_DATE_NML
+  DATE%FIELD%START  = '$T0'
+  DATE%FIELD%STRIDE = '3600'
+  DATE%FIELD%STOP   = '$T1'
+/
+EOF
+NP=$(wc -l < $PBS_NODEFILE)
+SECONDS=0
+mpirun -np $NP $M/bin/ww3_shel > ww3_shel.out 2>&1 || { tail -40 ww3_shel.out; exit 1; }
+echo "ww3_shel on $NP ranks: $SECONDS s"
+tail -5 ww3_shel.out
+cat > ww3_ounf.nml <<EOF
+&FIELD_NML
+  FIELD%TIMESTART  = '$T0'
+  FIELD%TIMESTRIDE = '3600'
+  FIELD%LIST       = 'HS'
+  FIELD%PARTITION  = '0'
+  FIELD%TYPE       = 4
+/
+&FILE_NML
+  FILE%PREFIX = 'ww3.'
+  FILE%NETCDF = 4
+/
+EOF
+$M/bin/ww3_ounf > ww3_ounf.out 2>&1 || { tail -20 ww3_ounf.out; exit 1; }
+ls -la ww3.*.nc
