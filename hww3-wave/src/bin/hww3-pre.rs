@@ -22,17 +22,24 @@
 //! hww3-pre cmp-nest A.ww3 B.ww3
 //!     Compare two boundary files: header, boundary points, indices and
 //!     weights, and the spectra over the times of A found in B.
-//! hww3-pre struct WW3_GRID.nml --data DIR --out GRID_DIR [--rotate auto|none|north|south]
+//! hww3-pre struct WW3_GRID.nml --data DIR --out GRID_DIR [--rotate auto|none|north|south] [--nml NAMELISTS]
 //!     A WW3 structured grid (RECT or CURV, files in DIR) triangulated into
 //!     an HWW3 grid directory (hww3_wave::structgrid), with the namelist
 //!     copied as GRID_DIR/ww3_grid.nml. The default rotation (auto) moves
 //!     the pole onto the equator when a sea point lies within 10° of it.
-//! hww3-pre restart-struct <grid dir> --restart IN.ww3 --out OUT.ww3
+//!     With --nml (the namelists of the run), also the reflection
+//!     geometry of W3SETREF per node (raw/ref1_reflc.f64, ref1_refld.u32,
+//!     ref1_delx.f64, ref1_dely.f64, ref1_trnx.f64, ref1_trny.f64), read by
+//!     hww3-prop run --ice-ref.
+//! hww3-pre restart-struct <grid dir> --restart IN.ww3 --out OUT.ww3 --grid-nml WW3_GRID.nml --data DIR
 //!     A restart of hww3-prop on the mesh of a structured grid (hww3-pre
 //!     struct) written in WW3's order of the sea points of the structured
 //!     grid (raw/sea_ij.u32), for WW3 programs run on that grid: the points
 //!     left out of the mesh get zero spectra, levels and ice, u* 1e-5 and
-//!     ASF 1; MAPSTA is 1, or 2 on the open boundary.
+//!     ASF 1; MAPSTA is that of the nodes (1 for the points left out),
+//!     written over the whole NX x NY grid as W3IORS does on structured
+//!     grids (0 on land, MAPST2 = 1 on the excluded points), from the
+//!     structured grid of --grid-nml and --data.
 //! hww3-pre ideal-wind <grid dir> --out wind.ww3 --start YYYYMMDDHHMMSS --hours H [--speed U]
 //!     An idealised hourly wind on the nodes, for runs without forcing:
 //!     westerlies and trade winds of amplitude U (default 10 m/s) with
@@ -376,6 +383,37 @@ fn structured(a: &Args) -> Result<()> {
         hi
     );
     m.write(&out, &std::fs::read_to_string(&nml)?)?;
+    if let Some(rn) = a.opts.get("--nml") {
+        use hww3_wave::ref1::{flagtr, read_obstructions, reflection_geometry_trn, Ref1Params};
+        use hww3_wave::ww3grid::Namelists;
+        let rnl = Namelists::read(Path::new(rn))?;
+        let gn = Namelists::read(&nml)?;
+        let rp = Ref1Params::from_namelists(&rnl, &g.spec)?;
+        let trn = read_obstructions(&gn, flagtr(&rnl)?, &data, g.nx, g.ny)?;
+        let geo = reflection_geometry_trn(&g, &rp, trn.as_ref())?;
+        // node k -> sea point of the structured grid
+        let raw = out.join("raw");
+        let (mut reflc, mut refld) = (Vec::with_capacity(4 * m.ij.len()), Vec::with_capacity(6 * m.ij.len()));
+        let (mut dx, mut dy, mut tx, mut ty) = (vec![], vec![], vec![], vec![]);
+        for &i in &m.ij {
+            let s = geo.ij.binary_search(&i).map_err(|_| anyhow::anyhow!("node at {i} not a sea point"))?;
+            reflc.extend_from_slice(&geo.reflc[s]);
+            refld.extend(geo.refld[s].iter().map(|&v| v.max(0) as u32));
+            dx.push(geo.delx[s]);
+            dy.push(geo.dely[s]);
+            tx.push(geo.trnx[s]);
+            ty.push(geo.trny[s]);
+        }
+        let f64s = |name: &str, v: &[f64]| std::fs::write(raw.join(name), v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>());
+        f64s("ref1_reflc.f64", &reflc)?;
+        std::fs::write(raw.join("ref1_refld.u32"), refld.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())?;
+        f64s("ref1_delx.f64", &dx)?;
+        f64s("ref1_dely.f64", &dy)?;
+        f64s("ref1_trnx.f64", &tx)?;
+        f64s("ref1_trny.f64", &ty)?;
+        let ncoast = (0..m.ij.len()).filter(|&k| reflc[4 * k] > 0.0).count();
+        println!("reflection geometry: {} nodes with a coast reflection, REFPARS {:?}", ncoast, rp.refpars);
+    }
     println!("written to {} in {:.1} s", out.display(), t0.elapsed().as_secs_f64());
     Ok(())
 }
@@ -452,8 +490,29 @@ fn restart_struct(a: &Args) -> Result<()> {
     }
     let mapsta: Vec<i32> = node.iter().map(|&k| if k != usize::MAX && is_obc[k] { 2 } else { 1 }).collect();
     let mapst2: Vec<i32> = node.iter().map(|&k| if k == usize::MAX { 0 } else { r.mapst2[k] }).collect();
+    let g = hww3_wave::structgrid::StructGrid::read(
+        Path::new(a.opts.get("--grid-nml").context("restart-struct needs --grid-nml")?),
+        Path::new(a.opts.get("--data").context("restart-struct needs --data")?),
+    )?;
+    anyhow::ensure!(g.counts()[1] + g.counts()[2] == nsea, "{}: {} sea points, mesh directory {nsea}", g.name, g.counts()[1] + g.counts()[2]);
+    let mut node_of_point = vec![usize::MAX; g.nx * g.ny];
+    for (s, &i) in sea_ij.iter().enumerate() {
+        node_of_point[i as usize] = node[s];
+    }
+    let full: Vec<i32> = (0..g.nx * g.ny)
+        .map(|i| match g.mapsta[i] {
+            0 => 0,
+            3 => 8,
+            _ => match node_of_point[i] {
+                usize::MAX => 1,
+                k => r.mapsta[k] + 8 * r.mapst2[k],
+            },
+        })
+        .collect();
     let s = Restart {
         nsea,
+        gname: g.name.clone(),
+        map_full: Some((g.nx, g.ny, full)),
         va,
         wlv: pick(&r.wlv, 0.0),
         ice: pick(&r.ice, 0.0),

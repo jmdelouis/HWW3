@@ -8,7 +8,7 @@
 //! hww3-prop restart-copy <restart> --out FILE
 //!     Read a FULL restart and write it again (CPU), to check the writer:
 //!     the copy is identical byte for byte.
-//! hww3-prop run <grid dir> --restart FILE|calm [--current FILE] [--level FILE]
+//! hww3-prop run <grid dir> --restart FILE|calm [--current FILE] [--level FILE] [--ice-ref NAMELISTS]
 //!     [--ice FILE] [--nest FILE] [--wind FILE --sources PARAMS] [--start YYYYMMDDHHMMSS]
 //!     --hours H|--stop YYYYMMDDHHMMSS --out DIR [--restart-out FILE] [--f64] [--block B] [--units U]
 //!     [--itstep0 N] [--no-cx] [--no-cth] [--no-ck] [--host-level] [--no-bccfl] [--profile]
@@ -97,7 +97,7 @@ fn parse() -> Result<Args> {
     let valued = [
         "--restart", "--current", "--level", "--ice", "--nest", "--hours", "--out", "--block", "--itstep0", "--start", "--ref", "--nodes",
         "--dump", "--wind", "--sources", "--units", "--scale-par", "--wind-factor", "--tangent", "--init-factor", "--betamax",
-        "--stop", "--restart-out", "--betau", "--betau-grid", "--probe", "--probe-check", "--tl-nlcut", "--ik", "--reps", "--only",
+        "--stop", "--restart-out", "--ice-ref", "--betau", "--betau-grid", "--probe", "--probe-check", "--tl-nlcut", "--ik", "--reps", "--only",
     ];
     let mut i = 2;
     while i < a.len() {
@@ -214,6 +214,10 @@ fn run<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         wind: opt("--wind"),
         sources: opt("--sources"),
         start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
+        ice_ref: match a.opts.get("--ice-ref") {
+            Some(n) => Some(hww3_wave::srce_ice::IceRefInputs::load(&a.grid, Path::new(n), grid)?),
+            None => None,
+        },
     };
     let mut cfg = Config::default();
     if let Some(b) = a.opts.get("--block") {
@@ -509,6 +513,7 @@ fn check_ktp3<F: Real>(grid: &Grid, geo: &Geometry, a: &Args) -> Result<()> {
         wind: opt("--wind"),
         sources: opt("--sources"),
         start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
+        ice_ref: None,
     };
     let mut m = Model::<F>::new(client, grid, geo, &inp, Config::default())?;
     let (_ntloc, _itloch, facth, fack) = m.prepare()?;
@@ -636,6 +641,7 @@ fn inputs(a: &Args) -> Result<Inputs> {
         wind: opt("--wind"),
         sources: opt("--sources"),
         start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
+        ice_ref: None,
     })
 }
 
@@ -961,6 +967,7 @@ fn main() -> Result<()> {
                 wind: opt("--wind"),
                 sources: opt("--sources"),
                 start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
+                ice_ref: None,
             };
             let mut m = Model::<f32>::new(client, &grid, &geo, &inp, Config::default())?;
             m.prepare()?;
@@ -988,6 +995,7 @@ fn main() -> Result<()> {
                 wind: opt("--wind"),
                 sources: opt("--sources"),
                 start: a.opts.get("--start").map(|s| Time::parse(s)).transpose()?,
+                ice_ref: None,
             };
             let ik: usize = a.opts.get("--ik").map(|s| s.parse()).transpose()?.unwrap_or(12);
             let reps: usize = a.opts.get("--reps").map(|s| s.parse()).transpose()?.unwrap_or(20);

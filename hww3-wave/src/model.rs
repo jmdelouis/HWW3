@@ -72,6 +72,10 @@ pub struct Inputs {
     pub sources: Option<PathBuf>,
     /// Start time, required for a COLD restart (`ww3_strt`), which has none.
     pub start: Option<Time>,
+    /// The ice terms and the reflection applied after the source
+    /// integration (`IC2`, `IS2`, `REF1`; the IRI configuration), with the
+    /// source terms only; `None` in the HWW3 runs.
+    pub ice_ref: Option<crate::srce_ice::IceRefInputs>,
 }
 
 /// Time steps, switches and launch parameters of a run.
@@ -371,6 +375,8 @@ pub struct Model<F: Real> {
     /// Ice concentration per node (`ICE`).
     pub ice_c: Vec<f32>,
     src: Option<SourceKernel<F>>,
+    /// The ice and reflection step after the sources, when asked for.
+    iceref: Option<crate::srce_ice::IceRefState<F>>,
     /// Length of the tail-stress table of the source kernel.
     src_ntab: usize,
     /// The tables of the source kernel on the host (for the diagnostic
@@ -665,6 +671,19 @@ impl<F: Real> Model<F> {
             }
             None => None,
         };
+        let iceref = match (&inp.ice_ref, &src) {
+            (Some(ir), Some(_)) => {
+                anyhow::ensure!(cfg.tangent.is_none(), "the ice and reflection step has no tangent yet");
+                eprintln!(
+                    "ice and reflection after the sources: ice terms {}, reflection {}",
+                    ir.ice.is_some(),
+                    ir.refl.is_some()
+                );
+                Some(crate::srce_ice::IceRefState::<F>::new(&client, ir, np, cfg.units)?)
+            }
+            (Some(_), None) => bail!("the ice and reflection step needs the source terms (--sources)"),
+            _ => None,
+        };
         let (src, d_d50, d_psic, seeds, src_ntab, src_tables) = match src {
             Some((k, d, s, sd, nt, t)) => (Some(k), upf(&d), upf(&s), sd, nt, Some(t)),
             None => (None, upf(&[0.0]), upf(&[0.0]), None, 1, None),
@@ -730,6 +749,7 @@ impl<F: Real> Model<F> {
             wnx: (vec![0.0; np], vec![0.0; np]),
             ice_c: rs.ice.clone(),
             src,
+            iceref,
             src_ntab,
             src_tables,
             nest,
@@ -918,6 +938,7 @@ impl<F: Real> Model<F> {
             asf: vec![],
             fpis: vec![],
             tail: vec![],
+            map_full: None,
         }
     }
 
@@ -1314,6 +1335,10 @@ impl<F: Real> Model<F> {
                 k.launch_tl(&self.client, &args, &targs, self.cfg.dtg, self.np, self.nk, self.nth);
             }
             None => k.launch(&self.client, &args, self.cfg.dtg, false, self.np, self.nk, self.nth),
+        }
+        if let Some(ir) = self.iceref.as_ref() {
+            ir.launch(&self.client, &self.d_va, &self.d_wn, &self.d_cg, &self.d_nflag, &self.d_dw, &self.d_ice, self.np, self.nk, self.nth, self.cfg.dtg)
+                .expect("ice and reflection step");
         }
         self.tick(5, &mut t);
     }

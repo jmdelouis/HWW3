@@ -926,3 +926,128 @@ impl<F: Real> IceRefKernel<F> {
         Ok(())
     }
 }
+
+/// The ice and reflection inputs of a run (`hww3-prop run --ice-ref
+/// NAMELISTS`): the ice parameters from the namelists (`&SIS2`, `&SIC2`,
+/// `&MISC`) and, when the grid directory holds the reflection geometry
+/// written by `hww3-pre struct --nml` and `&REF1` asks for a reflection,
+/// the reflection parameters and the per-node coefficients.
+pub struct IceRefInputs {
+    /// Ice parameters (the ice step runs where the ice concentration is
+    /// positive).
+    pub ice: Option<IceParams>,
+    /// Reflection parameters and per-node inputs.
+    pub refl: Option<(Ref1Params, RefNodes)>,
+}
+
+/// Per-node inputs of `W3SREF` on a mesh (in node order).
+pub struct RefNodes {
+    /// `REFLEC(1..4)` with `BERG` applied (no iceberg field: `REFLEC(4) = 0`), `4 np`.
+    pub reflc: Vec<f64>,
+    /// `REFLD(1..6)`, `6 np`.
+    pub refld: Vec<u32>,
+    /// Cell sizes (m) and transparencies.
+    pub delx: Vec<f64>,
+    /// See [`RefNodes::delx`].
+    pub dely: Vec<f64>,
+    /// See [`RefNodes::delx`].
+    pub trnx: Vec<f64>,
+    /// See [`RefNodes::delx`].
+    pub trny: Vec<f64>,
+}
+
+impl IceRefInputs {
+    /// Read the namelists `nml` and the reflection files of the grid
+    /// directory `dir` (`raw/ref1_*`, absent on HWW3 grids).
+    pub fn load(dir: &std::path::Path, nml: &std::path::Path, grid: &crate::grid::Grid) -> Result<IceRefInputs> {
+        let n = crate::ww3grid::Namelists::read(nml)?;
+        let s = &grid.spec;
+        let sp = crate::spec::Spec::new(s.nk, s.nth, s.freq1 as f32, s.xfr as f32, s.thoff as f32);
+        let ice = Some(IceParams::from_namelists(&n, &sp)?);
+        let raw = dir.join("raw");
+        let np = grid.lon.len();
+        let refl = if raw.join("ref1_reflc.f64").exists() {
+            let rp = Ref1Params::from_namelists(&n, s)?;
+            let f64s = |name: &str, len: usize| -> Result<Vec<f64>> {
+                let b = std::fs::read(raw.join(name))?;
+                ensure!(b.len() == 8 * len, "{name}: {} bytes for {len} values", b.len());
+                Ok(b.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect())
+            };
+            let b = std::fs::read(raw.join("ref1_refld.u32"))?;
+            ensure!(b.len() == 4 * 6 * np, "ref1_refld.u32: {} bytes for {np} nodes", b.len());
+            let refld: Vec<u32> = b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+            let mut reflc = f64s("ref1_reflc.f64", 4 * np)?;
+            for k in 0..np {
+                // REFLEC(4) = BERG REFLC(4), no iceberg field
+                reflc[4 * k + 3] = 0.0;
+            }
+            let any = (0..np).any(|k| crate::ref1::is_called(&[reflc[4 * k], reflc[4 * k + 1], reflc[4 * k + 2], reflc[4 * k + 3]], 0.0));
+            if any {
+                Some((rp, RefNodes { reflc, refld, delx: f64s("ref1_delx.f64", np)?, dely: f64s("ref1_dely.f64", np)?, trnx: f64s("ref1_trnx.f64", np)?, trny: f64s("ref1_trny.f64", np)? }))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok(IceRefInputs { ice, refl })
+    }
+}
+
+/// The ice and reflection step of a run on the device: the kernel, the
+/// floe diameter `ICEF` of every node (initial value 1000 m, as WW3 without
+/// a floe-size field; not in the restart files, as in WW3) and the
+/// reflection inputs.
+pub struct IceRefState<F: Real> {
+    kernel: IceRefKernel<F>,
+    icef: Option<Handle>,
+    refl: Option<[Handle; 7]>,
+}
+
+impl<F: Real> IceRefState<F> {
+    /// Build the kernel and upload the per-node inputs of `inp` for `np`
+    /// nodes.
+    pub fn new(client: &Client, inp: &IceRefInputs, np: usize, nu: usize) -> Result<IceRefState<F>> {
+        let kernel = IceRefKernel::<F>::new(client, inp.ice.as_ref(), inp.refl.as_ref().map(|r| &r.0), nu)?;
+        let upd = |v: &[f64]| {
+            let w: Vec<F> = v.iter().map(|&x| <F as crate::backend::Scalar>::of_f64(x)).collect();
+            client.create_from_slice(F::as_bytes(&w))
+        };
+        let icef = inp.ice.as_ref().map(|_| upd(&vec![1000.0; np]));
+        let refl = inp.refl.as_ref().map(|(_, r)| {
+            [
+                upd(&r.reflc),
+                client.create_from_slice(u32::as_bytes(&r.refld)),
+                upd(&r.delx),
+                upd(&r.dely),
+                upd(&r.trnx),
+                upd(&r.trny),
+                upd(&vec![0.0; np]),
+            ]
+        });
+        Ok(IceRefState { kernel, icef, refl })
+    }
+
+    /// Apply the step to the spectra `va` after the source integration.
+    #[allow(clippy::too_many_arguments)]
+    pub fn launch(&self, client: &Client, va: &Handle, wn: &Handle, cg: &Handle, nflag: &Handle, dw: &Handle, ice: &Handle, np: usize, nk: usize, nth: usize, dtg: f32) -> Result<()> {
+        let r = self.refl.as_ref();
+        let args = IceRefArgs {
+            va,
+            wn,
+            cg,
+            nflag,
+            depth: Some(dw),
+            ice: self.icef.as_ref().map(|_| ice),
+            icef: self.icef.as_ref(),
+            reflc: r.map(|a| &a[0]),
+            refld: r.map(|a| &a[1]),
+            delx: r.map(|a| &a[2]),
+            dely: r.map(|a| &a[3]),
+            trnx: r.map(|a| &a[4]),
+            trny: r.map(|a| &a[5]),
+            berg: r.map(|a| &a[6]),
+        };
+        self.kernel.launch(client, &args, np, nk, nth, dtg)
+    }
+}

@@ -188,6 +188,12 @@ pub struct Restart {
     /// The bytes after the values of `FPIS`: the zero padding of its last
     /// record, or the coupling fields when `FLOGRR` has any.
     pub tail: Vec<u8>,
+    /// On a structured grid, `MAPSTA + 8 MAPST2` of every point of the
+    /// `NX x NY` grid (`(nx, ny, values)` at `iy nx + ix`): `W3IORS` writes
+    /// this map row by row, `1 + (NX - 1) / NSIZE` records per row, in
+    /// place of the values per sea point of an unstructured grid. `None`
+    /// on unstructured grids (and when read).
+    pub map_full: Option<(usize, usize, Vec<i32>)>,
 }
 
 impl Restart {
@@ -217,6 +223,7 @@ impl Restart {
             asf: vec![],
             fpis: vec![],
             tail: vec![],
+            map_full: None,
         }
     }
 
@@ -288,6 +295,7 @@ impl Restart {
                 asf: vec![],
                 fpis: vec![],
                 tail: vec![],
+                map_full: None,
             });
         }
         let mut tb = vec![0u8; 40];
@@ -345,6 +353,7 @@ impl Restart {
             asf,
             fpis,
             tail,
+            map_full: None,
         })
     }
 
@@ -411,6 +420,17 @@ impl Restart {
         ];
         let mut last = 0;
         for (k, part) in parts.iter().enumerate() {
+            if let (2, Some((nx, ny, m))) = (k, &self.map_full) {
+                anyhow::ensure!(m.len() == nx * ny, "restart: map of {} values for {nx} x {ny}", m.len());
+                for iy in 0..*ny {
+                    let row: Vec<u8> = m[iy * nx..(iy + 1) * nx].iter().flat_map(|v| v.to_be_bytes()).collect();
+                    for chunk in row.chunks(4 * nsize) {
+                        put(&mut w, chunk)?;
+                        last = chunk.len();
+                    }
+                }
+                continue;
+            }
             anyhow::ensure!(part.len() == 4 * nsea, "restart: field {k} has {} values for NSEA {nsea}", part.len() / 4);
             for chunk in part.chunks(4 * nsize) {
                 put(&mut w, chunk)?;
