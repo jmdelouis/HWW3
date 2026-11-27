@@ -3109,9 +3109,24 @@ grid from the same restart, the RMS difference in time is
 \texttt{0c1cfcf}), once the driver splits each hour into equal steps as
 W3WAVE does and takes the wavenumbers of the structured grids
 (\texttt{WAVNU1} at $\max(\texttt{DMIN}, \eta - z_b)$); with the earlier
-driver some points differed by up to \SI{0.35}{m}. The GPU kernels of
-the scheme, as a second propagation path of the model, and the coupling
-of the grids follow.
+driver some points differed by up to \SI{0.35}{m}.
+\item The UQ scheme now runs on the GPU as a second propagation path of
+the model, for value and tangent (commit \texttt{45a75bb}), with the
+default path untouched. On the regular grid, one step agrees with the
+CPU reference to $2.9\times10^{-13}$ in double precision and
+$3.4\times10^{-7}$ in single precision. Over six hours in single
+precision against WW3, the RMS difference of $H_s$ is \SI{9.7e-8}{m} at
+the median point, and at most \SI{1.1e-6}{m} with the geographic
+propagation alone and \SI{1.2e-6}{m} with the spectral propagation
+W3KTP3 added (which itself changes $H_s$ by up to \SI{1.76}{m}). The
+tangent agrees with central differences at every smooth sea point. One
+A100 takes \SI{134}{s} per model day for the geographic step alone,
+\SI{157}{s} with W3KTP3, and \SI{264.5}{s} in single precision
+(\SI{680.6}{s} in double precision) with the sources, ice and
+reflection over the first six hours. Not yet handled: boundary spectra
+in this mode, the sea points on the edges of the curvilinear grids, so
+the polar grids are not yet run with UQ, and the adjoint. The coupling
+of the grids comes next.
 \end{itemize}
 
 
