@@ -3069,19 +3069,36 @@ $1.4\times10^{-15}$ in double precision and $1.8\times10^{-6}$ in single
 precision ($5.2\times10^{-6}$ against WW3). The default path is
 identical bit for bit to the previous build. Restarts of the structured
 grids now carry the status map of the whole grid, as WW3 writes them,
-and WW3 reads them. The tangent of this step is in progress.
+and WW3 reads them. The tangent of this step (commits \texttt{b76186d}
+and \texttt{1eb8fd4}), with the tangent of the floe diameter carried
+from step to step, agrees with central differences of the
+double-precision value kernel to $1.3\times10^{-11}$ at the median node
+and $5.9\times10^{-11}$ at worst. A tangent run with ice and reflection
+gives the $H_s$ of the value run to $9\times10^{-16}$.
 \item With the Romero whitecapping in place, the Arctic grid with the
 parameters of the configuration unchanged takes \SI{226.5}{s} per model
 day (\SI{221.5}{s} with ice and reflection), against \SI{1127}{s} with
 \texttt{SDSBCHOICE}\,=\,1 in its place. Most of the earlier slowness
 came from that substitute whitecapping, whose short dynamic steps the
-Romero form does not need, rather than from the configuration.
+Romero form does not need, rather than from the configuration. With
+all the physics of the configuration except its propagation scheme and
+the coupling, one A100 in single precision takes \SI{344}{s} per model
+day for the regular grid over the first 24 hours (about \SI{210}{s}
+after the first six), and \SI{226}{s} for each polar grid. The three
+grids thus take about 650 to \SI{800}{s} per model day on one A100,
+against \SI{985}{s} for WW3 on 252 processes. Double precision is
+about six times slower at 36 frequencies.
 \item The UQ scheme of WW3 for the structured grids (W3MAP3, W3UTRN,
 W3MAPT, W3XYP3 with the GSE averaging, W3QCK1, W3QCK3, W3CFLXY) is
 transcribed in the CPU reference (commit \texttt{bf2f594}), with six
-synthetic tests. It will be checked against a WW3 run of the regular
-grid with the geographic propagation alone. The GPU kernels and the
-coupling of the grids follow.
+synthetic tests. Against WW3 with the geographic propagation alone over
+six hours of the regular grid from the same restart (commit
+\texttt{45e4a55}), the mean $H_s$ agrees to \SI{1e-5}{m} and the RMS
+difference at the median point is \SI{7.3e-5}{m}. About 1\,\% of the
+points still differ by more than \SI{1}{cm} (up to 0.2 to
+\SI{0.35}{m}), next to land, on cells with obstructions and in the rows
+above the excluded southern edge, and are being traced. The GPU kernels
+of the scheme and the coupling of the grids follow.
 \end{itemize}
 
 
