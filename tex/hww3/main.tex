@@ -3008,8 +3008,20 @@ $10^{-4}$ (largest $9.9\times10^{-6}$). Two hours of grid v5 $K=4$ with
 the North Atlantic parameters are identical bit for bit to the previous
 build. The term is not differentiable where the overlap \texttt{BTOVER}
 vanishes and at the floor of the saturation, where the tangent is one
-sided. The ice terms IC2 and IS2 and the reflection REF1 come next, then
-the UQ scheme and the coupling of the grids.
+sided.
+\item The ice terms IC2 and IS2 (with the break-up and the anelastic
+creep of IS2) and the reflection REF1 (coast, subgrid and icebergs, with
+the metric of the curvilinear grids) are transcribed in the CPU
+reference (commit \texttt{d6aca8e}). They are checked against WW3 built
+from the library of the IRI configuration, on 1\,410 nodes of the Arctic
+grid from a six-hour state, 1\,259 of them with ice and 370 with
+reflection. The largest relative differences are $1.7\times10^{-6}$ for
+W3SIS2, $2.1\times10^{-7}$ for W3SIC2, $2.1\times10^{-6}$ for W3SREF,
+and $5.0\times10^{-6}$ for the whole of W3SRCE with ice and reflection.
+The GPU kernels and their tangents come next. In the tangents, the
+break-up of the ice, the concentration window of IS2 and the clips of
+W3SREF are not differentiable, and the coastal geometry is fixed.
+The UQ scheme and the coupling of the grids follow.
 \end{itemize}
 
 
